@@ -1,0 +1,27 @@
+.env
+*.pyc
+__pycache__/
+
+# 运行时产物 / 本地数据
+conversation_memory/
+kb_vectors/
+dist/
+*.exe
+
+# 测试结果与中间缓存
+_speed_test_results.html
+_final_test_report.json
+_final_html_section.html
+e2e_modified.json
+e2e_stable.json
+plan_test_results_v5.json
+10题全量测试结果.txt
+_fold_analysis_report.json
+_fold_detailed_report.json
+_fold_wiki_data.json
+_fold_wiki_data_v2.json
+_crawl_diff_report.json
+_crawl_manifest.json
+_crawl_content_queue.json
+_wiki_metadata_cache.json
+_wiki_metadata_武器_cache.json

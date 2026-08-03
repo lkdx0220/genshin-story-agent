@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>原神剧情助手</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+:root {
+  --bg-deep: #0a0e17;
+  --bg-surface: #111620;
+  --bg-sidebar: #0d1118;
+  --bg-input: #141a25;
+  --gold: #c9a96e;
+  --gold-dim: #a0895a;
+  --gold-glow: #e0c886;
+  --ice: #7ec8e3;
+  --ice-dim: #5a9ab0;
+  --text: #d4c5b2;
+  --text-dim: #8b7d6b;
+  --text-muted: #5a5148;
+  --user-bubble: #c9a96e;
+  --user-text: #0a0e17;
+  --ai-bubble: #1a1f2e;
+  --ai-border: #2a3040;
+  --border: #1e2532;
+  --red: #e06060;
+  --font-display: 'Noto Serif SC', 'SimSun', 'STSong', serif;
+  --font-body: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', system-ui, sans-serif;
+  --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:var(--font-body);
+  background:var(--bg-deep);
+  color:var(--text);
+  height:100vh;overflow:hidden;
+  display:flex;
+}
+/* ---- 星空背景 ---- */
+#starfield{
+  position:fixed;top:0;left:0;width:100%;height:100%;
+  pointer-events:none;z-index:0;opacity:0.35;
+}
+/* ---- 侧边栏 ---- */
+.sidebar{
+  width:260px;min-width:260px;
+  background:var(--bg-sidebar);
+  border-right:1px solid var(--border);
+  display:flex;flex-direction:column;
+  z-index:2;position:relative;
+  transition:transform 0.3s ease;
+}
+.sidebar-header{
+  padding:20px 16px 12px;
+  border-bottom:1px solid var(--border);
+}
+.sidebar-header h1{
+  font-family:var(--font-display);
+  font-size:17px;color:var(--gold);
+  letter-spacing:0.05em;margin-bottom:12px;
+  display:flex;align-items:center;gap:6px;
+}
+.sidebar-header h1::before{
+  content:'';display:inline-block;
+  width:6px;height:6px;
+  background:var(--gold);border-radius:50%;
+  box-shadow:0 0 8px var(--gold);
+}
+.new-chat-btn{
+  width:100%;padding:10px 0;border-radius:8px;
+  border:1px solid var(--gold-dim);
+  background:rgba(201,169,110,0.06);
+  color:var(--gold);font-size:13px;cursor:pointer;
+  font-family:var(--font-body);
+  transition:all 0.2s;
+  display:flex;align-items:center;justify-content:center;gap:6px;
+}
+.new-chat-btn:hover{
+  background:rgba(201,169,110,0.15);
+  border-color:var(--gold);
+  box-shadow:0 0 16px rgba(201,169,110,0.1);
+}
+.conversation-list{
+  flex:1;overflow-y:auto;padding:8px;
+}
+.conv-item{
+  padding:10px 12px;border-radius:6px;
+  cursor:pointer;font-size:13px;
+  color:var(--text-dim);margin:2px 0;
+  transition:all 0.15s;
+  display:flex;align-items:center;gap:6px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.conv-item:hover{background:rgba(255,255,255,0.03);color:var(--text)}
+.conv-item.active{background:rgba(201,169,110,0.08);color:var(--gold)}
+.conv-item .del-btn{
+  margin-left:auto;opacity:0;background:none;border:none;
+  color:var(--red);cursor:pointer;font-size:14px;
+  padding:2px 4px;border-radius:3px;
+  transition:opacity 0.15s;
+}
+.conv-item:hover .del-btn{opacity:0.6}
+.conv-item .del-btn:hover{opacity:1;background:rgba(224,96,96,0.15)}
+.sidebar-footer{
+  padding:12px 16px;border-top:1px solid var(--border);
+  font-size:11px;color:var(--text-muted);
+}
+/* ---- 主对话区 ---- */
+.main{
+  flex:1;display:flex;flex-direction:column;
+  min-width:0;position:relative;z-index:1;
+}
+.top-bar{
+  padding:16px 24px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:10px;
+  background:var(--bg-deep);
+  z-index:3;
+}
+.top-bar h2{
+  font-family:var(--font-display);
+  font-size:15px;color:var(--text-dim);
+  letter-spacing:0.03em;flex:1;
+}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--gold);box-shadow:0 0 8px var(--gold)}
+.status-text{font-size:12px;color:var(--text-dim)}
+.status-text.error{color:var(--red)}
+/* ---- 对话内容区 ---- */
+.chat-area{
+  flex:1;overflow-y:auto;padding:20px 24px;
+  display:flex;flex-direction:column;gap:4px;
+}
+/* ---- 欢迎页 ---- */
+.welcome{
+  display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  height:100%;text-align:center;
+  margin-top:-60px;
+}
+.welcome-icon{
+  font-size:52px;margin-bottom:16px;
+  filter:drop-shadow(0 0 20px rgba(201,169,110,0.3));
+}
+.welcome h2{
+  font-family:var(--font-display);
+  font-size:28px;color:var(--gold);
+  letter-spacing:0.04em;margin-bottom:6px;
+}
+.welcome p{
+  color:var(--text-dim);font-size:14px;margin-bottom:28px;
+}
+.example-grid{
+  display:grid;grid-template-columns:1fr 1fr;
+  gap:10px;max-width:540px;width:100%;
+}
+.example-card{
+  background:var(--bg-surface);
+  border:1px solid var(--border);
+  border-radius:8px;padding:14px 16px;
+  cursor:pointer;font-size:13px;color:var(--text-dim);
+  text-align:left;transition:all 0.2s;
+  line-height:1.5;
+  display:flex;align-items:center;
+}
+.example-card:hover{
+  border-color:var(--gold-dim);
+  color:var(--text);
+  box-shadow:0 4px 20px rgba(201,169,110,0.06);
+  transform:translateY(-1px);
+}
+/* ---- 消息气泡 ---- */
+.message{
+  display:flex;gap:12px;
+  max-width:85%;animation:msgIn 0.25s ease-out;
+  padding:4px 0;
+}
+.message.user{align-self:flex-end;flex-direction:row-reverse}
+.message.assistant{align-self:flex-start}
+@keyframes msgIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.avatar{
+  width:32px;height:32px;border-radius:50%;
+  flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  font-size:16px;
+}
+.message.user .avatar{background:rgba(201,169,110,0.15);color:var(--gold)}
+.message.assistant .avatar{background:rgba(126,200,227,0.1);color:var(--ice)}
+.bubble{
+  padding:12px 16px;border-radius:12px;
+  font-size:14px;line-height:1.7;
+  word-break:break-word;
+  user-select:text;-webkit-user-select:text;
+}
+.message.user .bubble{
+  background:var(--user-bubble);color:var(--user-text);
+  border-bottom-right-radius:4px;
+}
+.message.assistant .bubble{
+  background:var(--ai-bubble);
+  border:1px solid var(--ai-border);
+  color:var(--text);
+  border-bottom-left-radius:4px;
+}
+/* ---- Markdown 内部样式 ---- */
+.bubble h3{color:var(--gold);font-size:15px;margin:12px 0 6px;font-family:var(--font-display)}
+.bubble h4{color:var(--ice);font-size:14px;margin:8px 0 4px}
+.bubble p{margin:6px 0}
+.bubble ul,.bubble ol{margin:6px 0 6px 20px}
+.bubble li{margin:2px 0}
+.bubble code{
+  background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:3px;
+  font-family:var(--font-mono);font-size:12px;
+  color:var(--ice);
+}
+.bubble pre{
+  background:rgba(0,0,0,0.4);padding:12px;border-radius:6px;
+  overflow-x:auto;margin:8px 0;
+  font-family:var(--font-mono);font-size:12px;
+}
+.bubble pre code{background:none;padding:0}
+.bubble strong{color:var(--gold-glow)}
+.bubble em{color:var(--ice-dim)}
+.bubble table{border-collapse:collapse;margin:8px 0;width:100%;font-size:13px}
+.bubble th,.bubble td{border:1px solid var(--border);padding:6px 10px;text-align:left}
+.bubble th{background:rgba(201,169,110,0.08);color:var(--gold);font-weight:600}
+.bubble blockquote{
+  border-left:2px solid var(--gold-dim);padding-left:12px;
+  color:var(--text-dim);margin:8px 0;
+}
+/* ---- 工具调用面板 ---- */
+.tool-panel{
+  margin-top:4px;border:1px solid var(--border);
+  border-radius:8px;overflow:hidden;
+  background:var(--bg-surface);
+}
+.tool-summary{
+  padding:8px 12px;cursor:pointer;
+  font-size:12px;color:var(--text-dim);
+  display:flex;align-items:center;gap:6px;
+  transition:background 0.15s;
+  user-select:none;
+}
+.tool-summary:hover{background:rgba(255,255,255,0.02)}
+.tool-summary .arrow{transition:transform 0.2s;font-size:10px}
+.tool-summary.expanded .arrow{transform:rotate(90deg)}
+.tool-body{display:none;padding:8px 12px 12px;border-top:1px solid var(--border)}
+.tool-body.open{display:block}
+.tool-row{padding:6px 8px;font-size:12px;display:flex;gap:8px;align-items:flex-start}
+.tool-row:nth-child(odd){background:rgba(0,0,0,0.15);border-radius:4px}
+.tool-name{color:var(--gold);font-weight:600;white-space:nowrap;min-width:140px}
+.tool-args{color:var(--text-dim);word-break:break-all}
+.tool-iter{color:var(--text-muted);font-size:11px;margin-right:6px}
+/* ---- 加载动画 ---- */
+.typing-indicator{
+  display:flex;gap:5px;padding:12px 16px;
+  align-items:center;
+}
+.typing-dot{
+  width:6px;height:6px;border-radius:50%;
+  background:var(--gold-dim);
+  animation:typing 1.4s infinite;
+}
+.typing-dot:nth-child(2){animation-delay:0.2s}
+.typing-dot:nth-child(3){animation-delay:0.4s}
+@keyframes typing{0%,60%,100%{opacity:0.3;transform:scale(0.8)}30%{opacity:1;transform:scale(1)}}
+/* ---- 输入区 ---- */
+.input-area{
+  padding:16px 24px 20px;border-top:1px solid var(--border);
+  background:var(--bg-deep);z-index:3;
+}
+.input-row{
+  display:flex;gap:10px;align-items:flex-end;
+}
+.input-box{
+  flex:1;padding:12px 16px;border-radius:10px;
+  border:1px solid var(--border);
+  background:var(--bg-input);color:var(--text);
+  font-size:14px;font-family:var(--font-body);
+  resize:none;outline:none;line-height:1.5;
+  min-height:44px;max-height:160px;
+  transition:border-color 0.2s;
+  user-select:text;-webkit-user-select:text;
+}
+.input-box:focus{border-color:var(--gold-dim);box-shadow:0 0 0 2px rgba(201,169,110,0.08)}
+.input-box::placeholder{color:var(--text-muted)}
+.send-btn{
+  width:44px;height:44px;border-radius:10px;
+  border:1px solid var(--gold-dim);
+  background:rgba(201,169,110,0.1);
+  color:var(--gold);cursor:pointer;
+  font-size:18px;display:flex;align-items:center;justify-content:center;
+  transition:all 0.2s;flex-shrink:0;
+}
+.send-btn:hover{
+  background:rgba(201,169,110,0.2);
+  border-color:var(--gold);
+  box-shadow:0 0 12px rgba(201,169,110,0.15);
+}
+.send-btn:disabled{opacity:0.3;cursor:not-allowed;box-shadow:none}
+.input-hint{font-size:11px;color:var(--text-muted);margin-top:6px;text-align:right}
+/* ---- 自定义确认弹窗 ---- */
+.modal-overlay{
+  position:fixed;top:0;left:0;width:100%;height:100%;
+  background:rgba(0,0,0,0.65);z-index:100;
+  display:flex;align-items:center;justify-content:center;
+  animation:fadeIn 0.2s ease;
+}
+.modal-box{
+  background:var(--bg-surface);
+  border:1px solid var(--border);
+  border-radius:12px;padding:28px 32px 24px;
+  max-width:380px;width:90%;
+  box-shadow:0 8px 40px rgba(0,0,0,0.5);
+  animation:scaleIn 0.2s ease;
+}
+.modal-icon{
+  font-size:36px;text-align:center;margin-bottom:12px;
+  color:var(--red);
+}
+.modal-title{
+  font-family:var(--font-display);
+  font-size:16px;color:var(--text);
+  text-align:center;margin-bottom:8px;
+  letter-spacing:0.03em;
+}
+.modal-desc{
+  font-size:13px;color:var(--text-dim);
+  text-align:center;line-height:1.6;margin-bottom:24px;
+}
+.modal-btns{
+  display:flex;gap:10px;justify-content:center;
+}
+.modal-btn{
+  padding:8px 28px;border-radius:8px;
+  font-size:13px;cursor:pointer;font-family:var(--font-body);
+  transition:all 0.2s;border:none;outline:none;
+}
+.modal-btn-cancel{
+  background:rgba(255,255,255,0.06);color:var(--text-dim);
+  border:1px solid var(--border);
+}
+.modal-btn-cancel:hover{
+  background:rgba(255,255,255,0.1);color:var(--text);
+}
+.modal-btn-danger{
+  background:var(--red);color:#fff;
+  box-shadow:0 0 12px rgba(224,96,96,0.2);
+}
+.modal-btn-danger:hover{
+  background:#e07070;
+  box-shadow:0 0 20px rgba(224,96,96,0.35);
+}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes scaleIn{from{opacity:0;transform:scale(0.92)}to{opacity:1;transform:scale(1)}}
+/* ---- 滚动条 ---- */
+::-webkit-scrollbar{width:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}
+/* ---- 响应式 ---- */
+@media(max-width:768px){
+  .sidebar{position:fixed;left:0;top:0;height:100%;transform:translateX(-100%);z-index:10}
+  .sidebar.open{transform:translateX(0)}
+  .message{max-width:92%}
+  .example-grid{grid-template-columns:1fr}
+  .input-area{padding:12px 16px 16px}
+  .chat-area{padding:16px}
+  .top-bar{padding:12px 16px}
+  .hamburger{
+    display:flex!important;flex-direction:column;gap:3px;
+    cursor:pointer;background:none;border:none;
+    padding:4px;
+  }
+  .hamburger span{
+    display:block;width:18px;height:2px;
+    background:var(--text-dim);border-radius:1px;
+    transition:all 0.2s;
+  }
+}
+@media(min-width:769px){.hamburger{display:none!important}}
+</style>
+</head>
+<body>
+
+<canvas id="starfield"></canvas>
+
+<!-- 侧边栏 -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <h1>原神剧情助手</h1>
+    <button class="new-chat-btn" onclick="newChat()">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      新建对话
+    </button>
+  </div>
+  <div class="conversation-list" id="convList"></div>
+  <div class="sidebar-footer">v4.0 &middot; Plan/Answer 架构</div>
+</aside>
+
+<!-- 主区域 -->
+<main class="main">
+  <div class="top-bar">
+    <button class="hamburger" onclick="toggleSidebar()">
+      <span></span><span></span><span></span>
+    </button>
+    <h2 id="convTitle">新对话</h2>
+    <div class="status-dot" id="statusDot" title="Agent 就绪"></div>
+    <span class="status-text" id="statusText">就绪</span>
+  </div>
+
+  <div class="chat-area" id="chatArea">
+    <!-- 欢迎页 -->
+    <div class="welcome" id="welcome">
+      <div class="welcome-icon">&#x2726;</div>
+      <h2>提瓦特剧情档案馆</h2>
+      <p>探索七国历史、角色故事与世界观深处的秘密</p>
+      <div class="example-grid">
+        <div class="example-card" onclick="askExample(this)">枫丹的正义之神是谁？</div>
+        <div class="example-card" onclick="askExample(this)">比较蒙德和璃月的饮食文化差异</div>
+        <div class="example-card" onclick="askExample(this)">解释一下"神之眼"的发放机制</div>
+        <div class="example-card" onclick="askExample(this)">介绍一下《提瓦特游览指南》</div>
+        <div class="example-card" onclick="askExample(this)">须弥有哪些特产？</div>
+        <div class="example-card" onclick="askExample(this)">溪野之客的老婆是谁</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <div class="input-row">
+      <textarea class="input-box" id="inputBox" rows="1"
+        lang="zh-CN" autocomplete="on" spellcheck="false" inputmode="text"
+        placeholder="输入你想了解的原神剧情问题..."
+        onkeydown="handleKey(event)"></textarea>
+      <button class="send-btn" id="sendBtn" onclick="handleSendBtn()" title="发送">
+        <svg id="sendIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+        <svg id="stopIcon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="display:none">
+          <rect x="4" y="4" width="16" height="16" rx="2"/>
+        </svg>
+      </button>
+    </div>
+    <div class="input-hint">Enter 发送 &middot; Shift+Enter 换行</div>
+  </div>
+</main>
+
+<script>
+// ====== 星空背景 ======
+(function(){
+  const c=document.getElementById('starfield'),ctx=c.getContext('2d');
+  let stars=[],w,h;
+  function resize(){w=c.width=window.innerWidth;h=c.height=window.innerHeight}
+  resize();window.addEventListener('resize',resize);
+  for(let i=0;i<80;i++)stars.push({
+    x:Math.random()*w,y:Math.random()*h,r:Math.random()*1.2+0.3,
+    a:Math.random()*0.5+0.2,s:Math.random()*0.008+0.003
+  });
+  function draw(){
+    ctx.clearRect(0,0,w,h);
+    for(const s of stars){
+      s.a+=s.s;if(s.a>0.8||s.a<0.15)s.s*=-1;
+      ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
+      ctx.fillStyle=`rgba(201,169,110,${s.a})`;ctx.fill();
+    }
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
+// ====== Markdown 配置（CDN 可能失败，加兜底） ======
+let markedAvailable = false;
+try {
+  if (typeof marked !== 'undefined') {
+    marked.setOptions({breaks:true,gfm:true});
+    markedAvailable = true;
+  }
+} catch(e) { console.warn('marked.js 加载失败，将使用纯文本模式'); }
+
+function renderMarkdown(text) {
+  if (markedAvailable) return marked.parse(text);
+  // 兜底：纯文本 + 换行转 <br>
+  return escHtml(text).replace(/\n/g, '<br>');
+}
+
+// ====== 状态 ======
+const API_BASE = window.location.origin;
+let conversations = [];
+let currentConvId = null;
+let isStreaming = false;
+
+function generateConvId(){return 'conv_'+Date.now()}
+
+// ====== 对话管理 ======
+async function loadSessions(){
+  try{
+    const resp=await fetch(API_BASE+'/api/sessions');
+    const data=await resp.json();
+    if(data.sessions&&data.sessions.length>0){
+      conversations=data.sessions.map(s=>({
+        id:s.id,title:s.title,messages:[],loaded:false
+      }));
+      renderSidebar();
+    }
+  }catch(e){
+    console.error('加载会话列表失败:',e);
+  }
+}
+
+function newChat(){
+  currentConvId = generateConvId();
+  conversations.push({id:currentConvId,title:'新对话',messages:[],loaded:true});
+  showWelcome();
+  document.getElementById('convTitle').textContent='新对话';
+  renderSidebar();
+}
+
+function renderSidebar(){
+  const list=document.getElementById('convList');
+  list.innerHTML=conversations.map(c=>{
+    let title=c.title;
+    if(title==='新对话'&&c.messages.length>0){
+      title=c.messages[0].text.replace(/\n/g,' ').slice(0,20)+(c.messages[0].text.length>20?'...':'');
+    }
+    const active=c.id===currentConvId?'active':'';
+    return `<div class="conv-item ${active}" onclick="switchConv('${c.id}')">
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${escHtml(title)}</span>
+      <button class="del-btn" onclick="event.stopPropagation();deleteConv('${c.id}')" title="删除">×</button>
+    </div>`;
+  }).join('');
+}
+
+function switchConv(id){
+  currentConvId=id;
+  const conv=conversations.find(c=>c.id===id);
+  if(!conv)return;
+  document.getElementById('convTitle').textContent=conv.title;
+  const area=document.getElementById('chatArea');
+
+  if(conv.loaded){
+    // 已加载过，直接渲染
+    if(conv.messages.length===0){
+      showWelcome();
+      renderSidebar();
+      return;
+    }
+    area.innerHTML=conv.messages.map((m,i)=>renderMessage(m,i)).join('');
+    scrollBottom();
+    renderSidebar();
+    bindToolPanels();
+    return;
+  }
+
+  // 未加载，从服务器拉取会话详情
+  const welcome=document.getElementById('welcome');
+  if(welcome)welcome.style.display='none';
+  area.innerHTML='<div style="text-align:center;padding:40px;color:var(--text-dim)">加载中...</div>';
+  fetch(API_BASE+'/api/sessions/'+encodeURIComponent(id))
+    .then(r=>r.json())
+    .then(data=>{
+      const pairs=data.pairs||[];
+      conv.messages=[];
+      for(const pair of pairs){
+        conv.messages.push({role:'user',text:pair.user,timestamp:0});
+        conv.messages.push({role:'assistant',text:pair.assistant,timestamp:0});
+      }
+      conv.loaded=true;
+      if(conv.messages.length===0){
+        showWelcome();
+        renderSidebar();
+        return;
+      }
+      area.innerHTML=conv.messages.map((m,i)=>renderMessage(m,i)).join('');
+      scrollBottom();
+      renderSidebar();
+      bindToolPanels();
+    })
+    .catch(e=>{
+      console.error('加载会话详情失败:',e);
+      area.innerHTML='<div style="text-align:center;padding:40px;color:var(--red)">加载失败</div>';
+    });
+}
+
+function showWelcome(){
+  document.getElementById('chatArea').innerHTML='<div class="welcome" id="welcome">'+
+    '<div class="welcome-icon">&#x2726;</div>'+
+    '<h2>提瓦特剧情档案馆</h2>'+
+    '<p>探索七国历史、角色故事与世界观深处的秘密</p>'+
+    '<div class="example-grid">'+
+      '<div class="example-card" onclick="askExample(this)">枫丹的正义之神是谁？</div>'+
+      '<div class="example-card" onclick="askExample(this)">比较蒙德和璃月的饮食文化差异</div>'+
+      '<div class="example-card" onclick="askExample(this)">解释一下"神之眼"的发放机制</div>'+
+      '<div class="example-card" onclick="askExample(this)">介绍一下《提瓦特游览指南》</div>'+
+      '<div class="example-card" onclick="askExample(this)">须弥有哪些特产？</div>'+
+      '<div class="example-card" onclick="askExample(this)">溪野之客的老婆是谁</div>'+
+    '</div></div>';
+}
+
+function deleteConv(id){
+  showConfirm('删除对话', '确定要删除这个对话吗？删除后无法恢复。', ()=>{
+    const idx=conversations.findIndex(c=>c.id===id);
+    if(idx===-1)return;
+    conversations.splice(idx,1);
+    if(currentConvId===id){
+      if(conversations.length>0){switchConv(conversations[conversations.length-1].id)}
+      else{newChat()}
+    }else{renderSidebar()}
+    fetch(API_BASE+'/api/sessions/'+encodeURIComponent(id),{method:'DELETE'})
+      .catch(e=>console.error('删除会话文件失败:',e));
+  });
+}
+
+// ====== 自定义确认弹窗 ======
+function showConfirm(title, message, onConfirm){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.innerHTML=`
+    <div class="modal-box">
+      <div class="modal-icon">&#x26A0;</div>
+      <div class="modal-title">${escapeHtml(title)}</div>
+      <div class="modal-desc">${escapeHtml(message)}</div>
+      <div class="modal-btns">
+        <button class="modal-btn modal-btn-cancel">取消</button>
+        <button class="modal-btn modal-btn-danger">确认删除</button>
+      </div>
+    </div>
+  `;
+  overlay.querySelector('.modal-btn-cancel').onclick=()=>overlay.remove();
+  overlay.querySelector('.modal-btn-danger').onclick=()=>{overlay.remove();onConfirm();};
+  overlay.addEventListener('click',e=>{if(e.target===overlay)overlay.remove();});
+  document.body.appendChild(overlay);
+}
+
+function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// ====== 消息渲染 ======
+function renderMessage(m,idx){
+  const role=m.role;
+  const avatar=role==='user'?('&#x1F464;'):('<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="5"/><path d="M3 21c0-5 4-9 9-9s9 4 9 9"/></svg>');
+  let toolHtml='';
+  if(m.tool_calls&&m.tool_calls.length>0){
+    const total=m.tool_calls.length;
+    toolHtml=`<div class="tool-panel">
+      <div class="tool-summary" onclick="toggleTools(this)" title="点击展开">
+        <span class="arrow">▶</span> 工具调用（${total} 次）
+      </div>
+      <div class="tool-body">${m.tool_calls.map((tc,i)=>
+        `<div class="tool-row"><span class="tool-iter">#${i+1}</span><span class="tool-name">${escHtml(tc.tool)}</span><span class="tool-args">${escHtml(tc.args||'')}</span></div>`
+      ).join('')}</div>
+    </div>`;
+  }
+  const bubbleContent=role==='assistant'?renderMarkdown(m.text):escHtml(m.text);
+  return `<div class="message ${role}">
+    <div class="avatar">${avatar}</div>
+    <div style="display:flex;flex-direction:column;min-width:0">
+      <div class="bubble">${bubbleContent}</div>
+      ${toolHtml}
+    </div>
+  </div>`;
+}
+
+function bindToolPanels(){
+  document.querySelectorAll('.tool-summary').forEach(el=>{
+    el.onclick=function(){toggleTools(this)};
+  });
+}
+
+function toggleTools(el){
+  el.classList.toggle('expanded');
+  const body=el.nextElementSibling;
+  if(body)body.classList.toggle('open');
+}
+
+// ====== 发送消息 ======
+function handleSendBtn(){
+  if(isStreaming){
+    stopGeneration();
+  }else{
+    sendMessage();
+  }
+}
+
+async function stopGeneration(){
+  try{
+    await fetch(API_BASE+'/api/cancel',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_id:currentConvId})
+    });
+  }catch(e){
+    console.error('取消请求失败:',e);
+  }
+}
+
+function askExample(el){
+  document.getElementById('inputBox').value=el.textContent.trim();
+  sendMessage();
+}
+
+async function sendMessage(){
+  if(isStreaming)return;
+  const input=document.getElementById('inputBox');
+  const text=input.value.trim();
+  if(!text)return;
+
+  // 如果没有当前对话，自动新建
+  if(!currentConvId||!conversations.find(c=>c.id===currentConvId)){
+    currentConvId=generateConvId();
+    conversations.push({id:currentConvId,title:text.slice(0,30),messages:[]});
+  }
+
+  const sendingConvId=currentConvId;  // 锁定发送时的会话，防止流式返回时用户切换到其他会话导致消息错位
+  const conv=conversations.find(c=>c.id===sendingConvId);
+  if(!conv)return;
+  conv.title=text.slice(0,30);
+
+  // 隐藏欢迎页
+  const welcome=document.getElementById('welcome');
+  if(welcome)welcome.style.display='none';
+
+  // 添加用户消息
+  const userMsg={role:'user',text:text,timestamp:Date.now()};
+  conv.messages.push(userMsg);
+  appendMessage(userMsg,conv.messages.length-1);
+
+  input.value='';
+  input.style.height='auto';
+  isStreaming=true;
+  setLoading(true);
+  document.getElementById('convTitle').textContent=conv.title;
+  renderSidebar();
+
+  // 添加进度指示器（会动态更新文字）
+  const progressEl=document.createElement('div');
+  progressEl.className='message assistant';
+  progressEl.id='progressMsg';
+  progressEl.innerHTML=`<div class="avatar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="5"/><path d="M3 21c0-5 4-9 9-9s9 4 9 9"/></svg></div><div class="bubble" id="progressBubble"><div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div><div style="margin-top:6px;font-size:12px;color:var(--text-muted)" id="progressText">正在思考…</div></div>`;
+  document.getElementById('chatArea').appendChild(progressEl);
+  scrollBottom();
+
+  // 工具名称 → 中文提示
+  const TOOL_HINT={
+    'hybrid_search':'检索知识库',
+    'query_character':'查询角色',
+    'query_region':'查询地区',
+    'load_quest_content':'加载任务文本',
+    'load_book_content':'加载书籍内容',
+    'find_first_mention':'溯源首次出现',
+    'query_collectible':'查询采集物',
+    'list_characters_by_element':'列出元素角色',
+    'list_characters_by_region':'列出地区角色',
+    'list_characters_by_weapon':'列出武器角色',
+    'list_characters_by_rarity':'列出售星角色',
+    'list_collectibles_by_region':'列出地区特产',
+    'query_material':'查询材料',
+    'query_quest':'查询任务',
+    'search_all':'搜索全库',
+    'query_artifact':'查询圣遗物',
+    'query_monster':'查询怪物',
+    'query_weapon':'查询武器',
+    'query_recipe':'查询食谱',
+    'query_concept':'查询概念',
+    'get_book_metadata':'获取书籍信息',
+  };
+
+  let toolCount = 0;
+
+  try{
+    const resp=await fetch(API_BASE+'/api/chat',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:text,session_id:currentConvId})
+    });
+
+    const reader=resp.body.getReader();
+    const decoder=new TextDecoder();
+    let buffer='';
+    let aiText='';
+    let finalToolCalls=[];
+
+    while(true){
+      const{value,done}=await reader.read();
+      if(done)break;
+      buffer+=decoder.decode(value,{stream:true});
+
+      // 解析 SSE 事件
+      const lines=buffer.split('\n');
+      buffer=lines.pop()||'';
+      for(const line of lines){
+        if(!line.startsWith('data: '))continue;
+        try{
+          const event=JSON.parse(line.slice(6));
+          if(event.type==='tool_start'){
+            toolCount++;
+            const hint=TOOL_HINT[event.tool]||('调用 '+event.tool);
+            const arg=typeof event.args==='object'?Object.values(event.args)[0]||'':(event.args||'');
+            const shortArg=String(arg).slice(0,20);
+            document.getElementById('progressText').textContent=
+              '正在'+hint+(shortArg?'（'+shortArg+')':'')+'… (第'+toolCount+'次)';
+          }else if(event.type==='tool_end'){
+            // 工具完成，不更新文字
+          }else if(event.type==='answer_start'){
+            // 进入回答阶段，更新进度文字但不移除
+            const pt=document.getElementById('progressText');
+            if(pt)pt.textContent='正在生成回答…';
+          }else if(event.type==='done'){
+            aiText=event.answer||'';
+            finalToolCalls=event.tool_calls||[];
+
+            if(!aiText && !document.getElementById('progressMsg')){
+              // answer_start 没触发但 progress 已经被移除了
+            }
+          }else if(event.type==='error'){
+            document.getElementById('progressText').textContent='错误：'+event.error;
+          }else if(event.type==='cancelled'){
+            // 用户中断，标记不保存此轮对话
+            window._cancelled=true;
+          }
+        }catch(e){/* 忽略解析失败的行 */}
+      }
+    }
+
+    // 确保进度指示器被移除（仅当用户仍在发送会话时操作 DOM）
+    if(currentConvId===sendingConvId){
+      const p=document.getElementById('progressMsg');
+      if(p)p.remove();
+    }
+
+    // 添加 AI 回答（中断时不保存）
+    if(!window._cancelled){
+      const aiMsg={
+        role:'assistant',
+        text:aiText||'（无回复）',
+        timestamp:Date.now(),
+        tool_calls:finalToolCalls
+      };
+      conv.messages.push(aiMsg);
+      // 仅在用户仍在发送会话时才追加到当前 DOM
+      if(currentConvId===sendingConvId){
+        appendMessage(aiMsg,conv.messages.length-1);
+      }
+    }
+    window._cancelled=false;
+
+  }catch(e){
+    if(currentConvId===sendingConvId){
+      const p=document.getElementById('progressMsg');
+      if(p)p.remove();
+    }
+    const errMsg={role:'assistant',text:'无法连接到本地服务，请确认已启动后端。',timestamp:Date.now()};
+    conv.messages.push(errMsg);
+    if(currentConvId===sendingConvId){
+      appendMessage(errMsg,conv.messages.length-1);
+    }
+  }
+  setLoading(false);
+  renderSidebar();
+}
+
+function appendMessage(m,idx){
+  const area=document.getElementById('chatArea');
+  area.insertAdjacentHTML('beforeend',renderMessage(m,idx));
+  scrollBottom();
+  bindToolPanels();
+}
+
+function setLoading(loading){
+  isStreaming=loading;
+  const btn=document.getElementById('sendBtn');
+  const sendIcon=document.getElementById('sendIcon');
+  const stopIcon=document.getElementById('stopIcon');
+  const dot=document.getElementById('statusDot');
+  const txt=document.getElementById('statusText');
+  if(loading){
+    btn.title='中断';
+    sendIcon.style.display='none';
+    stopIcon.style.display='';
+    dot.style.background='var(--ice)';
+    dot.style.boxShadow='0 0 8px var(--ice)';
+    txt.textContent='思考中...';
+    txt.className='status-text';
+  }else{
+    btn.title='发送';
+    sendIcon.style.display='';
+    stopIcon.style.display='none';
+    btn.disabled=false;
+    dot.style.background='var(--gold)';
+    dot.style.boxShadow='0 0 8px var(--gold)';
+    txt.textContent='就绪';
+    txt.className='status-text';
+  }
+}
+
+function handleKey(e){
+  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();handleSendBtn()}
+}
+
+function scrollBottom(){
+  const area=document.getElementById('chatArea');
+  setTimeout(()=>{area.scrollTop=area.scrollHeight},50);
+}
+
+function toggleSidebar(){
+  document.getElementById('sidebar').classList.toggle('open');
+}
+
+// 页面关闭时自动取消正在运行的 Agent
+window.addEventListener('beforeunload',()=>{
+  if(isStreaming && currentConvId){
+    navigator.sendBeacon(API_BASE+'/api/cancel',
+      new Blob([JSON.stringify({session_id:currentConvId})],{type:'application/json'}));
+  }
+});
+
+function escHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+// ====== 初始化 ======
+loadSessions();
+</script>
+
+</body>
+</html>
