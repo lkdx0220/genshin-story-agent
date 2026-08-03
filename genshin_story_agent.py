@@ -329,6 +329,7 @@ def _build_title_registry(content_dir: str):
             registry[title] = {
                 "category": q.get("category", ""),
                 "version": q.get("metadata", {}).get("实装版本", ""),
+                "region": q.get("metadata", {}).get("任务地区", ""),
             }
             # 构建章节→标题反向索引
             text = q.get("text", "")
@@ -574,20 +575,27 @@ def hybrid_search(query: str, top_k: int = 10) -> str:
         tag_str = "+".join(tags)
 
         # 优先用关键词结果的完整 snipet
+        region = TITLE_REGISTRY.get(key, {}).get("region", "")
         if kw_match:
             doc = kw_match[0]
             doc_id = doc.get("id", key)
             collection = doc.get("collection", "")
             category = doc.get("category", "")
-            cat_str = f"（{category}）" if category else ""
-            lines.append(f"\n【{key}】{cat_str}({collection}) [{tag_str}]")
+            attrs = []
+            if category:
+                attrs.append(category)
+            if region:
+                attrs.append(f"任务地区：{region}")
+            attr_str = f"（{'，'.join(attrs)}）" if attrs else ""
+            lines.append(f"\n【{key}】{attr_str}({collection}) [{tag_str}]")
             lines.append(f"  {doc['document'][:600]}")
         elif vec_match:
             doc = vec_match[0]
             doc_id = doc.get("id", key)
             collection = doc.get("collection", "")
             score = doc.get("score", 0)
-            lines.append(f"\n【{key}】({collection}) [{tag_str}] 相似度:{score:.4f}")
+            region_str = f"（任务地区：{region}）" if region else ""
+            lines.append(f"\n【{key}】{region_str}({collection}) [{tag_str}] 相似度:{score:.4f}")
             lines.append(f"  {doc['document'][:600]}")
 
     if not top_keys:
