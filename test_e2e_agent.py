@@ -140,17 +140,13 @@ def run_single_e2e(case):
             "final_response": None,
             "iteration": 0,
             "intent_labels": None,
-            "intent_expanded": False,
         })
         elapsed = (datetime.now() - start).total_seconds()
         response = result.get("final_response", "(未生成回答)")
         actual_labels = result.get("intent_labels") or labels
-        actual_expanded = result.get("intent_expanded", False)
         exec_mode = result.get("execution_mode", "?")
 
         print(f"\n  >> 执行模式: {exec_mode}  |  意图标签: {fmt_labels(actual_labels)}")
-        if actual_expanded:
-            print(f"  >> 工具集已扩大(INSUFFICIENT_TOOLS)")
         print(f"  >> 耗时: {elapsed:.1f}s")
         print(f"\n  {'─' * 60}")
         print(f"  >> 最终回答:")

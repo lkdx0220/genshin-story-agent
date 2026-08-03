@@ -122,7 +122,6 @@ def run_version_test(version_name, code_dir, result_file):
             "iteration": 0,
             "plan_retry": 0,
             "format_retry": 0,
-            "consecutive_not_found": 0,
             "tool_call_history": [],
             "messages": [],
             "intent_labels": [],

@@ -430,7 +430,6 @@ def api_chat():
                 "messages": [],
                 "final_response": None,
                 "iteration": 0,
-                "consecutive_not_found": 0,
                 "format_retry": 0,
                 "plan_retry": 0,
                 "execution_plan": None,
