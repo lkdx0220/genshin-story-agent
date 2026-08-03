@@ -2611,12 +2611,10 @@ class GenshinAdvisorState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
     final_response: Optional[str]
     iteration: Optional[int]
-    consecutive_not_found: Optional[int]  # 连续失败计数器，成功时清零，失败时 +1
     format_retry: Optional[int]           # 【执行报告】格式重试计数
     plan_retry: Optional[int]             # 规划阶段无工具调用时的强制重试计数
     execution_plan: Optional[str]          # 规划阶段生成的执行报告，供回答阶段使用
     intent_labels: Optional[List[str]]    # 路由器输出的意图标签，如 ["B", "D"]
-    intent_expanded: Optional[bool]       # 是否已因 INSUFFICIENT_TOOLS 扩大过工具集
     run_id: Optional[str]                 # 运行标识，用于取消信号查找
     execution_mode: Optional[str]         # L1（快速路径）或 L2（完整路径）
     fast_iteration: Optional[int]         # 快速路径的迭代计数
@@ -2917,7 +2915,6 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     original_query = state.get("user_query", "")
     alias_notes = state.get("alias_notes", "")
     intent_labels = state.get("intent_labels", [])
-    intent_expanded = state.get("intent_expanded", False)
 
     # ---- 前置拦截：P16 超短/无意义输入 ----
     cleaned = re.sub(r'[^\u4e00-\u9fff\w]', '', original_query)
@@ -2990,20 +2987,9 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         # 后续轮次：延用已有的 intent 和工具集
         intent_labels = state.get("intent_labels", [])
         routed_tools = list(_tools_by_name.values())
-        if intent_labels and not intent_expanded:
+        if intent_labels:
             routed_tools = get_tools_for_intent(intent_labels, _tools_by_name)
         current_llm_with_tools = plan_llm_l2.bind_tools(routed_tools)
-
-        # 检查是否触发 INSUFFICIENT_TOOLS 扩大
-        # 条件：前一轮工具返回了连续失败 / 未找到，且尚未扩大过
-        if not intent_expanded:
-            consecutive_not_found = state.get("consecutive_not_found", 0) or 0
-            if consecutive_not_found >= 2:
-                print(f"  [路由] 连续 {consecutive_not_found} 次失败，扩大为全量工具")
-                routed_tools = list(_tools_by_name.values())
-                current_llm_with_tools = plan_llm_l2.bind_tools(routed_tools)
-                intent_expanded = True
-                intent_labels = ["ALL"]
 
     try:
         response = current_llm_with_tools.invoke(messages)
@@ -3017,7 +3003,6 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
                 "final_response": f"抱歉，处理出错：{e}",
                 "messages": messages,
                 "intent_labels": intent_labels,
-                "intent_expanded": intent_expanded,
             }
 
     # 保存执行计划（response.content 即模型输出的【执行报告】文本）
@@ -3033,7 +3018,6 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             "execution_plan": plan_content,
             "iteration": iteration + 1,
             "intent_labels": intent_labels,
-            "intent_expanded": intent_expanded,
         }
 
     # 无工具调用 → 检查是否需要强制重试
@@ -3085,7 +3069,6 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             "messages": [response],
             "execution_plan": plan_content,
             "intent_labels": intent_labels,
-            "intent_expanded": intent_expanded,
         }
 
     if plan_retry_count < MAX_PLAN_RETRIES:
@@ -3114,7 +3097,6 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
                     "iteration": iteration + 1,
                     "plan_retry": plan_retry_count + 1,
                     "intent_labels": intent_labels,
-                    "intent_expanded": intent_expanded,
                 }
             print(f"  -> [拦截] 重试后仍无工具调用，放弃")
     else:
@@ -3127,7 +3109,6 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         "execution_plan": plan_content,
         "plan_retry": plan_retry_count,
         "intent_labels": intent_labels,
-        "intent_expanded": intent_expanded,
     }
 
 
