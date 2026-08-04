@@ -2619,7 +2619,6 @@ class GenshinAdvisorState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
     final_response: Optional[str]
     iteration: Optional[int]
-    format_retry: Optional[int]           # 【执行报告】格式重试计数
     plan_retry: Optional[int]             # 规划阶段无工具调用时的强制重试计数
     execution_plan: Optional[str]          # 规划阶段生成的执行报告，供回答阶段使用
     intent_labels: Optional[List[str]]    # 路由器输出的意图标签，如 ["B", "D"]
@@ -3081,12 +3080,19 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     if plan_retry_count < MAX_PLAN_RETRIES:
         print(f"  -> [拦截] 无工具调用且非身份查询，强制重试 ({plan_retry_count + 1}/{MAX_PLAN_RETRIES})")
+        # 动态构建当前可用工具提示（避免硬编码与实际注入工具不匹配）
+        tool_hints = []
+        for _t in routed_tools:
+            _name = _t.name if hasattr(_t, 'name') else _t.get('name', '?')
+            _desc = _t.description if hasattr(_t, 'description') else _t.get('description', '')
+            _short = _desc.split('\n')[0][:50] if _desc else ''
+            tool_hints.append(f"{_name}（{_short}）" if _short else _name)
+        _tool_str = "、".join(tool_hints)
         messages.append(response)
         messages.append(SystemMessage(content=(
             "错误：检测到你的规划中没有包含任何工具调用。"
             "根据规则，对于非身份查询类问题，你必须至少调用一个工具来检索信息。"
-            "请重新规划。可调用的工具包括：query_character（查角色/NPC信息）、hybrid_search（全文搜索）、load_quest_content（加载任务全文）。"
-            "如果用户问的是某个你不知道的角色/NPC，首先用 query_character 查询。"
+            f"请重新规划。当前可调用的工具包括：{_tool_str}。"
             "不要输出\"当前知识库未收录\"——这由后续阶段判断。"
         )))
         try:

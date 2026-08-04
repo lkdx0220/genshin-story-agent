@@ -52,7 +52,33 @@ QUESTIONS = [
 
 RESULTS = []
 
+# ====== 题目/版本过滤 + 增量 checkpoint（对照实验支持）======
+import argparse
+
+CHECKPOINT_PATH = os.path.join(BASE, "_final_test_report_checkpoint.json")
+
+
+def _parse_args():
+    p = argparse.ArgumentParser(description="双版本对比测试（支持子集）")
+    p.add_argument("--ids", default="", help="只跑指定题目 id，逗号分隔，如 1,3,5,7；默认全量")
+    p.add_argument("--versions", default="", help="只跑指定版本，逗号分隔，如 修改用；默认两版")
+    return p.parse_args()
+
+
+_ARGS = _parse_args()
+SELECTED_IDS = {int(x) for x in _ARGS.ids.split(",") if x.strip()} if _ARGS.ids else None
+SELECTED_VERSIONS = set(_ARGS.versions.split(",")) if _ARGS.versions else None
+
+
+def _checkpoint():
+    with open(CHECKPOINT_PATH, "w", encoding="utf-8") as f:
+        json.dump(RESULTS, f, ensure_ascii=False, indent=2)
+
+
 for qid, question in QUESTIONS:
+    qnum = int(qid.split("-")[0].replace("Q", ""))
+    if SELECTED_IDS is not None and qnum not in SELECTED_IDS:
+        continue
     print(f"\n{'='*60}")
     print(f"  {qid}")
     print(f"{'='*60}")
@@ -61,6 +87,8 @@ for qid, question in QUESTIONS:
         ("修改用", BASE),
         ("稳定版", os.path.join(BASE, "..", "CASE-原神剧情助手-稳定版")),
     ]:
+        if SELECTED_VERSIONS is not None and version_label not in SELECTED_VERSIONS:
+            continue
         agent_dir = os.path.abspath(agent_dir)
         print(f"\n--- {version_label} ---")
 
@@ -119,6 +147,7 @@ for qid, question in QUESTIONS:
             "response_len": len(response),
             "response": response,
         })
+        _checkpoint()
 
         # 恢复环境
         sys.path = old_path
@@ -129,13 +158,10 @@ print(f"\n\n{'#'*60}")
 print(f"#  最终对比测试汇总")
 print(f"{'#'*60}\n")
 
-print(f"{'题目':<20} {'修改用耗时':>10} {'修改用字数':>10} {'稳定版耗时':>10} {'稳定版字数':>10}")
-print("-" * 65)
-for i in range(0, len(RESULTS), 2):
-    r_mod = RESULTS[i]
-    r_sta = RESULTS[i+1]
-    print(f"{r_mod['qid']:<20} {r_mod['elapsed']:>7.1f}s  {r_mod['response_len']:>7}字  "
-          f"{r_sta['elapsed']:>7.1f}s  {r_sta['response_len']:>7}字")
+print(f"{'题目':<20} {'版本':<6} {'耗时':>9} {'字数':>7}")
+print("-" * 50)
+for r in RESULTS:
+    print(f"{r['qid']:<20} {r['version']:<6} {r['elapsed']:>7.1f}s  {r['response_len']:>5}字")
 
 # 保存详细结果
 report_path = os.path.join(BASE, "_final_test_report.json")
