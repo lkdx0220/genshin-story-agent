@@ -453,7 +453,6 @@ def run_single_test(tc: dict, plan_agent_fn) -> dict:
         "conversation_history": [],
         "rewritten_query": None,
         "final_response": None,
-        "format_retry": 0,
         "plan_retry": 0,
         "execution_plan": None,
         "run_id": None,

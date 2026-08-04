@@ -277,7 +277,7 @@ def api_element():
 
 @app.route('/api/search', methods=['POST'])
 def api_search():
-    tool = _find_tool("search_all")
+    tool = _find_tool("hybrid_search")
     if not tool:
         return jsonify({"error": "模块未加载"}), 500
     data = request.get_json()
@@ -430,7 +430,6 @@ def api_chat():
                 "messages": [],
                 "final_response": None,
                 "iteration": 0,
-                "format_retry": 0,
                 "plan_retry": 0,
                 "execution_plan": None,
                 "run_id": run_id,
