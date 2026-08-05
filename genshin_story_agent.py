@@ -445,9 +445,33 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
             if not matched_term:
                 continue
             first_word = matched_term.split()[0]
-            idx = text.find(first_word)
-            start = max(0, idx - 120)
-            end = min(len(text), idx + len(matched_term) + 120)
+            words = matched_term.split()
+            if len(words) > 1 and len(text) > 600:
+                # 长文档多搜索词：找到覆盖最多不同搜索词的窗口位置，避免只截取第一个词的首次出现
+                best_pos = -1
+                best_count = 0
+                for w in words:
+                    pos = 0
+                    while True:
+                        idx = text.find(w, pos)
+                        if idx == -1:
+                            break
+                        window_text = text[max(0, idx-120):min(len(text), idx+120)]
+                        count = sum(1 for w2 in words if w2 in window_text)
+                        if count > best_count:
+                            best_count = count
+                            best_pos = idx
+                        pos = idx + len(w)
+                if best_pos >= 0:
+                    start = max(0, best_pos - 120)
+                    end = min(len(text), best_pos + 120)
+                else:
+                    start = max(0, text.find(first_word))
+                    end = min(len(text), start + 240)
+            else:
+                idx = text.find(first_word)
+                start = max(0, idx - 120)
+                end = min(len(text), idx + len(matched_term) + 120)
             snippet = text[start:end].replace('\n', ' ').strip()
             dedup_key = (q["title"], snippet[:60])
             if dedup_key not in seen_candidates:
@@ -1348,14 +1372,17 @@ def _normalize_for_match(s: str) -> str:
 
 
 def _match_all_in(query: str, text: str) -> bool:
-    """检查 text 中是否包含 query 的所有词（空格分词）。
-    单关键词退化为普通子串匹配；多关键词如\"钟离 命运\"要求\"钟离\"和\"命运\"都在 text 中。
+    """检查 text 中是否包含 query 的至少一半词（空格分词）。
+    宽松 AND 逻辑：单关键词退化为普通子串匹配；多关键词要求至少 ceil(N/2) 个词在 text 中。
+    避免 Plan Agent 构造搜索词时加入多余词导致漏召回。
     匹配前对 query 和 text 做标点归一化。"""
     words = query.split()
     if not words:
         return False
     normalized_text = _normalize_for_match(text)
-    return all(_normalize_for_match(w) in normalized_text for w in words)
+    matched = sum(1 for w in words if _normalize_for_match(w) in normalized_text)
+    threshold = max(1, (len(words) + 1) // 2)  # 至少一半词命中（向上取整）
+    return matched >= threshold
 
 
 def search_all(query: str) -> str:
@@ -2716,16 +2743,13 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
                 f"如果某个实体的信息在工具返回中暂缺，也必须先说明已知部分，再对缺失部分说明\"当前知识库未收录\"。\n"
             )
 
-        alias_notes = ("\n\n[别名标注]\n以下词汇在用户问题中被检测为角色别名，这些映射已经过系统验证，是确定的事实，无需调用任何工具确认：\n"
+        alias_notes = ("\n\n[别名标注]\n以下词汇在用户问题中被检测为角色别名，映射关系如下：\n"
                        + "\n".join(f"- {p}" for p in alias_notes_parts)
-                       + "\n\n使用指南：\n"
-                       "- 如果用户在问「这个别名指谁/是谁」（如\"XX是谁\"、\"XX是什么人\"），别名标注已给出答案。\n"
-                       "  直接说明别名含义即可（一句话），严禁调用 query_character 展开角色档案。\n"
-                       "- 如果用户在问角色本身的行为/故事（如\"XX干了什么\"）或对比（如\"X和Y分别是谁\"），\n"
-                       "  先说明所有别名含义，对未标注的实体可用工具检索。已标注的别名无需任何工具调用。\n"
-                       + multi_entity_note
-                       + "\n- 行为提问必须且只能从 load_quest_content 全文提取具体动作，严禁调用 query_character 抄人物传记凑字数。"
-                       )
+                       + "\n\n这些映射仅用于帮助你理解用户意图和规范名。你仍然应当调用工具获取角色的详细信息。\n"
+                       "- 如果用户在问「这个别名指谁/是谁」，可以在回答中引用别名标注，但仍应调用工具获取更丰富的信息。\n"
+                       "- 如果用户在问角色的行为/故事，必须使用工具检索剧情内容。\n"
+                       "- 行为提问必须从 load_quest_content 或 hybrid_search 提取具体动作，不得仅凭人物传记概括。\n"
+                       + multi_entity_note)
         print(f"  -> 已标注 {len(alias_notes_parts)} 个别名映射，原文保持不变")
     else:
         alias_notes = ""
@@ -2741,7 +2765,7 @@ ASSESS_PROMPT = """你是原神剧情助手的查询分类器。你的唯一任�
 用户问题：「{user_query}」
 
 分类标准：
-- L1（简单事实）：单一属性查询（XX的武器/地区/元素）、简单存在性查询（有没有XX）、基本定义（XX是什么意思）。这类问题通常只需 0-1 次工具调用就能回答。
+- L1（简单事实）：单一属性查询（XX的武器/地区/元素）、基本定义（XX是什么意思）。这类问题通常只需 0-1 次工具调用就能回答。
 - 注意：身份查询（XX是谁）虽然看似简单，但需要知识库数据支撑，归为 L2。
 - L2（复杂推理）：对比分析（XX和YY的区别）、多步推理（XX的成长经历/做了什么）、原因解释（为什么XX）、原话引用（XX说了什么）、溯源追踪（XX最早出现在哪里）、跨源拼装（列出所有提到XX的文案）。
 
@@ -2766,6 +2790,15 @@ def assess_query(state: GenshinAdvisorState) -> Dict[str, Any]:
         result = "L2"
 
     execution_mode = "L1" if "L1" in result else "L2"
+
+    # L1/L2 硬规则：问题长度>30字 或 别名标注含≥2个实体 → 强制 L2
+    # 防止 assess_query 误判导致 L1 越权处理复杂问题
+    alias_notes = state.get("alias_notes", "") or ""
+    entity_count = alias_notes.count("指") if alias_notes else 0
+    if len(user_query) > 30 or entity_count >= 2:
+        execution_mode = "L2"
+        print(f"  -> 硬规则触发（长度={len(user_query)}或实体={entity_count}），强制 L2")
+
     print(f"  -> 判定: {execution_mode}")
 
     return {"execution_mode": execution_mode}
@@ -3093,7 +3126,7 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             "错误：检测到你的规划中没有包含任何工具调用。"
             "根据规则，对于非身份查询类问题，你必须至少调用一个工具来检索信息。"
             f"请重新规划。当前可调用的工具包括：{_tool_str}。"
-            "不要输出\"当前知识库未收录\"——这由后续阶段判断。"
+            "你的职责是调用工具获取信息。如果确实搜不到，正常输出执行报告即可，后续阶段会处理未收录情况。"
         )))
         try:
             response = current_llm_with_tools.invoke(messages)
@@ -3312,16 +3345,30 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     else:
         meltdown_status = "无"
 
+    # 判断 response_mode：失败熔断 或 工具调用次数=0 且无全文加载 → not_found
+    # response_mode 是二元值，由代码层确定性注入，Answer 据此决定是否输出"未收录"
+    if consecutive_failures >= 2 or (tool_call_count == 0 and not full_text_loaded):
+        response_mode = "not_found"
+    else:
+        response_mode = "found"
+
     execution_facts = (
         f"===== 【执行事实】（铁证，不可篡改）=====\n"
         f"工具调用次数：{tool_call_count}\n"
         f"熔断状态：{meltdown_status}\n"
+        f"response_mode：{response_mode}\n"
         f"工具返回摘要：{'; '.join(tool_results_summary) if tool_results_summary else '无'}\n"
         f"======================================\n\n"
         f"你的'熔断检查'必须如实填写以上信息。如果'工具调用次数'为0，不得写'已加载全文'或'连续N次未找到'。"
     )
 
     system_content = execution_facts + "\n" + AGENT_SYSTEM_PROMPT_ANSWER
+
+    # not_found 代码短路：response_mode=not_found 时直接返回固定字符串，不调用 LLM
+    # 这从根本上消除了 Answer LLM 忽略 not_found 标记、强行编造内容的可能性
+    if response_mode == "not_found":
+        print("  -> [代码短路] response_mode=not_found，跳过 LLM 调用，直接返回'未收录'")
+        return {"final_response": "当前知识库未收录。", "messages": messages}
 
     if alias_notes:
         system_content += alias_notes
