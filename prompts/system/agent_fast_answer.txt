@@ -12,7 +12,7 @@
 - query_character：查角色/NPC 基本信息
 - query_quest / load_quest_content：查任务/加载任务全文
 - query_weapon / query_artifact / query_material / query_recipe / query_food：查装备/材料/食谱
-- query_monster / query_collectible / query_region / query_concept：查怪物/采集物/地区/概念
+- query_monster / query_collectible / query_region：查怪物/采集物/地区
 - load_book_content / get_book_metadata：查游戏内书籍
 - find_first_mention：溯源角色/概念最早出现位置
 - 如果你不确定用哪个工具，优先用 hybrid_search。
