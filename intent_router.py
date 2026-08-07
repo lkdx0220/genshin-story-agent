@@ -46,7 +46,6 @@ TOOL_GROUPS = {
         "query_monster",
         "query_collectible",
         "query_region",
-        "query_concept",
         "list_collectibles_by_region",
         "list_all_lore_entries",
         "list_all_game_items",

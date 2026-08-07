@@ -531,10 +531,25 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
                 else:
                     ordered = lore_candidates[:5]
                 for c in ordered:
+                    text = c["text"]
+                    # 长文档 snippet 定位：找到搜索词出现位置，从该位置截取窗口
+                    # 避免至冬(81871字)等长文本只返回开头的目录结构，关键原文被截掉
+                    best_pos = -1
+                    for term in lore_terms:
+                        idx = text.find(term)
+                        if idx >= 0:
+                            best_pos = idx
+                            break
+                    if best_pos >= 0:
+                        start = max(0, best_pos - 120)
+                        end = min(len(text), best_pos + 480)
+                        snippet = text[start:end].replace('\n', ' ').strip()
+                    else:
+                        snippet = text[:480].replace('\n', ' ').strip()
                     results.append({
                         "id": f"lore:{c['title']}",
                         "collection": "kb_lore",
-                        "document": c["text"],
+                        "document": snippet,
                     })
 
     # --- 书籍正文搜索 ---
@@ -561,6 +576,41 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
             "collection": "kb_books",
             "document": snippet,
         })
+
+    # --- 概念/组织/设定搜索 ---
+    # concepts.json 包含 64 个具体概念（教令院、七星、愚人众、神之眼等）
+    # 删除 query_concept 工具后，这些数据通过 hybrid_search 的关键词路检索
+    concepts = _load_content_json("concepts")
+    if concepts:
+        concept_candidates = []
+        seen_concepts = set()
+        for term in search_terms:
+            for c in concepts:
+                name = c.get("名称", "")
+                body = c.get("正文", "")
+                sections = c.get("章节", {})
+                section_titles = " ".join(sections.keys()) if sections else ""
+                full_text = name + " " + body + " " + section_titles
+                if _match_all_in(term, full_text):
+                    cid = name + body[:40]
+                    if cid not in seen_concepts:
+                        seen_concepts.add(cid)
+                        # 构建摘要：名称 + 正文 / 章节预览
+                        info = f"【{name}】（{c.get('类型', '?')}）"
+                        if body:
+                            info += f"\n{body[:400]}"
+                        elif sections:
+                            for sec_name in list(sections.keys())[:3]:
+                                sec_text = sections[sec_name][:200]
+                                if sec_text.strip():
+                                    info += f"\n[{sec_name}]: {sec_text}"
+                        concept_candidates.append((name, info))
+        for name, info in concept_candidates[:3]:
+            results.append({
+                "id": f"concept:{name}",
+                "collection": "kb_concepts",
+                "document": info,
+            })
 
     return results
 
@@ -2288,41 +2338,6 @@ def query_recipe(name: str) -> str:
 
 
 @tool
-def query_concept(name: str) -> str:
-    """查询游戏概念/组织/设定信息：如教令院、七星、神之眼、坎瑞亚。name: 概念名称（模糊匹配）"""
-    concepts = _load_content_json("concepts")
-    if not concepts:
-        return "概念数据库为空。"
-    matches = [c for c in concepts if name in c.get("名称", "")]
-    if not matches:
-        names = [c["名称"] for c in concepts if c.get("名称")]
-        return f"未找到「{name}」。数据库中有 {len(concepts)} 个概念: {', '.join(names)}"
-    results = []
-    for c in matches[:5]:
-        info = f"\n【{c.get('名称', '?')}】（{c.get('类型', '?')}）"
-        tables = c.get("表格", [])
-        if tables:
-            for t in tables:
-                headers = t.get("headers", [])
-                rows = t.get("rows", [])
-                info += f"\n  [表格] 列: {headers}"
-                for row in rows[:20]:
-                    info += f"\n    {row}"
-        sections = c.get("章节", {})
-        if sections:
-            info += f"\n  [章节: {', '.join(list(sections.keys())[:10])}]"
-            for sec_name in list(sections.keys())[:5]:
-                text = sections[sec_name][:300]
-                if text.strip():
-                    info += f"\n  [{sec_name}]: {text}"
-        if not tables and not sections:
-            body = c.get("正文", "")
-            info += f"\n  {body[:500]}"
-        results.append(info)
-    return "\n".join(results)
-
-
-@tool
 def query_food(name: str) -> str:
     """查询食物/料理信息。name: 食物名称（模糊匹配）"""
     foods = _load_content_json("foods")
@@ -2489,7 +2504,7 @@ tools = [
     load_book_content, load_quest_content, get_book_metadata,
     count_character_lines, find_first_mention,
     query_monster, query_artifact, query_material, query_collectible, list_collectibles_by_region, query_recipe,
-    query_concept, query_food,
+    query_food,
     hybrid_search,
 ]
 
@@ -2499,15 +2514,10 @@ tool_node = ToolNode(tools)
 # ====== 工具名 → 函数映射（供意图路由器动态注入） ======
 _tools_by_name = {t.name: t for t in tools}
 
-# ====== 代码加固：熔断触发工具 & query_concept 黑名单 ======
+# ====== 代码加固：熔断触发工具 ======
 
 # 这些工具一旦在本轮中成功返回内容，后续所有工具调用将被系统截断
 MELTDOWN_TRIGGER_TOOLS = {"load_book_content", "load_quest_content", "find_first_mention"}
-
-# query_concept 黑名单：这些抽象概念禁止用 query_concept 查询，必须用 hybrid_search
-QUERY_CONCEPT_BLACKLIST = {
-    "深渊", "天理", "世界树", "降临者", "虚假之天", "地脉", "命运", "磨损", "元素力",
-}
 
 # ====== 进度事件（供 Web API 流式推给前端） ======
 _progress_hook = None
@@ -2527,7 +2537,7 @@ def _emit_progress(event_type: str, data: dict):
 # ====== 自定义工具执行节点（带日志） ======
 def tool_executor(state):
     """执行工具调用并记录输入/输出日志。
-    代码加固：熔断截断 + query_concept 黑名单拦截。"""
+    代码加固：熔断截断。"""
     # ---- 取消信号检查 ----
     run_id = state.get("run_id")
     cancel_event = _cancel_events.get(run_id) if run_id else None
@@ -2566,7 +2576,7 @@ def tool_executor(state):
 
         # ---- 代码加固 1：熔断截断 ----
         # 同轮内允许多个 load_/find_first_mention 并行执行（如对比分析需加载两个任务）
-        # 只拦截非触发类工具（如 hybrid_search、query_concept 等）
+        # 只拦截非触发类工具（如 hybrid_search、query_character 等）
         if meltdown_triggered and tool_name not in MELTDOWN_TRIGGER_TOOLS:
             result_str = (
                 f"[系统拦截] 全文/溯源熔断已触发：本轮已有 load_ 或 find_first_mention 成功返回内容，"
@@ -2575,18 +2585,6 @@ def tool_executor(state):
             print(f"    -> [熔断截断] {tool_name} 被拦截")
             tool_messages.append(ToolMessage(content=result_str, tool_call_id=tc_id))
             continue
-
-        # ---- 代码加固 2：query_concept 黑名单拦截 ----
-        if tool_name == "query_concept":
-            concept_name = tool_args.get("name", "")
-            if concept_name in QUERY_CONCEPT_BLACKLIST:
-                result_str = (
-                    f"[系统拦截] 「{concept_name}」是抽象概念，禁止使用 query_concept 查询。"
-                    f"请使用 hybrid_search 代替，或在具体剧情/书籍上下文中加载全文后理解该概念。"
-                )
-                print(f"    -> [黑名单拦截] query_concept(\"{concept_name}\")")
-                tool_messages.append(ToolMessage(content=result_str, tool_call_id=tc_id))
-                continue
 
         # 执行工具
         try:
