@@ -343,15 +343,6 @@ def _extract_tool_calls(state: Dict) -> list:
     return calls
 
 
-# ---- 彩蛋：戴佳禾相关查询直接短路，不走 Agent ----
-EASTER_EGG_TRIGGERS = ["戴佳禾", "戴某", "溪野之客", "溪野居"]
-EASTER_EGG_RESPONSE = "纳西妲，建议直接电"
-
-def _is_easter_egg(message: str) -> bool:
-    """检查是否命中彩蛋触发词 + 问句意图"""
-    has_trigger = any(kw in message for kw in EASTER_EGG_TRIGGERS)
-    has_intent = "老婆" in message or "是谁" in message
-    return has_trigger and has_intent
 
 
 @app.route('/api/chat', methods=['POST'])
@@ -364,47 +355,7 @@ def api_chat():
     message = data["message"]
     session_id = data.get("session_id", "default")
 
-    # 彩蛋短路：命中后直接返回硬编码回答，不调用 LLM
-    if _is_easter_egg(message):
-        progress_queue = queue.Queue()
-
-        def run_easter_egg():
-            progress_queue.put({
-                "type": "done",
-                "answer": EASTER_EGG_RESPONSE,
-                "tool_calls": [],
-                "session_id": session_id,
-                "message": message,
-            })
-
-        egg_thread = threading.Thread(target=run_easter_egg, daemon=True)
-        egg_thread.start()
-
-        def egg_generate():
-            nonlocal conv_pairs, conv_summary
-            try:
-                event = progress_queue.get(timeout=10)
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                if event.get("type") == "done":
-                    conv_pairs.append({"user": message, "assistant": event["answer"]})
-                    _sessions[session_id] = {
-                        "pairs": conv_pairs,
-                        "summary": conv_summary,
-                    }
-                    _save_session_to_disk(session_id, _sessions[session_id])
-            except queue.Empty:
-                yield f"data: {json.dumps({'type': 'error', 'error': '彩蛋超时'}, ensure_ascii=False)}\n\n"
-
-        # 需要先加载历史，确保 conv_pairs/conv_summary 有值
-        history = _sessions.get(session_id)
-        if not history:
-            history = _load_session_from_disk(session_id)
-            _sessions[session_id] = history
-        conv_pairs = history.get("pairs", [])
-        conv_summary = history.get("summary", "")
-        return Response(egg_generate(), mimetype='text/event-stream')
-
-    # 先从内存取，内存没有则从磁盘加载
+    # 加载历史
     history = _sessions.get(session_id)
     if not history:
         history = _load_session_from_disk(session_id)
@@ -418,7 +369,7 @@ def api_chat():
 
     def run_agent():
         try:
-            agent_module._progress_hook = progress_hook
+            agent_module.set_progress_hook(progress_hook)
             agent_module._cancel_events[run_id] = cancel_event
             agent = agent_module.create_agent_workflow()
             result = agent.invoke({
@@ -448,7 +399,7 @@ def api_chat():
             traceback.print_exc()
             progress_queue.put({"type": "error", "error": str(e)})
         finally:
-            agent_module._progress_hook = None
+            agent_module.set_progress_hook(None)
             agent_module._cancel_events.pop(run_id, None)
 
     # 生成运行标识并注册取消信号

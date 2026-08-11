@@ -8,6 +8,18 @@ kb_vectors/
 dist/
 *.exe
 
+# 构建产物
+build/
+*.spec
+
+# 备份文件
+*.bak
+*.bak[0-9]
+*.before_fold
+
+# 本地缓存
+_wiki_cache/
+
 # 测试结果与中间缓存
 _speed_test_results.html
 _final_test_report.json
