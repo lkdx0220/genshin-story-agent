@@ -38,7 +38,7 @@ DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 - **DASHSCOPE_API_KEY**（必填）：[阿里云百炼](https://dashscope.console.aliyun.com/) 获取，本项目使用 qwen3.7-max / qwen-plus
-- **DEEPSEEK_API_KEY**（可选）：[DeepSeek 开放平台](https://platform.deepseek.com/) 获取，用于评测场景
+- **DEEPSEEK_API_KEY**（可选）：[DeepSeek 开放平台](https://platform.deepseek.com/) 获取，用于别名消歧（alias_judge_llm）和 L1/L2 路径分类（assess_llm），不填则降级使用千问
 
 ### 3. 运行
 
