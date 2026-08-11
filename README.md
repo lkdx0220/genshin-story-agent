@@ -16,6 +16,42 @@ L2: Plan Agent → 工具调用（28 tools）→ 熔断截断 → Answer Agent
 - **熔断机制**：工具返回超阈值时截断直接生成回答，防止无限循环
 - **别名消歧**：LLM 消歧 + 人工审核双通道，处理多义别名
 
+## Wiki 数据同步
+
+知识库数据来源于 B 站原神 Wiki。以下脚本用于增量更新内容数据：
+
+```bash
+# 抓取各区域「限定文本」板块（更新 lore.json）
+python scripts/scrape_limited_texts.py
+
+# 重建角色向量索引（更新 kb_vectors/）
+python scripts/kb_build_index.py
+
+# 预处理任务数据（生成 quests_processed.json 等）
+python scripts/quest_preprocessor.py
+```
+
+抓取后的数据存于 `content_data/` 目录，运行时自动加载。
+
+## 模型清单
+
+本项目使用多个模型协同工作，请在阿里云百炼控制台确认已开通以下模型：
+
+| 用途 | 模型 | 所属服务 | 说明 |
+|------|------|----------|------|
+| Plan Agent（L2 复杂规划） | qwen3.7-max | 阿里云百炼 | 多子问题拆解、工具选择 |
+| Answer Agent（深度） | qwen3.7-max | 阿里云百炼 | 剧情/溯源/世界观类回答，medium reasoning |
+| Answer Agent（中等） | qwen3.7-max | 阿里云百炼 | 搜索/书籍类回答，low reasoning |
+| Plan Agent（L1 快速） | qwen-plus | 阿里云百炼 | 简单事实类快速规划 |
+| Answer Agent（轻量） | qwen-plus | 阿里云百炼 | 角色查询类快速回答 |
+| 意图路由 | qwen-plus | 阿里云百炼 | 实体锚定后的意图分类 |
+| 别名消歧 | deepseek-v4-flash | DeepSeek | "水神→芙宁娜/芙卡洛斯"歧义判断 |
+| L1/L2 路径分类 | deepseek-v4-flash | DeepSeek | 简单题/复杂题分流 |
+| 向量 Embedding | text-embedding-v4 | 阿里云百炼 | 知识库语义检索 |
+| 记忆 Embedding | paraphrase-multilingual-MiniLM-L12-v2 | 本地 | RAG 对话记忆（sentence-transformers） |
+
+> **注意**：qwen3.7-max 需在百炼控制台单独申请开通，qwen-plus 默认开通。未开通的模型会报 `model not found` 错误。
+
 ## 快速开始
 
 ### 1. 安装依赖
@@ -77,6 +113,7 @@ content_data/           # 游戏内容数据（JSON）
 genshin_knowledge_base/ # 知识库 Python 模块
 prompts/                # 系统 Prompt
 scripts/                # 构建/预处理脚本
+wiki_data_tools/        # Wiki 数据爬取与重建工具
 ```
 
 ## 技术栈
