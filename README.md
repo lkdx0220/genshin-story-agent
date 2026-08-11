@@ -18,8 +18,32 @@ L2: Plan Agent → 工具调用（28 tools）→ 熔断截断 → Answer Agent
 
 ## 快速开始
 
+### 1. 安装依赖
+
 ```bash
 pip install -r requirements.txt
+```
+
+### 2. 配置 API Key
+
+```bash
+# 复制模板文件
+copy .env.example .env
+```
+
+编辑 `.env`，填入你的 API Key：
+
+```ini
+DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+- **DASHSCOPE_API_KEY**（必填）：[阿里云百炼](https://dashscope.console.aliyun.com/) 获取，本项目使用 qwen3.7-max / qwen-plus
+- **DEEPSEEK_API_KEY**（可选）：[DeepSeek 开放平台](https://platform.deepseek.com/) 获取，用于评测场景
+
+### 3. 运行
+
+CLI 模式：
+```bash
 python genshin_story_agent.py
 ```
 
@@ -28,6 +52,15 @@ Web 服务：
 python genshin_story_web_api.py
 # 浏览器打开 http://localhost:5000/chat
 ```
+
+### 4. 打包为 exe（可选）
+
+```bash
+pip install pyinstaller
+python scripts/build_exe.py
+```
+
+生成的 `原神剧情助手.exe` 在项目根目录，可独立分发。打包前需确保 `.env` 已正确配置（API key 会编译进 exe）。
 
 ## 目录结构
 
