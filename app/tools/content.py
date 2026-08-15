@@ -14,6 +14,7 @@ from app.config import CONTENT_DIR
 from app.data import (
     任务知识库, _normalize_for_match, _load_processed_data, _quests_processed,
     _build_quest_header, ACT_TO_QUESTS, ACTIVITY_LEGENDARY_ALIAS, FORCE_ACTIVITY_TITLES,
+    _aggregate_map_text,
 )
 from app.retrieval import SimpleBM25, _rerank
 
@@ -32,6 +33,9 @@ def load_book_content(book_name: str, query: str = "") -> str:
     matches = [b for b in books if normalized_book in _normalize_for_match(b["title"])
                or _normalize_for_match(b["title"]) in normalized_book]
     if not matches:
+        map_text = _aggregate_map_text(book_name)
+        if map_text:
+            return map_text
         return f"未找到书籍「{book_name}」。"
     best = max(matches, key=lambda b: len(b["text"]))
     text = best["text"]
