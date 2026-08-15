@@ -288,6 +288,9 @@ def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     # 无工具调用 → 直接返回回答
     content = response.content if hasattr(response, 'content') else ''
+    # 空内容兜底：工具已返回"未找到"等结果，但 LLM 仍可能返回空串，此时明确告知未收录
+    if not content or not content.strip():
+        content = "当前知识库未收录。"
     print(f"  -> 快速路径完成（无工具调用），直接返回回答")
     return {
         "messages": [response],

@@ -88,6 +88,49 @@ def _normalize_for_match(s: str) -> str:
     return s
 
 
+def _aggregate_map_text(book_name: str) -> str:
+    """聚合 lore.json 中的地图文本（如「万国诸卷拾遗」），按地区分组列出子区域。
+
+    「万国诸卷拾遗」是北陆图书馆的地图文本系列，数据存在 lore.json 而非 books.json。
+    书籍查询工具在 books.json 中查不到书名时，用本函数判断它是否是地图文本。
+    返回空字符串表示该名称不是地图文本；否则返回按地区分组的聚合结果。
+    """
+    lore_path = os.path.join(CONTENT_DIR, "lore.json")
+    if not os.path.exists(lore_path):
+        return ""
+    try:
+        with open(lore_path, "r", encoding="utf-8") as f:
+            lore = json.load(f)
+    except Exception:
+        return ""
+    normalized_book = _normalize_for_match(book_name)
+    if not normalized_book:
+        return ""
+    # 收集 title 含该书名的条目，例如 title="万国诸卷拾遗/稻妻 / 鸣神岛"
+    entries = [e for e in lore if normalized_book in _normalize_for_match(e.get("title", ""))]
+    if not entries:
+        return ""
+    # 解析 title 结构：[书名, 地区, 子区域]
+    region_map: Dict[str, set] = {}
+    for e in entries:
+        parts = [p.strip() for p in e.get("title", "").split("/") if p.strip()]
+        if len(parts) >= 2:
+            region = parts[1]
+            region_map.setdefault(region, set())
+            if len(parts) >= 3:
+                region_map[region].add(parts[2])
+    if not region_map:
+        return ""
+    lines = [f"\n「{book_name}」是游戏内地图文本的分类名称，不是一本书籍。按地区收录的区域如下："]
+    for region in region_map:
+        subs = region_map[region]
+        if subs:
+            lines.append(f"- {region}：{'、'.join(sorted(subs))}")
+        else:
+            lines.append(f"- {region}")
+    return "\n".join(lines)
+
+
 def _match_all_in(query: str, text: str) -> bool:
     """检查 text 中是否包含 query 的至少一半词（空格分词）。
     宽松 AND 逻辑：单关键词退化为普通子串匹配；多关键词要求至少 ceil(N/2) 个词在 text 中。

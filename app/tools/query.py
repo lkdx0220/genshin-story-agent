@@ -12,7 +12,7 @@ from app.config import CONTENT_DIR
 from app.data import (
     角色知识库, 地区知识库, 主线剧情知识库, 武器知识库,
     任务知识库, 圣遗物知识库, _npcs_data, _load_content_json,
-    _normalize_for_match,
+    _normalize_for_match, _aggregate_map_text,
 )
 from app.formatters import (
     _format_role_info, _format_npc_info, _format_region_info, _format_story_info,
@@ -397,6 +397,9 @@ def get_book_metadata(book_name: str) -> str:
     matches = [b for b in books if normalized_book in _normalize_for_match(b["title"])
                or _normalize_for_match(b["title"]) in normalized_book]
     if not matches:
+        map_text = _aggregate_map_text(book_name)
+        if map_text:
+            return map_text
         return f"未找到书籍「{book_name}」。"
     best = max(matches, key=lambda b: len(b["text"]))
     meta = best.get("metadata", {})
