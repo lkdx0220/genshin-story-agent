@@ -344,6 +344,15 @@ def _get_entity_registry():
     except Exception:
         pass
 
+    mat_path = os.path.join(CONTENT_DIR, "materials.json")
+    try:
+        with open(mat_path, "r", encoding="utf-8") as f:
+            materials = json.load(f)
+        for m in materials:
+            _add(m.get("名称", ""), "C1")
+    except Exception:
+        pass
+
     # --- 角色 → B ---
     try:
         from genshin_knowledge_base import 角色知识库

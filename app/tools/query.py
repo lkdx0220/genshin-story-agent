@@ -32,6 +32,7 @@ FAKE_LEGEND_QUESTS = {
 }
 
 # 部族纪闻映射：角色名 → 对应的部族纪闻章节名
+
 TRIBAL_CHRONICLES = {
     "玛拉妮": "流泉所归之处",
     "基尼奇": "尤潘基的回火",
@@ -69,12 +70,28 @@ def query_region(name: str) -> str:
     return f"未找到地区「{name}」的信息。"
 
 
+def _story_matches(arc: dict, keyword: str) -> bool:
+    """匹配主线条目：章节名、章节编号、地区、幕名，以及幕下任务名。"""
+    if not keyword:
+        return False
+    fields = [
+        arc.get("章节名称", ""),
+        arc.get("章节编号", ""),
+        arc.get("所属地区", ""),
+    ]
+    for act in arc.get("幕列表", []):
+        fields.append(act.get("幕编号", ""))
+        fields.append(act.get("幕名称", ""))
+        fields.extend(act.get("任务", []))
+    return any(keyword in f for f in fields if f)
+
+
 @tool
 def query_story(arc_name: str) -> str:
-    """查询版本主线剧情信息。arc_name: 章节名称关键词（如\"辞行久远之躯\"）"""
+    """查询版本主线/魔神任务剧情信息。arc_name: 章节/幕关键词（如\"辞行久远之躯\"、\"第五章\"、\"虚空鼓动，劫火高扬\"）"""
     results = []
     for arc in 主线剧情知识库:
-        if arc_name in arc.get("章节名称", "") or arc_name in arc.get("所属地区", ""):
+        if _story_matches(arc, arc_name):
             results.append(arc)
     if len(results) == 1:
         print(f"[工具] 查询剧情: {arc_name}")
@@ -116,6 +133,10 @@ def query_quest(name: str) -> str:
     返回时自动按系列任务（章节名）分组。显示所属角色，区分主角视角与客串出场。"""
     # 获取名字的所有变体（瓦雷莎/瓦蕾莎等异体字问题）
     name_variants = {name}
+    if "传说任务" in name:
+        candidate = name.replace("的传说任务", "").replace("传说任务", "").strip()
+        if candidate:
+            name_variants.add(candidate)
     if name in ALIAS_MAP:
         name_variants.add(ALIAS_MAP[name])  # 规范名
     for alias, canon in ALIAS_MAP.items():
@@ -123,21 +144,15 @@ def query_quest(name: str) -> str:
             name_variants.add(alias)
             name_variants.add(canon)
 
-    # 戏称映射处理：用户用角色名问"传说任务"，实际是版本活动
+
+    # 戏称映射：先正常搜索真实传说/世界任务；只有确实没有真实结果时才返回戏称活动，
+    # 避免像胡桃这种既有真实传说任务（引蝶之章/奈何蝶飞去）又有玩家戏称活动的角色被误导。
     matched_fake = None
     for v in name_variants:
         if v in FAKE_LEGEND_QUESTS:
             matched_fake = FAKE_LEGEND_QUESTS[v]
             break
-    if matched_fake:
-        activity_results = [q for q in 任务知识库 if matched_fake in q.get("任务名称", "")]
-        if activity_results:
-            lines = [f"注意：「{name}」没有传说任务，以下是被戏称为「{name}传说任务」的版本活动："]
-            for q in activity_results:
-                lines.append(f"\n【{q['任务名称']}】版本活动")
-                lines.append(f"简介: {q.get('简介', '暂无')}")
-            print(f"[工具] 查询任务(戏称映射): {name} → {matched_fake}")
-            return "\n".join(lines)
+
 
     # 部族纪闻映射：该角色的部族纪闻可能未全部关联角色名，需按章节名补全
     is_tribal = False
@@ -221,9 +236,19 @@ def query_quest(name: str) -> str:
 
         print(f"[工具] 查询任务: {name}")
         return "\n".join(lines)
+    # 真实传说/世界任务全部未命中时，才降级为玩家戏称的“版本活动”
+    if matched_fake:
+        activity_results = [q for q in 任务知识库 if matched_fake in q.get("任务名称", "")]
+        if activity_results:
+            lines = [f"注意：「{name}」没有传说任务，以下是被戏称为「{name}传说任务」的版本活动："]
+            for q in activity_results:
+                lines.append(f"\n【{q['任务名称']}】版本活动")
+                lines.append(f"简介: {q.get('简介', '暂无')}")
+            print(f"[工具] 查询任务(戏称映射): {name} → {matched_fake}")
+            return "\n".join(lines)
+
+
     return f"未找到任务「{name}」的信息。"
-
-
 @tool
 def query_monster(name: str) -> str:
     """查询怪物图鉴：属性、抗性、掉落、技能。name: 怪物名称（模糊匹配）"""
@@ -403,7 +428,7 @@ def get_book_metadata(book_name: str) -> str:
         return f"未找到书籍「{book_name}」。"
     best = max(matches, key=lambda b: len(b["text"]))
     meta = best.get("metadata", {})
-    lines = [f"\n【{best['title']}】元数据"]
+    lines = [f"\n【{best['title']}】书籍信息"]
     if meta.get("作者"):
         lines.append(f"作者: {meta['作者']}")
     else:

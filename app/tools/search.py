@@ -184,7 +184,7 @@ def search_all(query: str) -> str:
             all_results.append(("地区", _format_region_info(region)))
     # 主线剧情
     for arc in 主线剧情知识库:
-        if _match_all_in(query, arc.get("章节名称", "")) or _match_all_in(query, arc.get("所属地区", "")):
+        if _match_all_in(query, arc.get("章节名称", "")) or _match_all_in(query, arc.get("章节编号", "")) or _match_all_in(query, arc.get("所属地区", "")):
             all_results.append(("剧情", _format_story_info(arc)))
     # 武器
     for wpn in 武器知识库:

@@ -11,6 +11,7 @@
 - hybrid_search：通用全文搜索，搜任务剧情、世界观设定、书籍内容
 - query_character：查角色/NPC 基本信息
 - query_quest / load_quest_content：查任务/加载任务全文
+- query_story：查主线/魔神任务章节结构（章→幕→任务）
 - query_weapon / query_artifact / query_material / query_recipe / query_food：查装备/材料/食谱
 - query_monster / query_collectible / query_region：查怪物/采集物/地区
 - load_book_content / get_book_metadata：查游戏内书籍

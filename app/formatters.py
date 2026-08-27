@@ -97,11 +97,26 @@ def _format_region_info(region: Dict) -> str:
 
 def _format_story_info(arc: Dict) -> str:
     lines = [f"\n{'='*50}"]
-    lines.append(f"【{arc['章节名称']}】")
-    lines.append(f"所属地区: {arc.get('所属地区')}")
-    lines.append(f"主要角色: {', '.join(arc.get('主要角色', []))}")
+    title = arc.get('章节名称', '')
+    if arc.get('章节编号') and arc['章节编号'] != title:
+        title = f"{title}（{arc['章节编号']}）"
+    lines.append(f"【{title}】")
+    lines.append(f"所属地区: {arc.get('所属地区') or '未知'}")
+    roles = arc.get('主要角色', [])
+    if roles:
+        lines.append(f"主要角色: {', '.join(roles)}")
     lines.append(f"\n剧情概要: {arc.get('剧情概要', '暂无')}")
-    if arc.get('关键事件'):
+    acts = arc.get('幕列表', [])
+    if acts:
+        lines.append(f"\n章节结构（章→幕→任务）:")
+        for i, act in enumerate(acts, 1):
+            act_no = act.get('幕编号', '') or ''
+            act_name = act.get('幕名称', '') or ''
+            label = f"{act_no} {act_name}".strip()
+            lines.append(f"  {i}. {label}")
+            for task in act.get('任务', []):
+                lines.append(f"      - {task}")
+    elif arc.get('关键事件'):
         lines.append(f"\n关键事件:")
         for i, event in enumerate(arc['关键事件'], 1):
             lines.append(f"  {i}. {event}")

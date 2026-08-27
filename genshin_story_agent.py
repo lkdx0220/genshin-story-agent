@@ -16,7 +16,7 @@ LLM: 通义千问 qwen3.7-max
   app/formatters.py    - 角色/地区/剧情格式化函数
   app/rag_memory.py    - RAG 对话记忆
   app/progress.py      - 进度事件钩子（Web API 用）
-  app/tools/           - 27 个 @tool 工具，按类别分文件
+  app/tools/           - 28 个 @tool 工具，按类别分文件
   app/agent/           - LangGraph 节点函数与工具执行器
   app/workflow.py      - StateGraph 拼装
 

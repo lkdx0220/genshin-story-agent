@@ -238,6 +238,29 @@ def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         all_tools = list(_tools_by_name.values())
         current_llm_with_tools = plan_llm.bind_tools(all_tools)
 
+    # ---- 代码短路：元数据工具确定性直答 ----
+    # 如果本轮只调用了结构化元数据工具，直接复述工具结果，不经过回答 LLM。
+    direct_answer = _get_direct_metadata_answer(messages)
+    if direct_answer:
+        print("  -> [代码短路] 元数据直答路径，跳过 LLM")
+        return {
+            "messages": messages,
+            "final_response": direct_answer,
+            "fast_iteration": iteration + 1,
+            "intent_labels": ["ALL"],
+        }
+
+    # ---- 代码短路：快速路径全部工具均未找到 ----
+    tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
+    if tool_messages and all(_is_not_found(m) for m in tool_messages):
+        print("  -> [代码短路] 快速路径所有工具均未找到，直接返回'未收录'")
+        return {
+            "messages": messages,
+            "final_response": "当前知识库未收录。",
+            "fast_iteration": iteration + 1,
+            "intent_labels": ["ALL"],
+        }
+
     # 已达最大轮次，强制生成回答（不带工具）
     if iteration >= MAX_FAST_ITERATIONS:
         print(f"  -> 已达最大快速轮次，强制生成回答")
@@ -564,7 +587,65 @@ def route_after_plan(state: GenshinAdvisorState) -> str:
 def _is_not_found(tool_message) -> bool:
     """检查工具返回是否表示未找到/未匹配"""
     content = tool_message.content if hasattr(tool_message, 'content') else str(tool_message)
-    return any(kw in content for kw in ("未找到", "未收录", "不存在", "无匹配", "No match", "not found"))
+    return any(kw in content for kw in ("未找到", "未收录", "无匹配", "No match", "not found"))
+
+
+# ====== 元数据工具确定性直答 ======
+# 这些工具返回的是结构化元数据，本身已足够回答用户问题。
+# 如果本轮只调用了这些工具，就不再让回答 LLM 自由生成，直接从工具结果拼接答案，
+# 避免 LLM 在元数据之外联想起不存在的书名/地区/角色/剧情。
+DIRECT_ANSWER_TOOLS = {
+    "get_book_metadata",
+    "query_character",
+    "query_region",
+    "query_weapon",
+    "query_artifact",
+    "query_material",
+    "query_collectible",
+    "query_recipe",
+    "query_food",
+    "query_monster",
+}
+
+
+def _get_direct_metadata_answer(messages: list) -> str | None:
+    """如果当前只发生了元数据类工具调用，直接返回其原始结果。
+
+    返回 None 表示不适用（存在非元数据工具、或没有任何工具消息）。
+    返回字符串时，调用方应跳过回答 LLM，直接将字符串作为 final_response。
+    """
+    tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
+    if not tool_messages:
+        return None
+
+    # 从最近的 AIMessage.tool_calls 中还原工具名（ToolMessage 可能没有 name 字段）
+    name_by_call_id = {}
+    for msg in messages:
+        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
+            for tc in msg.tool_calls:
+                tid = tc.get("id")
+                if tid:
+                    name_by_call_id[tid] = tc.get("name", "")
+
+    def _tool_name(m: ToolMessage) -> str:
+        direct_name = getattr(m, "name", "") or ""
+        if direct_name:
+            return direct_name
+        return name_by_call_id.get(getattr(m, "tool_call_id", ""), "")
+
+    # 只要本轮出现过非元数据工具，就交给原有回答 LLM 处理
+    if any(_tool_name(m) not in DIRECT_ANSWER_TOOLS for m in tool_messages):
+        return None
+
+    parts = []
+    for m in tool_messages:
+        content = m.content if hasattr(m, "content") else str(m)
+        content = str(content).strip()
+        if content:
+            parts.append(content)
+    if not parts:
+        return None
+    return "\n\n".join(parts)
 
 
 def route_after_tools(state: GenshinAdvisorState) -> str:
@@ -662,6 +743,15 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     _emit_progress("answer_start", {})
 
     # ---- 构建【执行事实】区块（注入到 prompt 中，防止 LLM 伪造熔断）----
+    # 先从 AIMessage.tool_calls 还原工具名，因为自定义 tool_executor 创建 ToolMessage 时没有填 name
+    name_by_call_id = {}
+    for msg in messages:
+        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+            for tc in msg.tool_calls:
+                tid = tc.get("id")
+                if tid:
+                    name_by_call_id[tid] = tc.get("name", "")
+
     tool_call_count = 0
     tool_results_summary = []
     full_text_loaded = False
@@ -674,8 +764,9 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         elif isinstance(msg, ToolMessage):
             content = msg.content if hasattr(msg, 'content') else str(msg)
             # 检查是成功还是失败
-            is_failure = ("未找到" in content or "未在" in content or
-                         "不存在" in content or "没有找到" in content)
+            is_failure = ("未找到" in content or "未收录" in content or
+                         "无匹配" in content or "没有找到" in content
+                         or content.strip().startswith("当前知识库未收录"))
             is_intercepted = "系统拦截" in content
 
             if is_failure:
@@ -684,8 +775,8 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             else:
                 consecutive_failures = 0
 
-            # 提取工具名
-            tool_name = msg.name if hasattr(msg, 'name') else ""
+            # 提取工具名（优先 ToolMessage.name，缺失时用 tool_call_id 反查）
+            tool_name = (getattr(msg, "name", "") or "") or name_by_call_id.get(getattr(msg, "tool_call_id", ""), "")
             # 从最近的 AIMessage 中提取该 tool 的参数
             call_args = ""
             for prev_msg in reversed(messages[:i]):
@@ -727,6 +818,14 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         response_mode = "not_found"
     else:
         response_mode = "found"
+
+    # ---- 代码短路：元数据工具确定性直答 ----
+    # 如果本轮只调用了结构化元数据工具，直接复述工具结果，不经过回答 LLM，
+    # 防止模型在“作者未提及”之外联想稻妻/雷神/白狐等不存在的信息。
+    direct_answer = _get_direct_metadata_answer(messages)
+    if direct_answer:
+        print("  -> [代码短路] 元数据直答路径，跳过 LLM")
+        return {"final_response": direct_answer, "messages": messages}
 
     execution_facts = (
         f"===== 【执行事实】（铁证，不可篡改）=====\n"

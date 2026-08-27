@@ -85,7 +85,7 @@ def tool_executor(state):
 
         # 检查是否触发熔断（成功返回内容，非"未找到"）
         if tool_name in MELTDOWN_TRIGGER_TOOLS:
-            is_success = not any(kw in result_str for kw in ("未找到", "未收录", "不存在", "无匹配"))
+            is_success = not any(kw in result_str for kw in ("未找到", "未收录", "无匹配"))
             if is_success:
                 meltdown_triggered = True
                 print(f"    -> [熔断] {tool_name} 成功返回，本轮后续非加载类工具将被截断")

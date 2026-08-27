@@ -48,11 +48,11 @@ python scripts/quest_preprocessor.py
 | Plan Agent（L2 复杂规划） | qwen3.7-max | 阿里云百炼 | 多子问题拆解、工具选择 |
 | Answer Agent（深度） | qwen3.7-max | 阿里云百炼 | 剧情/溯源/世界观类回答，medium reasoning |
 | Answer Agent（中等） | qwen3.7-max | 阿里云百炼 | 搜索/书籍类回答，low reasoning |
-| Plan Agent（L1 快速） | qwen-plus | 阿里云百炼 | 简单事实类快速规划 |
+| Plan Agent（L1 快速） | qwen3.7-plus | 阿里云百炼 | 简单事实类快速规划（兼顾工具调用稳定性） |
 | Answer Agent（轻量） | qwen-plus | 阿里云百炼 | 角色查询类快速回答 |
 | 意图路由 | qwen-plus | 阿里云百炼 | 实体锚定后的意图分类 |
-| 别名消歧 | deepseek-v4-flash | DeepSeek | "水神→芙宁娜/芙卡洛斯"歧义判断 |
-| L1/L2 路径分类 | deepseek-v4-flash | DeepSeek | 简单题/复杂题分流 |
+| 别名消歧 | deepseek-v4-flash-vision-exp | DeepSeek | "水神→芙宁娜/芙卡洛斯"歧义判断 |
+| L1/L2 路径分类 | deepseek-v4-flash-vision-exp | DeepSeek | 简单题/复杂题分流 |
 | 向量 Embedding | text-embedding-v4 | 阿里云百炼 | 知识库语义检索 |
 | 记忆 Embedding | paraphrase-multilingual-MiniLM-L12-v2 | 本地 | RAG 对话记忆（sentence-transformers） |
 
