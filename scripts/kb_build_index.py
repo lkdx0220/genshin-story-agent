@@ -266,7 +266,7 @@ def _type_label(raw_type: str, source_file: str) -> str:
 
 def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
     """索引所有任务:
-    - kb_quests_bm25: 全文（短任务）或 9000字滑动窗口切片（长任务）
+    - kb_quests_bm25: 全文（短任务）或 自然边界优先的 BM25 切片（长任务）
     - kb_quests_vec: 全量 1500字自然场景切片（所有任务统一切分）
     """
     print("[建库] 索引任务...")
@@ -338,7 +338,7 @@ def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
             if title in processed_titles:
                 p = processed[title]
 
-                # BM25 轨道: 9000字滑动窗口
+                # BM25 轨道: 自然边界优先切片
                 chunks_bm25 = p.get("chunks_bm25", p.get("chunks", []))
                 for i, chunk in enumerate(chunks_bm25):
                     if not chunk.strip():
@@ -361,7 +361,7 @@ def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
                     docs_vec.append(documents)
                     metas_vec.append(_base_meta(i, len(chunks_vec), chunk[:200], "quest_vec_chunk"))
             else:
-                # 中/短任务（≤ 9000 字）：向量轨按自然场景切分，BM25 轨保留全文
+                # 中/短任务（≤ 9000 字）：向量轨按自然场景切分，BM25 轨保留全文（阈值未变）
                 text = q.get("text", "")
                 if not text or len(text.strip()) < 50:
                     continue

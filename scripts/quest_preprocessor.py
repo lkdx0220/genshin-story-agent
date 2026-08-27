@@ -3,7 +3,7 @@
 """
 长任务预处理脚本：为 >9000 字的任务生成双轨数据。
 轨道 A：qwen-turbo 生成剧情大纲（摘要）
-轨道 B：9000 字滑动窗口切片（保留原文，供 BM25 检索）
+轨道 B：自然边界优先的 BM25 切片（约 3000 字窗口，保留原文，供 BM25 检索）
 轨道 C：1500 字自然场景切片（供向量语义检索）
 
 运行方式：python quest_preprocessor.py
@@ -40,14 +40,16 @@ from langchain_core.messages import HumanMessage
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
-CONTENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "content_data")
+_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONTENT_DIR = os.path.join(_BASE_DIR, "content_data")
 OUTPUT_FILE = os.path.join(CONTENT_DIR, "quests_processed.json")
 
-CHUNK_SIZE = 9000
-CHUNK_STRIDE = 4500
+# BM25 切片参数：自然边界 + 较大窗口 + 少量重叠
+BM25_CHUNK_SIZE = 3000      # BM25 切片最大字数
+BM25_CHUNK_OVERLAP = 200    # BM25 切片重叠字数
 LENGTH_THRESHOLD = 9000
 MAX_WORKERS = 3
-LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_preprocess_log.txt")
+LOG_FILE = os.path.join(_BASE_DIR, "_preprocess_log.txt")
 
 # 向量切片参数
 VEC_CHUNK_SIZE = 1500       # 向量切片最大字数
@@ -55,7 +57,7 @@ VEC_CHUNK_OVERLAP = 150     # 切片重叠字数
 
 # ====== LLM ======
 llm = ChatOpenAI(
-    model="deepseek-v4-flash",
+    model="deepseek-v4-flash-vision-exp",
     api_key=DEEPSEEK_API_KEY,
     base_url=DEEPSEEK_BASE_URL,
     temperature=0.3,
@@ -87,31 +89,33 @@ def summarize_quest(title, text):
 
 
 def chunk_text(text):
-    """9000 字滑动窗口切片（BM25 检索用）"""
-    chunks = []
-    for i in range(0, len(text), CHUNK_STRIDE):
-        chunk = text[i:i + CHUNK_SIZE]
-        if len(chunk) < 500:
-            break
-        chunks.append(chunk)
-    return chunks
+    """BM25 切片：自然边界优先，上限 BM25_CHUNK_SIZE 字，重叠 BM25_CHUNK_OVERLAP 字。"""
+    return chunk_natural(text, max_size=BM25_CHUNK_SIZE, overlap=BM25_CHUNK_OVERLAP)
 
 
-def chunk_natural(text):
-    """按对话场景自然切分，上限 VEC_CHUNK_SIZE 字，重叠 VEC_CHUNK_OVERLAP 字。
+def chunk_natural(text, max_size=None, overlap=None):
+    """按对话场景自然切分。
+
+    默认向量参数：max_size=VEC_CHUNK_SIZE, overlap=VEC_CHUNK_OVERLAP。
+    BM25 可传入更大窗口（BM25_CHUNK_SIZE/BM25_CHUNK_OVERLAP）。
 
     切片边界优先级（从高到低）：
     1. --- / *** 分隔符 → 强边界
     2. 空行 + 下一行【标题】→ 场景切换
     3. 空行 + 角色切换（说话者不同）→ 对话轮次边界
-    4. 达到 1500 字时：往前 200 字内找最近空行或角色切换点切；
+    4. 达到上限时：往前 200 字内找最近空行或角色切换点切；
        找不到则把当前角色长发言整体推到下一片
-    5. 每片尾部带 VEC_CHUNK_OVERLAP 字重叠
+    5. 每片尾部带 overlap 字重叠
     """
+    if max_size is None:
+        max_size = VEC_CHUNK_SIZE
+    if overlap is None:
+        overlap = VEC_CHUNK_OVERLAP
+
     if not text or len(text.strip()) == 0:
         return []
 
-    if len(text) <= VEC_CHUNK_SIZE:
+    if len(text) <= max_size:
         return [text.strip()]
 
     # 角色发言检测：「角色名：」或「角色名:」
@@ -121,7 +125,7 @@ def chunk_natural(text):
         m = speaker_pattern.match(line.strip())
         return m.group(1).strip() if m else None
 
-    lines = text.split('\n')
+    lines = text.split(chr(10))
 
     # 步骤1：拆分为自然段落（segment）
     segments = []
@@ -133,21 +137,21 @@ def chunk_natural(text):
         # 强边界：--- / ***
         if bool(re.match(r'^[-*]{3,}$', stripped)):
             if current_lines:
-                segments.append('\n'.join(current_lines).strip())
+                segments.append(chr(10).join(current_lines).strip())
                 current_lines = []
             continue
 
         # 空行：段落分隔
         if not stripped:
             if current_lines:
-                segments.append('\n'.join(current_lines).strip())
+                segments.append(chr(10).join(current_lines).strip())
                 current_lines = []
             continue
 
         # 标题标记：独立段落（原则2）
         if stripped.startswith('【') and stripped.endswith('】'):
             if current_lines:
-                segments.append('\n'.join(current_lines).strip())
+                segments.append(chr(10).join(current_lines).strip())
                 current_lines = []
             segments.append(stripped)
             continue
@@ -157,13 +161,13 @@ def chunk_natural(text):
             prev_speaker = _get_speaker(current_lines[-1])
             curr_speaker = _get_speaker(line)
             if prev_speaker is not None and curr_speaker is not None and prev_speaker != curr_speaker:
-                segments.append('\n'.join(current_lines).strip())
+                segments.append(chr(10).join(current_lines).strip())
                 current_lines = []
 
         current_lines.append(line)
 
     if current_lines:
-        segments.append('\n'.join(current_lines).strip())
+        segments.append(chr(10).join(current_lines).strip())
 
     # 步骤2：合并段落为切片
     chunks = []
@@ -171,14 +175,14 @@ def chunk_natural(text):
     buffer_len = 0
 
     def _lines_len(lines_list):
-        return sum(len(l) + 1 for l in lines_list) - 1 if lines_list else 0  # +1 for \n, -1 for last line
+        return sum(len(l) + 1 for l in lines_list) - 1 if lines_list else 0  # +1 for chr(10), -1 for last line
 
     def _find_backtrack_split(buffer_lines, max_lookback=200):
         """在 buffer_lines 末尾 max_lookback 字内找最近的自然切分点。
         返回 split_idx（从此行之后推到下一片），或 None。"""
         acc = 0
         for i in range(len(buffer_lines) - 1, 0, -1):
-            acc += len(buffer_lines[i]) + 1  # +1 for \n
+            acc += len(buffer_lines[i]) + 1  # +1 for chr(10)
             if acc > max_lookback:
                 return None  # 回溯区域找不到
 
@@ -198,10 +202,10 @@ def chunk_natural(text):
         return None
 
     for seg_text in segments:
-        seg_lines = seg_text.split('\n')
+        seg_lines = seg_text.split(chr(10))
         seg_len = len(seg_text)
 
-        if buffer_lines and buffer_len + seg_len + 1 > VEC_CHUNK_SIZE:
+        if buffer_lines and buffer_len + seg_len + 1 > max_size:
             # 超限：尝试回溯找自然切分点（原则4）
             split_idx = _find_backtrack_split(buffer_lines)
 
@@ -209,12 +213,12 @@ def chunk_natural(text):
                 # 找到自然切分点：buffer 前半保留，后半 + 新段落到下一片
                 keep_lines = buffer_lines[:split_idx]
                 push_lines = buffer_lines[split_idx:]
-                chunks.append('\n'.join(keep_lines).strip())
+                chunks.append(chr(10).join(keep_lines).strip())
                 buffer_lines = push_lines + seg_lines
                 buffer_len = _lines_len(buffer_lines)
             else:
                 # 找不到：当前段落到下一片（原则4 兜底）
-                chunks.append('\n'.join(buffer_lines).strip())
+                chunks.append(chr(10).join(buffer_lines).strip())
                 buffer_lines = seg_lines
                 buffer_len = seg_len
         else:
@@ -224,22 +228,21 @@ def chunk_natural(text):
             buffer_len = buffer_len + seg_len + (1 if buffer_lines != seg_lines else 0)
 
     if buffer_lines:
-        chunks.append('\n'.join(buffer_lines).strip())
+        chunks.append(chr(10).join(buffer_lines).strip())
 
     # 单片段无需重叠
     if len(chunks) <= 1:
         return chunks
 
-    # 添加重叠（原则5）：每片尾部带前一片末尾 VEC_CHUNK_OVERLAP 字
+    # 添加重叠（原则5）：每片尾部带前一片末尾 overlap 字
     result = [chunks[0]]
     for i in range(1, len(chunks)):
         prev = chunks[i - 1]
-        overlap_chars = min(VEC_CHUNK_OVERLAP, len(prev))
-        overlap = prev[-overlap_chars:]
-        result.append(overlap + '\n' + chunks[i])
+        overlap_chars = min(overlap, len(prev))
+        overlap_text = prev[-overlap_chars:]
+        result.append(overlap_text + chr(10) + chunks[i])
 
     return result
-
 
 def load_all_quests():
     """读取所有 quests_*.json，返回列表"""
@@ -277,7 +280,7 @@ def process_one(quest):
     total_chars = len(text)
 
     summary = summarize_quest(title, text)
-    chunks_bm25 = chunk_text(text)        # 9000字滑动窗口（BM25用）
+    chunks_bm25 = chunk_text(text)        # 自然边界 + 3000字左右窗口（BM25用）
     chunks_vec = chunk_natural(text)      # 自然场景切片（向量用）
 
     return {
@@ -303,7 +306,7 @@ def main():
     log("=" * 60)
     log("长任务预处理脚本（双轨）")
     log(f"阈值: >{LENGTH_THRESHOLD} 字")
-    log(f"BM25切片: {CHUNK_SIZE} 字窗口 / {CHUNK_STRIDE} 字步长")
+    log(f"BM25切片: 自然边界优先, 上限 {BM25_CHUNK_SIZE} 字, 重叠 {BM25_CHUNK_OVERLAP} 字")
     log(f"向量切片: 自然场景切分, 上限 {VEC_CHUNK_SIZE} 字, 重叠 {VEC_CHUNK_OVERLAP} 字")
     log(f"并发: {MAX_WORKERS} 线程")
     log(f"CONTENT_DIR: {CONTENT_DIR}")

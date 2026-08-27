@@ -81,7 +81,7 @@ def load_book_content(book_name: str, query: str = "") -> str:
         meta_parts.append(f"作者: {meta['作者']}")
     else:
         meta_parts.append("作者: 游戏内未提及")
-    meta_line = f"\n[元数据] {', '.join(meta_parts)}" if meta_parts else ""
+    meta_line = f"\n[书籍信息] {', '.join(meta_parts)}" if meta_parts else ""
 
     preview = text[:3000]
     more = f"\n...（共{len(text)}字）" if len(text) > 3000 else ""
@@ -155,7 +155,7 @@ def load_quest_content(quest_name: str, query: str = "") -> str:
             p = _quests_processed[title]
             if query and query.strip():
                 # 轨道 B：BM25 粗召回 + Reranker 精排
-                chunks = p.get("chunks", [])
+                chunks = p.get("chunks_bm25") or p.get("chunks", [])
                 if chunks:
                     bm25 = SimpleBM25(chunks)
                     # 多拿一些候选交给 Reranker 筛选

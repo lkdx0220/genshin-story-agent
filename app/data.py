@@ -55,6 +55,48 @@ CONTENT_FILES = {
     "books": os.path.join(CONTENT_DIR, "books.json"),
 }
 
+# ====== 合并 content_data 任务 JSON 到 任务知识库 ======
+# 目的：让 query_quest / list_all_quest_series 等使用 任务知识库 的工具，
+# 也能检索到 quests_*.json（包括新建的委托任务/游逸旅闻/伴月纪闻/地图事件等分支文件）。
+def _augment_quest_knowledge_base():
+    seen = set()
+    for q in 任务知识库:
+        name = q.get("任务名称") or q.get("title")
+        if name:
+            seen.add(name)
+    for fname in os.listdir(CONTENT_DIR):
+        if not fname.startswith("quests_") or not fname.endswith(".json"):
+            continue
+        if fname == "quests_processed.json":
+            continue
+        try:
+            with open(os.path.join(CONTENT_DIR, fname), "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        if not isinstance(data, list):
+            continue
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            meta = item.get("metadata") or {}
+            title = meta.get("任务名称") or item.get("title")
+            if not title or title in seen:
+                continue
+            flat = dict(meta)
+            flat["任务名称"] = title
+            flat.setdefault("任务类型", item.get("category", ""))
+            flat.setdefault("任务描述", "")
+            flat.setdefault("系列任务", "")
+            flat.setdefault("任务地区", "")
+            flat.setdefault("所属版本", "")
+            flat["_source_file"] = fname
+            任务知识库.append(flat)
+            seen.add(title)
+    print(f"[初始化] 任务知识库合并 content_data 后: {len(任务知识库)} 条")
+
+_augment_quest_knowledge_base()
+
 
 def _load_content_json(file_key: str) -> List[Dict]:
     """按 key 加载 content_data/ 下的 JSON 文件，失败返回空列表。"""

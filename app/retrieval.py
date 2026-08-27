@@ -50,7 +50,7 @@ def _is_compound_hit(query: str, alias: str, pos: int) -> bool:
 
 
 def _judge_alias_sandbox(alias: str, canonical: str, context: str) -> bool:
-    """安全沙箱：用 deepseek-v4-flash 判断别名是否应替换。
+    """安全沙箱：用 deepseek-v4-flash-vision-exp 判断别名是否应替换。
     固定 prompt 模板，模型只能输出 KEEP 或 REPLACE，无法被注入。
     返回 True 表示替换，False 表示保留原样。"""
     prompt = (
@@ -257,6 +257,20 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
     返回格式与向量结果统一：[{id, collection, document, category}]。"""
     results = []
     search_terms = _expand_query_with_aliases(query)
+    # 对中文自然语言查询做二次拆词：去掉疑问词后，用单个/组合关键词兜底，
+    # 否则“深渊是什么 提瓦特 本质”这类无空格整句会漏掉“深渊的本质”原文。
+    _question_words = ["是什么", "是什么意思", "为什么", "哪些", "哪几个", "多少", "怎么", "如何", "吗", "呢", "？", "?"]
+    cleaned = query
+    for w in _question_words:
+        cleaned = cleaned.replace(w, " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if cleaned and cleaned != query:
+        search_terms.append(cleaned)
+    for tok in cleaned.split():
+        if len(tok) >= 2 and tok not in search_terms:
+            search_terms.append(tok)
+    query_tokens = [t for t in cleaned.split() if len(t) >= 2]
+
 
     # --- 任务内容关键词搜索 ---
     quest_candidates = []
@@ -266,7 +280,7 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
             continue
         if filename == "quests_processed.json":
             continue
-        if len(quest_candidates) >= 200:
+        if len(quest_candidates) >= 1000:
             break
         try:
             with open(os.path.join(CONTENT_DIR, filename), "r", encoding="utf-8") as f:
@@ -276,7 +290,7 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
         if not isinstance(quests, list):
             continue
         for q in quests:
-            if len(quest_candidates) >= 200:
+            if len(quest_candidates) >= 1000:
                 break
             text = q.get("text", "")
             matched_term = None
@@ -287,7 +301,7 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
             if not matched_term:
                 continue
             first_word = matched_term.split()[0]
-            words = matched_term.split()
+            words = query_tokens if query_tokens else matched_term.split()
             if len(words) > 1 and len(text) > 600:
                 # 长文档多搜索词：找到覆盖最多不同搜索词的窗口位置，避免只截取第一个词的首次出现
                 best_pos = -1

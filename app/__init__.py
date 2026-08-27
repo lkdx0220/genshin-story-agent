@@ -9,7 +9,7 @@
 - app/retrieval.py: 别名处理、BM25、混合检索、RRF 融合
 - app/formatters.py: 角色/地区/剧情等格式化函数
 - app/rag_memory.py: RAG 对话记忆
-- app/tools/: 27 个 @tool 工具，按类别分文件
+- app/tools/: 28 个 @tool 工具，按类别分文件
 - app/agent/: LangGraph 节点与工具执行器
 - app/workflow.py: StateGraph 拼装
 """
