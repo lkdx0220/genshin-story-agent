@@ -10,6 +10,7 @@ from langgraph.prebuilt import ToolNode
 
 from app.progress import _emit_progress, _cancel_events
 from app.tools import tools, MELTDOWN_TRIGGER_TOOLS
+from app.trace_recorder import emit as trace_emit
 
 
 # 预构建 ToolNode 实例（启动时一次）
@@ -56,6 +57,14 @@ def tool_executor(state):
         # 向 Web 前端推送进度
         _emit_progress("tool_start", {"tool": tool_name, "args": args_brief})
 
+        # 结构化 Trace 事件（默认关闭）
+        trace_emit("tool_start", {
+            "tool": tool_name,
+            "args": tool_args,
+            "tool_call_id": tc_id,
+            "run_id": run_id,
+        })
+
         # ---- 代码加固 1：熔断截断 ----
         # 同轮内允许多个 load_/find_first_mention 并行执行（如对比分析需加载两个任务）
         # 只拦截非触发类工具（如 hybrid_search、query_character 等）
@@ -66,6 +75,15 @@ def tool_executor(state):
             )
             print(f"    -> [熔断截断] {tool_name} 被拦截")
             tool_messages.append(ToolMessage(content=result_str, tool_call_id=tc_id))
+            trace_emit("tool_end", {
+                "tool": tool_name,
+                "tool_call_id": tc_id,
+                "run_id": run_id,
+                "status": "intercepted",
+                "result_preview": result_str[:500],
+                "result_length": len(result_str),
+                "meltdown_trigger": False,
+            })
             continue
 
         # 执行工具
@@ -91,6 +109,26 @@ def tool_executor(state):
                 print(f"    -> [熔断] {tool_name} 成功返回，本轮后续非加载类工具将被截断")
 
         tool_messages.append(ToolMessage(content=result_str, tool_call_id=tc_id))
+
+        # 结构化 Trace 事件（默认关闭）
+        stripped = result_str.lstrip()
+        if stripped.startswith("工具执行出错"):
+            trace_status = "error"
+        elif any(stripped.startswith(kw) for kw in ("未找到", "未收录", "不存在", "无匹配", "No match", "not found")):
+            trace_status = "not_found"
+        else:
+            trace_status = "success"
+        trace_emit("tool_end", {
+            "tool": tool_name,
+            "tool_call_id": tc_id,
+            "run_id": run_id,
+            "status": trace_status,
+            "result_preview": result_str[:500],
+            "result_length": len(result_str),
+            "meltdown_trigger": (
+                tool_name in MELTDOWN_TRIGGER_TOOLS and trace_status == "success"
+            ),
+        })
 
         # 向 Web 前端推送工具完成
         _emit_progress("tool_end", {"tool": tool_name, "result_len": len(result_str)})

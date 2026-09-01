@@ -11,6 +11,7 @@ import sys
 import time
 import threading
 import socket
+import urllib.parse
 
 # 确定项目根目录（开发模式用脚本所在目录，打包模式用 exe 所在目录）
 if getattr(sys, 'frozen', False):
@@ -38,11 +39,27 @@ def find_free_port(start=5000):
     return start
 
 
+_LOCAL_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _ensure_local_url(url: str) -> str:
+    """仅允许访问本机 HTTP 服务，防止启动器被构造为 SSRF。"""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"不允许的协议: {parsed.scheme!r}")
+    if (parsed.hostname or "").lower() not in _LOCAL_ALLOWED_HOSTS:
+        raise ValueError(f"不允许的主机: {parsed.hostname!r}")
+    if not parsed.port or not (0 < parsed.port < 65536):
+        raise ValueError(f"非法端口: {parsed.port!r}")
+    return url
+
+
 def _shutdown_old_server(port: int):
     """尝试关闭端口上的旧 Flask 实例"""
     try:
         import urllib.request
-        urllib.request.urlopen(f"http://127.0.0.1:{port}/api/shutdown", timeout=2)
+        url = _ensure_local_url(f"http://127.0.0.1:{port}/api/shutdown")
+        urllib.request.urlopen(url, timeout=2)
     except Exception:
         # /api/shutdown 没有响应体是正常的（服务器在响应前就退出了）
         pass
@@ -90,7 +107,8 @@ def main():
     max_wait = 60
     for _ in range(max_wait):
         try:
-            resp = urllib.request.urlopen(f"{BASE_URL}/api/status", timeout=1)
+            status_url = _ensure_local_url(f"{BASE_URL}/api/status")
+            resp = urllib.request.urlopen(status_url, timeout=1)
             if resp.status == 200:
                 print("[启动器] Flask 服务已就绪")
                 break

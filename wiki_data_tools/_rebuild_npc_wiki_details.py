@@ -21,6 +21,7 @@ import time
 import urllib.parse
 import urllib.request
 import urllib.error
+from _safe_http import ensure_wiki_url
 
 # 路径配置
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -47,10 +48,11 @@ def fetch_wiki(name, debug=False):
     """获取 NPC 的 wikitext 和 HTML，返回 (wikitext, html, error_msg)"""
     encoded = urllib.parse.quote(name)
     url = f'{API_URL}?action=parse&page={encoded}&prop=text%7Cwikitext&format=json'
+    ensure_wiki_url(url)
 
-    req = urllib.request.Request(url, headers=HEADERS)
+    wiki_req = urllib.request.Request(url, headers=HEADERS)
     try:
-        r = urllib.request.urlopen(req, timeout=30)
+        r = urllib.request.urlopen(wiki_req, timeout=30)
         d = json.loads(r.read())
     except urllib.error.HTTPError as e:
         return None, None, f'HTTP {e.code}'

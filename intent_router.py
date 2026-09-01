@@ -5,6 +5,7 @@
 在 Plan Agent 启动前决定本次对话暴露哪些工具。
 """
 
+import ast
 import os
 import re
 import json
@@ -655,7 +656,7 @@ def route_intent(
         _last_raw_response = raw
         match = re.search(r'\[.*?\]', raw, re.DOTALL)
         if match:
-            labels = eval(match.group(0))
+            labels = ast.literal_eval(match.group(0))
         else:
             # 兜底：如果 LLM 没有输出 JSON，但 Stage 0 有锚定结果，用锚定结果
             if candidate_labels:

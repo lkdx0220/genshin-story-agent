@@ -84,8 +84,19 @@ def _expand_query_with_aliases(query: str) -> List[str]:
     if term_aliases:
         results.extend(term_aliases)
 
-    # 2. 角色别名反向展开：查询中每个词若为规范角色名，生成别名变体
+    # 2. 角色别名反向展开（别名 → 规范名）：查“散兵”时补“流浪者”
     words = query.split()
+    for word in words:
+        canonical = ALIAS_MAP.get(word)
+        if canonical:
+            variant = query.replace(word, canonical)
+            if variant not in results:
+                results.append(variant)
+                if len(results) >= 12:
+                    break
+
+    # 3. 角色别名正向展开（规范名 → 别名）：保留原有逻辑，
+    #    解决“用户搜规范名，但文本里角色以别名出现”的问题
     for word in words:
         if word in CHARACTER_ALIASES:
             all_aliases = CHARACTER_ALIASES[word]

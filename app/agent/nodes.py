@@ -20,6 +20,7 @@ from app.schema import (
     AGENT_SYSTEM_PROMPT_PLAN, AGENT_SYSTEM_PROMPT_ANSWER, AGENT_SYSTEM_PROMPT_FAST,
 )
 from app.progress import _emit_progress, _cancel_events
+from app.trace_recorder import emit as trace_emit
 from app.tools import tools_by_name as _tools_by_name
 from app.retrieval import _sanitize_query, _is_compound_hit, _judge_alias_sandbox
 from character_aliases import ALIAS_MAP, ALIASES_SORTED
@@ -127,6 +128,13 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
         print(f"  -> 未检测到别名")
 
     # rewritten_query 保持原样，不再做文本替换
+    trace_emit("rewrite", {
+        "user_query": user_query,
+        "rewritten_query": sanitized,
+        "alias_notes": alias_notes,
+        "alias_count": len(alias_notes_parts),
+        "run_id": state.get("run_id"),
+    })
     return {"rewritten_query": sanitized, "alias_notes": alias_notes}
 
 
@@ -163,16 +171,26 @@ def assess_query(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     execution_mode = "L1" if "L1" in result else "L2"
 
-    # L1/L2 硬规则：问题长度>30字 或 别名标注含≥2个实体 → 强制 L2
+    # L1/L2 硬规则：问题长度>30字 或 别名标注含≥2个实体 或 结构/多步清单类问题 → 强制 L2
     # 防止 assess_query 误判导致 L1 越权处理复杂问题
     alias_notes = state.get("alias_notes", "") or ""
     entity_count = alias_notes.count("指") if alias_notes else 0
-    if len(user_query) > 30 or entity_count >= 2:
+    structure_pattern = re.compile(r'(几幕|子任务|包含哪些|有哪些子任务|章节结构|幕数|任务结构|完整剧情|讲了什么|清单|列举)')
+    structure_hit = bool(structure_pattern.search(user_query))
+    if len(user_query) > 30 or entity_count >= 2 or structure_hit:
         execution_mode = "L2"
-        print(f"  -> 硬规则触发（长度={len(user_query)}或实体={entity_count}），强制 L2")
+        print(f"  -> 硬规则触发（长度={len(user_query)}、实体={entity_count}、结构类={structure_hit}），强制 L2")
 
     print(f"  -> 判定: {execution_mode}")
 
+    trace_emit("assess", {
+        "execution_mode": execution_mode,
+        "user_query": user_query,
+        "query_length": len(user_query),
+        "entity_count": entity_count,
+        "hard_rule": len(user_query) > 30 or entity_count >= 2,
+        "run_id": state.get("run_id"),
+    })
     return {"execution_mode": execution_mode}
 
 
@@ -288,6 +306,7 @@ def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             "intent_labels": ["ALL"],
         }
 
+    trace_emit("llm_start", {"role": "fast", "iteration": iteration + 1, "run_id": state.get("run_id"), "model": getattr(current_llm_with_tools, "model_name", None)})
     try:
         response = current_llm_with_tools.invoke(messages)
     except Exception as e:
@@ -300,6 +319,7 @@ def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
                 "messages": messages,
                 "intent_labels": ["ALL"],
             }
+    trace_emit("llm_end", {"role": "fast", "iteration": iteration + 1, "run_id": state.get("run_id"), "tool_call_count": len(getattr(response, "tool_calls", None) or [])})
 
     # 有工具调用 → 继续循环
     if hasattr(response, 'tool_calls') and response.tool_calls:
@@ -393,6 +413,12 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         routed_tools = get_tools_for_intent(intent_labels, _tools_by_name)
         tool_names = [t.name for t in routed_tools]
         print(f"  [路由] 注入工具({len(routed_tools)}个): {tool_names}")
+        trace_emit("route", {
+            "intent_labels": intent_labels,
+            "injected_tools": tool_names,
+            "turn_number": turn_number,
+            "run_id": state.get("run_id"),
+        })
 
         # ---- 步骤3：构建本轮 llm_with_tools ----
         current_llm_with_tools = plan_llm_l2.bind_tools(routed_tools)
@@ -431,6 +457,7 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             routed_tools = get_tools_for_intent(intent_labels, _tools_by_name)
         current_llm_with_tools = plan_llm_l2.bind_tools(routed_tools)
 
+    trace_emit("llm_start", {"role": "plan", "iteration": iteration + 1, "run_id": state.get("run_id"), "model": getattr(current_llm_with_tools, "model_name", None)})
     try:
         response = current_llm_with_tools.invoke(messages)
     except Exception as e:
@@ -444,9 +471,17 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
                 "messages": messages,
                 "intent_labels": intent_labels,
             }
+    trace_emit("llm_end", {"role": "plan", "iteration": iteration + 1, "status": "success", "run_id": state.get("run_id"), "tool_call_count": len(getattr(response, "tool_calls", None) or [])})
 
     # 保存执行计划（response.content 即模型输出的【执行报告】文本）
     plan_content = response.content if hasattr(response, 'content') else ''
+
+    trace_emit("plan", {
+        "iteration": iteration + 1,
+        "execution_plan": plan_content[:500],
+        "tool_call_names": [tc.get("name") for tc in (getattr(response, "tool_calls", None) or [])],
+        "run_id": state.get("run_id"),
+    })
 
     # 有工具调用 → 继续循环，不生成回答
     if hasattr(response, 'tool_calls') and response.tool_calls:
@@ -528,11 +563,14 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             f"请重新规划。当前可调用的工具包括：{_tool_str}。"
             "你的职责是调用工具获取信息。如果确实搜不到，正常输出执行报告即可，后续阶段会处理未收录情况。"
         )))
+        trace_emit("llm_start", {"role": "plan_retry", "iteration": iteration + 1, "run_id": state.get("run_id"), "model": getattr(current_llm_with_tools, "model_name", None)})
         try:
             response = current_llm_with_tools.invoke(messages)
         except Exception as e:
             print(f"  -> [拦截] LLM 重试调用失败: {e}")
+            trace_emit("llm_end", {"role": "plan_retry", "status": "error", "run_id": state.get("run_id")})
         else:
+            trace_emit("llm_end", {"role": "plan_retry", "status": "success", "run_id": state.get("run_id"), "tool_call_count": len(getattr(response, "tool_calls", None) or [])})
             plan_content = response.content if hasattr(response, 'content') else ''
             if hasattr(response, 'tool_calls') and response.tool_calls:
                 print(f"  -> [拦截] 重试成功，调用 {len(response.tool_calls)} 个工具: {[tc['name'] for tc in response.tool_calls]}")
@@ -741,6 +779,10 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     print("【回答阶段】生成最终回答")
     print("=" * 50)
     _emit_progress("answer_start", {})
+    trace_emit("answer_start", {
+        "run_id": state.get("run_id"),
+        "intent_labels": intent_labels,
+    })
 
     # ---- 构建【执行事实】区块（注入到 prompt 中，防止 LLM 伪造熔断）----
     # 先从 AIMessage.tool_calls 还原工具名，因为自定义 tool_executor 创建 ToolMessage 时没有填 name
@@ -843,6 +885,12 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 这从根本上消除了 Answer LLM 忽略 not_found 标记、强行编造内容的可能性
     if response_mode == "not_found":
         print("  -> [代码短路] response_mode=not_found，跳过 LLM 调用，直接返回'未收录'")
+        trace_emit("answer_end", {
+            "response_mode": "not_found",
+            "final_response": "当前知识库未收录。",
+            "short_circuit": True,
+            "run_id": state.get("run_id"),
+        })
         return {"final_response": "当前知识库未收录。", "messages": messages}
 
     if alias_notes:
@@ -865,10 +913,12 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         if isinstance(msg, (ToolMessage, AIMessage)):
             answer_messages.append(msg)
 
+    trace_emit("llm_start", {"role": "answer", "run_id": state.get("run_id"), "model": getattr(answer_llm, "model_name", None)})
     try:
         response = llm_invoke_with_retry(answer_messages, llm_instance=answer_llm)
     except Exception as e:
         response = AIMessage(content=f"抱歉，处理出错：{e}")
+    trace_emit("llm_end", {"role": "answer", "run_id": state.get("run_id"), "status": "success", "final_response_len": len(response.content or '')})
 
     content = response.content if hasattr(response, 'content') else ''
 
@@ -877,6 +927,12 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         content = _build_fallback_answer(messages, original_query)
         print("  -> [空回复兜底] LLM 返回空，使用兜底方案")
 
+    trace_emit("answer_end", {
+        "response_mode": response_mode,
+        "final_response": content,
+        "short_circuit": False,
+        "run_id": state.get("run_id"),
+    })
     return {
         "messages": answer_messages,
         "final_response": content,
