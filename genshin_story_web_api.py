@@ -11,6 +11,8 @@ import sys
 import json
 import queue
 import threading
+import time
+from collections import defaultdict, deque
 from datetime import datetime
 from typing import Dict, Any
 
@@ -50,6 +52,48 @@ _cancel_events: Dict[str, threading.Event] = {}
 # session_id → run_id 映射，供 /api/cancel 通过 session_id 定位运行实例
 _session_cancel_keys: Dict[str, str] = {}
 
+# ====== 内存级限流（防滥用/防恶意刷接口） ======
+# 结构: 路径前缀 -> (窗口内允许次数, 窗口秒数)
+_RATE_LIMITS = {
+    "/chat": (30, 60),
+    "/api/status": (60, 60),
+    "/api/sessions": (30, 60),
+    "/api/quest": (30, 60),
+    "/api/chat": (10, 60),
+}
+_DEFAULT_RATE_LIMIT = (60, 60)
+_rate_records: Dict[str, deque] = defaultdict(deque)
+_rate_lock = threading.Lock()
+
+
+def _get_rate_limit(path: str):
+    for prefix, cfg in _RATE_LIMITS.items():
+        if path == prefix or path.startswith(prefix + "/"):
+            return cfg, prefix
+    return _DEFAULT_RATE_LIMIT, path
+
+
+def _check_rate_limit():
+    """Flask before_request 钩子：按客户端 IP + 路径前缀做滑动窗口限流。"""
+    (limit, window), key_prefix = _get_rate_limit(request.path)
+    key = f"{request.remote_addr or 'unknown'}:{key_prefix}"
+    now = time.time()
+    with _rate_lock:
+        q = _rate_records[key]
+        while q and q[0] <= now - window:
+            q.popleft()
+        if len(q) >= limit:
+            return jsonify({
+                "error": "请求过于频繁，请稍后重试",
+                "retry_after": int(window),
+            }), 429, {"Retry-After": str(int(window))}
+        q.append(now)
+    return None
+
+
+app.before_request(_check_rate_limit)
+
+
 
 def _find_tool(name: str):
     for t in tools:
@@ -62,10 +106,16 @@ def _find_tool(name: str):
 @app.route('/chat')
 def chat_ui():
     """提供聊天客户端界面"""
+    _rl = _check_rate_limit()
+    if _rl is not None:
+        return _rl
     ui_path = os.path.join(os.path.dirname(__file__), 'chat_ui.html')
     if os.path.exists(ui_path):
-        with open(ui_path, 'r', encoding='utf-8') as f:
-            return f.read()
+        try:
+            with open(ui_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except OSError as e:
+            return f"<h1>读取 chat_ui.html 失败: {e}</h1>", 500
     return "<h1>chat_ui.html 未找到</h1>", 404
 
 
@@ -117,6 +167,9 @@ pre{background:rgba(0,0,0,.3);padding:14px;border-radius:8px;overflow-x:auto;fon
 
 @app.route('/api/status')
 def status():
+    _rl = _check_rate_limit()
+    if _rl is not None:
+        return _rl
     return jsonify({
         "status": "running",
         "agent": AGENT_OK,
@@ -189,6 +242,9 @@ def api_cancel():
 @app.route('/api/sessions/<session_id>', methods=['GET', 'DELETE'])
 def api_session_detail(session_id):
     """获取或删除指定会话"""
+    _rl = _check_rate_limit()
+    if _rl is not None:
+        return _rl
     if request.method == 'DELETE':
         fpath = _session_file(session_id)
         if os.path.exists(fpath):
@@ -253,6 +309,9 @@ def api_weapon():
 
 @app.route('/api/quest', methods=['POST'])
 def api_quest():
+    _rl = _check_rate_limit()
+    if _rl is not None:
+        return _rl
     tool = _find_tool("query_quest")
     if not tool:
         return jsonify({"error": "模块未加载"}), 500
@@ -347,6 +406,9 @@ def _extract_tool_calls(state: Dict) -> list:
 
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
+    _rl = _check_rate_limit()
+    if _rl is not None:
+        return _rl
     import genshin_story_agent as agent_module
     data = request.get_json()
     if not data or "message" not in data:

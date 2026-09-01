@@ -11,6 +11,7 @@ import json
 import re
 import os
 import time
+from _safe_http import ensure_wiki_url
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
@@ -28,9 +29,10 @@ def ask(query, limit=500):
         'limit': str(limit),
     }
     url = 'https://wiki.biligame.com/ys/api.php?' + urllib.parse.urlencode(params)
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    ensure_wiki_url(url)
+    wiki_req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
     try:
-        r = urllib.request.urlopen(req, timeout=30)
+        r = urllib.request.urlopen(wiki_req, timeout=30)
         d = json.loads(r.read())
         results = d.get('query', {}).get('results', {})
         return list(results.values()) if isinstance(results, dict) else (results or [])

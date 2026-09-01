@@ -17,7 +17,7 @@ from app.data import (
 from app.formatters import (
     _format_role_info, _format_npc_info, _format_region_info, _format_story_info,
 )
-from character_aliases import ALIAS_MAP
+from character_aliases import ALIAS_MAP, resolve_aliases
 
 
 # 戏称映射：角色名 → 被戏称为该角色传说任务的版本活动
@@ -45,17 +45,29 @@ TRIBAL_CHRONICLES = {
 
 @tool
 def query_character(name: str) -> str:
-    """查询原神角色详细信息。name: 角色名称（如\"胡桃\"、\"钟离\"、\"雷电将军\"）"""
-    for role in 角色知识库:
-        if name in role.get("角色名称", "") or name in role.get("称号", ""):
-            print(f"[工具] 查询角色: {name}")
-            return _format_role_info(role)
+    """查询原神角色详细信息。name: 角色名称或常用别名（如\"胡桃\"、\"钟离\"、\"散兵\"）"""
+    # 别名反向展开：散兵 → 流浪者，确保社区常用名能查到规范名资料
+    candidates = []
+    seen = set()
+    for candidate in resolve_aliases(name):
+        c = candidate.strip().replace("「", "").replace("」", "")
+        if c and c not in seen:
+            seen.add(c)
+            candidates.append(c)
+    # 原始 name 放在最前，保持精确匹配优先级
+    candidates = [name] + [c for c in candidates if c != name]
 
-    # 兜底：查 NPC 数据
-    npc = _npcs_data.get(name)
-    if npc:
-        print(f"[工具] 查询NPC: {name}")
-        return _format_npc_info(name, npc)
+    for candidate in candidates:
+        for role in 角色知识库:
+            if candidate in role.get("角色名称", "") or candidate in role.get("称号", ""):
+                print(f"[工具] 查询角色: {name} -> {candidate}")
+                return _format_role_info(role)
+
+        # 兜底：查 NPC 数据
+        npc = _npcs_data.get(candidate)
+        if npc:
+            print(f"[工具] 查询NPC: {name} -> {candidate}")
+            return _format_npc_info(candidate, npc)
 
     return f"未找到角色「{name}」的信息。知识库还在完善中，建议前往 Bilibili Wiki 查看。"
 
