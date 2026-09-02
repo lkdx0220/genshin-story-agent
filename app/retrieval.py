@@ -263,6 +263,87 @@ def _rrf_fusion(kw_items: list, vec_items: list, k: int = 60) -> list:
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
 
+def _build_quest_snippet(text: str, words: list, first_word: str, matched_term: str) -> str:
+    """生成任务正文关键词片段。
+
+    - 长文档且多查询词（>2000字）：最多取 3 段、每段约 400 字，优先覆盖不同查询词出现位置，
+      最后补一段文末窗口，避免后部关键信息被 240 字单窗口截断。
+    - 中等/短文档：保持原有 best_window 行为，降低回归风险。
+    """
+    if len(text) > 2000 and len(words) > 1:
+        seg_chars = 400
+        half = seg_chars // 2
+        # 收集每个查询词每次出现的窗口覆盖度（窗口内命中多少个不同查询词）
+        cands = []
+        for w in words:
+            pos = 0
+            while True:
+                idx = text.find(w, pos)
+                if idx == -1:
+                    break
+                window_text = text[max(0, idx - half):min(len(text), idx + half)]
+                count = sum(1 for w2 in words if w2 in window_text)
+                cands.append((count, idx))
+                pos = idx + len(w)
+        if not cands:
+            cands = [(0, text.find(first_word))]
+        # 第一段：覆盖查询词最多且位置最早的窗口
+        _best_count, best_pos = max(cands, key=lambda c: (c[0], -c[1]))
+        chosen = [best_pos]
+        # 第二段：在文档中部四分之一到四分之三区间内，取离全文中点最近的查询词窗口，
+        # 目的是覆盖“首段之后、文末之前”的关键信息（而非一味贪心挑更远处的高分窗口）
+        band_start = len(text) // 4
+        band_end = (len(text) * 3) // 4
+        mid = len(text) // 2
+        pool = [(count, idx) for count, idx in cands
+                if band_start <= idx <= band_end and all(abs(idx - c) >= seg_chars for c in chosen)]
+        if pool:
+            _count, second_pos = min(pool, key=lambda c: (abs(c[1] - mid), -c[0]))
+            chosen.append(second_pos)
+        # 第三段：尾部补充扫描，若文末窗口与已有段落不重叠则补上
+        tail_center = max(0, len(text) - half)
+        if all(abs(tail_center - c) >= seg_chars for c in chosen):
+            chosen.append(tail_center)
+        chosen.sort()
+        segments = []
+        for c in chosen:
+            start = max(0, c - half)
+            end = min(len(text), c + half)
+            seg = text[start:end].strip()
+            if seg and (not segments or seg != segments[-1]):
+                segments.append(seg)
+        snippet = " ... ".join(segments).replace('\n', ' ').strip()
+        return snippet[:seg_chars * 3 + 32]
+
+    if len(words) > 1 and len(text) > 600:
+        # 长文档多搜索词：找到覆盖最多不同搜索词的窗口位置，避免只截取第一个词的首次出现
+        best_pos = -1
+        best_count = 0
+        for w in words:
+            pos = 0
+            while True:
+                idx = text.find(w, pos)
+                if idx == -1:
+                    break
+                window_text = text[max(0, idx - 120):min(len(text), idx + 120)]
+                count = sum(1 for w2 in words if w2 in window_text)
+                if count > best_count:
+                    best_count = count
+                    best_pos = idx
+                pos = idx + len(w)
+        if best_pos >= 0:
+            start = max(0, best_pos - 120)
+            end = min(len(text), best_pos + 120)
+        else:
+            start = max(0, text.find(first_word))
+            end = min(len(text), start + 240)
+    else:
+        idx = text.find(first_word)
+        start = max(0, idx - 120)
+        end = min(len(text), idx + len(matched_term) + 120)
+    return text[start:end].replace('\n', ' ').strip()
+
+
 def _keyword_search_docs(query: str, top_k: int = 15) -> list:
     """关键词路：搜索任务内容、世界观设定、书籍正文。
     返回格式与向量结果统一：[{id, collection, document, category}]。"""
@@ -313,33 +394,7 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
                 continue
             first_word = matched_term.split()[0]
             words = query_tokens if query_tokens else matched_term.split()
-            if len(words) > 1 and len(text) > 600:
-                # 长文档多搜索词：找到覆盖最多不同搜索词的窗口位置，避免只截取第一个词的首次出现
-                best_pos = -1
-                best_count = 0
-                for w in words:
-                    pos = 0
-                    while True:
-                        idx = text.find(w, pos)
-                        if idx == -1:
-                            break
-                        window_text = text[max(0, idx-120):min(len(text), idx+120)]
-                        count = sum(1 for w2 in words if w2 in window_text)
-                        if count > best_count:
-                            best_count = count
-                            best_pos = idx
-                        pos = idx + len(w)
-                if best_pos >= 0:
-                    start = max(0, best_pos - 120)
-                    end = min(len(text), best_pos + 120)
-                else:
-                    start = max(0, text.find(first_word))
-                    end = min(len(text), start + 240)
-            else:
-                idx = text.find(first_word)
-                start = max(0, idx - 120)
-                end = min(len(text), idx + len(matched_term) + 120)
-            snippet = text[start:end].replace('\n', ' ').strip()
+            snippet = _build_quest_snippet(text, words, first_word, matched_term)
             dedup_key = (q["title"], snippet[:60])
             if dedup_key not in seen_candidates:
                 seen_candidates.add(dedup_key)
@@ -532,7 +587,8 @@ def hybrid_search(query: str, top_k: int = 10) -> str:
                 attrs.append(f"任务地区：{region}")
             attr_str = f"（{'，'.join(attrs)}）" if attrs else ""
             lines.append(f"\n【{key}】{attr_str}({collection}) [{tag_str}]")
-            lines.append(f"  {doc['document'][:600]}")
+            # 关键词路长文档片段最多约 3x400 字，展示上限放宽，避免 R3 类后部关键信息被截断
+            lines.append(f"  {doc['document'][:1400]}")
         elif vec_match:
             doc = vec_match[0]
             doc_id = doc.get("id", key)
