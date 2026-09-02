@@ -111,7 +111,8 @@ def query_story(arc_name: str) -> str:
     elif results:
         print(f"[工具] 查询剧情(多条): {arc_name}")
         return "\n\n".join(_format_story_info(a) for a in results)
-    return f"未找到与「{arc_name}」相关的剧情。"
+    return (f"未找到与「{arc_name}」相关的剧情。如果用户问的是活动剧情（活动剧情不在 query_story 的主线知识库中），"
+            f"请改用 load_quest_content 加载该活动任务全文。")
 
 
 @tool
