@@ -262,6 +262,92 @@ def query_quest(name: str) -> str:
 
 
     return f"未找到任务「{name}」的信息。"
+
+# 简单同音字组表：用于短名/同音错别字的保守纠错。
+# 只收录常见任务/章节用字，后续遇到真实漏网再补充。
+# 规则是“同长度 + 至少一个同位置字完全相同 + 其余不同字必须在同一组内”，避免“烟绯”这类仅共享单字但位置不同的误匹配。
+_COMMON_HOMOPHONE_GROUPS = [
+    "绯非菲飞匪废费",
+    "记纪际计继既寄季己几",
+    "影引印隐因音银饮",
+    "烟焰炎岩盐演严言颜眼",
+    "蝶叠跌谍",
+    "石时史事世士式室示是诗施湿实食使始",
+    "云陨韵运允",
+    "明名命鸣冥",
+    "文闻温稳问",
+    "灵零铃岭领凌",
+    "璃丽力立礼李里理莉利离",
+    "青清轻情庆倾",
+    "真镇震阵珍",
+    "风封峰枫丰凤",
+    "胡湖虎护互户狐壶",
+    "桃逃挑条跳",
+    "长常场唱尝",
+    "堂唐糖",
+    "公宫功工攻贡供",
+    "星行形兴醒姓刑",
+    "神深身申沈慎",
+]
+_COMMON_HOMOPHONE_SETS = [set(g) for g in _COMMON_HOMOPHONE_GROUPS]
+
+
+def _homophone_aligned_score(name: str, candidate: str):
+    """同长度逐位对齐的同音/形近候选分；不满足返回 0。"""
+    if len(name) != len(candidate) or not name:
+        return 0.0
+    exact = 0
+    for a, b in zip(name, candidate):
+        if a == b:
+            exact += 1
+            continue
+        if not any(a in g and b in g for g in _COMMON_HOMOPHONE_SETS):
+            return 0.0
+    if exact == 0:
+        return 0.0
+    # 与 0.6 阈值区间衔接：同音候选至少有 1 个同位置字相同，分数按相同比例上浮。
+    return 0.6 + 0.3 * (exact / len(name))
+
+
+def find_similar_quest_names(name: str, top_n: int = 3):
+    """返回与输入名称最相似的任务/章节候选，用于任务未命中后的疑似错别字判断。
+
+    候选来源包括：任务名称、系列任务（章节,幕）、所属角色、metadata.chapter_name/act_name。
+    相似度阈值 0.6 用于过滤大量“XX之章”类低区分度候选；
+    同长度同音/形近候选单独走 _homophone_aligned_score，补足“绯石→匪石”这类两字短名漏网。
+    """
+    candidates = set()
+
+    def _add(value):
+        if not value:
+            return
+        for part in str(value).replace("，", ",").replace("\n", ",").split(","):
+            part = part.strip()
+            if part:
+                candidates.add(part)
+
+    for q in 任务知识库:
+        _add(q.get("任务名称", ""))
+        _add(q.get("系列任务", ""))
+        _add(q.get("所属角色", ""))
+        meta = q.get("metadata", {}) or {}
+        _add(meta.get("chapter_name", ""))
+        _add(meta.get("act_name", ""))
+
+    from difflib import SequenceMatcher
+    scored = []
+    for candidate in candidates:
+        ratio = SequenceMatcher(None, name, candidate).ratio()
+        if ratio >= 0.6:
+            scored.append((ratio, candidate))
+            continue
+        h_score = _homophone_aligned_score(name, candidate)
+        if h_score > 0:
+            scored.append((h_score, candidate))
+    scored.sort(key=lambda x: (-x[0], len(x[1]), x[1]))
+    return [candidate for _, candidate in scored[:top_n]]
+
+
 @tool
 def query_monster(name: str) -> str:
     """查询怪物图鉴：属性、抗性、掉落、技能。name: 怪物名称（模糊匹配）"""

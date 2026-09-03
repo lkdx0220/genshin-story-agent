@@ -51,7 +51,7 @@ TOOL_GROUPS = {
         "list_all_lore_entries",
         "list_all_game_items",
     ],
-    "D": ["query_story", "query_quest", "load_quest_content"],
+    "D": ["query_story", "query_quest", "load_quest_content", "search_all"],
     "E": ["load_book_content", "get_book_metadata", "list_all_books"],
     "F": ["find_first_mention"],
 }

@@ -169,8 +169,11 @@ def find_first_mention(keyword: str) -> str:
     return result
 
 
-# ====== 内部辅助函数（保留供其他模块调用，但已从主搜索路径移除）======
+# ====== 全局检索工具（任务未命中后的确定性兜底）======
+# search_all 已注册为正式工具：当 query_quest/load_quest_content 未命中任务名时，
+# 代码层会先强制调用它做全局检索；search_lore 仍保留为内部辅助函数。
 
+@tool
 def search_all(query: str) -> str:
     """全局搜索原神知识库，在角色、地区、剧情、武器、任务、概念、怪物、材料、书籍、食谱、食物、采集物、任务内容中模糊匹配。query: 搜索关键词"""
     all_results = []
@@ -194,9 +197,15 @@ def search_all(query: str) -> str:
     for art in 圣遗物知识库:
         if _match_all_in(query, art.get("圣遗物名称", "")):
             all_results.append(("圣遗物", f"\n【{art['圣遗物名称']}】{art.get('稀有度','')}星 | 两件套: {art.get('两件套效果','?')[:60]}"))
-    # 任务元数据
+    # 任务元数据（含系列任务/章幕/所属角色，确保“全局检索”能覆盖任务体系字段）
     for q in 任务知识库:
-        if _match_all_in(query, q.get("任务名称", "")) or _match_all_in(query, q.get("关联角色", "")):
+        meta = q.get("metadata", {}) or {}
+        if (_match_all_in(query, q.get("任务名称", ""))
+                or _match_all_in(query, q.get("关联角色", ""))
+                or _match_all_in(query, q.get("系列任务", ""))
+                or _match_all_in(query, q.get("所属角色", ""))
+                or _match_all_in(query, str(meta.get("chapter_name", "")))
+                or _match_all_in(query, str(meta.get("act_name", "")))):
             all_results.append(("任务", f"\n【{q['任务名称']}】{q.get('任务类型','')} | 关联: {q.get('关联角色','')} | {q.get('简介','')[:100]}"))
     # 概念
     concepts = _load_content_json("concepts")
