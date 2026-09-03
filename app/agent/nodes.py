@@ -5,7 +5,8 @@
 路由函数返回字符串，由 StateGraph 的 add_conditional_edges 映射到下一节点。
 """
 import re
-from typing import Dict, Any, List
+import json
+from typing import Dict, Any, List, Tuple
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 
@@ -22,6 +23,7 @@ from app.schema import (
 from app.progress import _emit_progress, _cancel_events
 from app.trace_recorder import emit as trace_emit
 from app.tools import tools_by_name as _tools_by_name
+from app.tools.query import find_similar_quest_names
 from app.retrieval import _sanitize_query, _is_compound_hit, _judge_alias_sandbox
 from character_aliases import ALIAS_MAP, ALIASES_SORTED
 from intent_router import route_intent, get_tools_for_intent, get_pseudo_legendary_note
@@ -77,6 +79,7 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     # Step 2: 检测潜在别名命中，收集映射信息（不替换原文）
     alias_notes_parts = []  # 收集别名说明，最终拼接为系统消息补充
+    alias_pairs = []        # 结构化别名映射 [(别名, 规范名)]，供下游确定性身份直答使用
 
     # ·/- 归一化：用户常用 "-" 代替 "·"（如 "芙宁娜-德-枫丹"），统一转为 "·" 后再匹配
     match_text = sanitized.replace('-', '·')
@@ -96,6 +99,7 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
             if _judge_alias_sandbox(alias, canonical, context):
                 print(f"  [AI判定] '{alias}' → '{canonical}' (上下文: \"{context}\")")
                 alias_notes_parts.append(f'"{alias}" 指 {canonical}')
+                alias_pairs.append((alias, canonical))
             else:
                 print(f"  [AI判定] '{alias}' 在上下文中不是角色别名，保留原样 (上下文: \"{context}\")")
         else:
@@ -103,6 +107,7 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
             canonical = ALIAS_MAP[alias]
             print(f"  [检测到] '{alias}' → '{canonical}'")
             alias_notes_parts.append(f'"{alias}" 指 {canonical}')
+            alias_pairs.append((alias, canonical))
 
     if alias_notes_parts:
         # 代码加固：多实体强制注入 —— 如果检测到多个别名/实体，明确列出并强制要求全部回答
@@ -115,13 +120,19 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
                 f"如果某个实体的信息在工具返回中暂缺，也必须先说明已知部分，再对缺失部分说明\"当前知识库未收录\"。\n"
             )
 
-        alias_notes = ("\n\n[别名标注]\n以下词汇在用户问题中被检测为角色别名，映射关系如下：\n"
-                       + "\n".join(f"- {p}" for p in alias_notes_parts)
-                       + "\n\n这些映射仅用于帮助你理解用户意图和规范名。你仍然应当调用工具获取角色的详细信息。\n"
-                       "- 如果用户在问「这个别名指谁/是谁」，可以在回答中引用别名标注，但仍应调用工具获取更丰富的信息。\n"
-                       "- 如果用户在问角色的行为/故事，必须使用工具检索剧情内容。\n"
-                       "- 行为提问必须从 load_quest_content 或 hybrid_search 提取具体动作，不得仅凭人物传记概括。\n"
-                       + multi_entity_note)
+        # 注意：alias_notes 的展示格式为 `"X" 指 Y`，是 alias_pairs 的文本化；
+        # 下游 `_parse_alias_mappings` 也依赖此格式作为回退解析，修改时必须同步两者。
+        alias_notes = f"""
+[别名标注]
+以下词汇在用户问题中被检测为角色别名，映射关系如下：
+{chr(10).join(f"- {p}" for p in alias_notes_parts)}
+
+这些映射用于帮助你理解用户意图和规范名。
+- 纯身份查询（「XX是谁/指谁」）：代码会根据别名标注直接回答映射关系，不需要由你决定是否调工具。
+- 行为/故事/属性/对比查询：必须调用工具检索剧情内容，不得仅凭别名标注回答。
+- 行为提问必须从 load_quest_content 或 hybrid_search 提取具体动作，不得仅凭人物传记概括。
+- 涉及别名但不是纯身份查询时（例如「岩王帝君的故事」），可调用 query_character(规范名) 获取更丰富信息。
+{multi_entity_note}"""
         print(f"  -> 已标注 {len(alias_notes_parts)} 个别名映射，原文保持不变")
     else:
         alias_notes = ""
@@ -132,10 +143,11 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
         "user_query": user_query,
         "rewritten_query": sanitized,
         "alias_notes": alias_notes,
+        "alias_pairs": alias_pairs or [],
         "alias_count": len(alias_notes_parts),
         "run_id": state.get("run_id"),
     })
-    return {"rewritten_query": sanitized, "alias_notes": alias_notes}
+    return {"rewritten_query": sanitized, "alias_notes": alias_notes, "alias_pairs": alias_pairs or None}
 
 
 # ====== 查询分类器（L1 / L2 判断）======
@@ -366,6 +378,77 @@ def route_after_fast(state: GenshinAdvisorState) -> str:
     return "end"
 
 
+# ====== Plan 结构化工具调用提取 ======
+# 设计说明：
+# - 原生 tool_calls 仍是第一通道；如果模型只在正文写了“调用 XXX”，
+#   而没生成原生 tool_calls，则解析正文中强制要求的【工具调用】JSON 块，
+#   由代码构造真实的 tool_calls 并交给工具执行器。
+# - 这样即使用户问的是偶发性的“正文写调用但 tool_calls 为空”，也不会被当作零工具处理。
+
+
+def _extract_json_tool_calls(content: str) -> List[Dict[str, Any]]:
+    """从 Plan 正文中提取【工具调用】JSON 块，返回原始 list（未校验）。"""
+    if not content or not isinstance(content, str):
+        return []
+
+    candidates = []
+    marker_pos = content.find('【工具调用】')
+    if marker_pos >= 0:
+        segment = content[marker_pos:]
+        segment = re.sub(r'^```(?:json)?\s*', '', segment)
+        candidates.append(segment)
+
+    m = re.search(r'```json\s*(.*?)```', content, re.S)
+    if m:
+        candidates.append(m.group(1))
+
+    for segment in candidates:
+        start = segment.find('[')
+        end = segment.rfind(']')
+        if start < 0 or end <= start:
+            continue
+        raw = segment[start:end + 1]
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(data, list):
+            return data
+    return []
+
+
+def _normalize_json_tool_calls(raw_calls: List[Any], allowed_tool_names: set) -> List[Dict[str, Any]]:
+    """把 JSON 块中的工具调用规范成 LangChain tool_calls 格式。
+
+    只接收：
+    - {"tool": "hybrid_search", "args": {"query": "..."}}
+    - {"name": "hybrid_search", "args": {"query": "..."}}
+    工具名必须在本轮注入白名单内；args 必须是对象。
+    """
+    result: List[Dict[str, Any]] = []
+    for i, item in enumerate(raw_calls):
+        if not isinstance(item, dict):
+            continue
+        name = item.get("tool") or item.get("name")
+        args = item.get("args")
+        if not isinstance(name, str) or not isinstance(args, dict):
+            continue
+        if name not in allowed_tool_names:
+            continue
+        result.append({
+            "name": name,
+            "args": args,
+            "id": f"call_json_{i + 1}",
+            "type": "tool_call",
+        })
+    return result
+
+
+def _parse_plan_json_tool_calls(content: str, allowed_tool_names: set) -> List[Dict[str, Any]]:
+    """Plan 正文 → 规范化 LangChain tool_calls 列表（无有效块则返回空）。"""
+    return _normalize_json_tool_calls(_extract_json_tool_calls(content), allowed_tool_names)
+
+
 # ====== 统一 Agent 循环（L2 路径）======
 
 def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
@@ -457,6 +540,11 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             routed_tools = get_tools_for_intent(intent_labels, _tools_by_name)
         current_llm_with_tools = plan_llm_l2.bind_tools(routed_tools)
 
+    # 任务未命中后的确定性恢复：在让 LLM 自由选择下一步之前，先走 search_all → 相似名纠错。
+    auto_recovery = _maybe_auto_task_recovery(state, messages, routed_tools, iteration)
+    if auto_recovery is not None:
+        return auto_recovery
+
     trace_emit("llm_start", {"role": "plan", "iteration": iteration + 1, "run_id": state.get("run_id"), "model": getattr(current_llm_with_tools, "model_name", None)})
     try:
         response = current_llm_with_tools.invoke(messages)
@@ -495,55 +583,82 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             "intent_labels": intent_labels,
         }
 
+    # 原生 tool_calls 缺失但正文含【工具调用】JSON → 代码构造真实 tool_calls
+    # 这是 R7 类偶发问题的兜底：模型可能在正文写了"调用 hybrid_search"，
+    # 却没有生成原生 tool_calls；只要它按提示词输出了机器可读 JSON 块，
+    # 代码就把它转换成真正的工具调用，不再误判为零工具。
+    allowed_tool_names = {t.name for t in routed_tools}
+    json_tool_calls = _parse_plan_json_tool_calls(plan_content, allowed_tool_names)
+    if json_tool_calls:
+        print(f"  -> [JSON工具块] 从执行报告提取 {len(json_tool_calls)} 个工具: {[tc['name'] for tc in json_tool_calls]}")
+        structured_response = AIMessage(content=plan_content, tool_calls=json_tool_calls)
+        trace_emit("plan", {
+            "iteration": iteration + 1,
+            "execution_plan": plan_content[:500],
+            "tool_call_names": [tc["name"] for tc in json_tool_calls],
+            "tool_call_source": "json_block",
+            "run_id": state.get("run_id"),
+        })
+        if iteration + 1 >= MAX_AGENT_ITERATIONS:
+            print(f"  -> 已达到最大迭代次数({MAX_AGENT_ITERATIONS})，本轮后进入回答阶段")
+        return {
+            "messages": [structured_response],
+            "execution_plan": plan_content,
+            "iteration": iteration + 1,
+            "intent_labels": intent_labels,
+        }
+
     # 无工具调用 → 检查是否需要强制重试
     plan_retry_count = state.get("plan_retry", 0) or 0
 
-    # 豁免条件：身份查询 + 别名标注已给出（注意：自映射无信息量，不算）
-    alias_notes = state.get("alias_notes", "") or ""
-    has_useful_alias = False
-    if alias_notes:
-        for line in alias_notes.split("\n"):
-            m = re.search(r'"([^"]+)" 指 (.+)', line)
-            if m:
-                alias_word = re.sub(r'[「」]', '', m.group(1)).strip()
-                canonical = re.sub(r'[「」]', '', m.group(2)).strip()
-                if alias_word != canonical:
-                    has_useful_alias = True
-                    break
-    is_exempt = (
-        "身份查询" in plan_content and
-        ("0轮工具" in plan_content or "别名标注已给出答案" in plan_content)
-    ) and has_useful_alias
+    # 无工具进入回答阶段的原因：优先基于用户问题 + 结构化别名映射判定，
+    # 不再解析 LLM 是否写出了"0轮工具/别名标注已给出答案"等固定措辞。
+    alias_matches = _get_pure_alias_identity_matches(state)
+    plan_exit_reason = None
 
-    # P10：数学/问候白名单 —— 对纯数字运算、问候语跳过强制重试
-    if not is_exempt:
+    if alias_matches:
+        plan_exit_reason = "alias_identity"
+    else:
         stripped = original_query.strip()
         MATH_GREETING_PATTERN = re.compile(
             r'^[\d\s\+\-\*/\.=\(\)\？\?]+$'         # 纯数学表达式（无中文）
             r'|^(你好|您好|hi|hello|在吗|谢谢|多谢|再见|拜拜|早上好|晚上好|中午好)[\s！!。.]*$'  # 问候语
         )
         if MATH_GREETING_PATTERN.match(stripped):
-            is_exempt = True
+            plan_exit_reason = "math_greeting"
             print("  -> P10 豁免：纯数学/问候语，跳过强制重试")
         # 含中文的数学问题（如"1+1等于几"），用更严格的模式：必须有数字-运算符-数字结构
         elif re.search(r'\d\s*[\+\-\*/]\s*\d', stripped) and len(stripped) <= 20:
-            is_exempt = True
+            plan_exit_reason = "math_greeting"
             print("  -> P10 豁免：含中文数学表达式，跳过强制重试")
+        else:
+            # 前一轮已执行工具并返回结果 → Plan Agent 已看过结果，信任其"不需要再搜"的判断
+            # 注意：用 hasattr/type 按实际类型检测，而非 isinstance(ToolMessage)，避免 import 依赖
+            has_prior_tool_result = any(
+                type(msg).__name__ == 'ToolMessage' for msg in messages
+            )
+            if has_prior_tool_result:
+                plan_exit_reason = "prior_tool_result"
 
-    # 前一轮已执行工具并返回结果 → Plan Agent 已看过结果，信任其"不需要再搜"的判断
-    # 注意：用 hasattr/type 按实际类型检测，而非 isinstance(ToolMessage)，避免 import 依赖
-    has_prior_tool_result = any(
-        type(msg).__name__ == 'ToolMessage' for msg in messages
-    )
-    if has_prior_tool_result:
-        is_exempt = True
+    is_exempt = plan_exit_reason in ("alias_identity", "math_greeting", "prior_tool_result")
 
     if is_exempt:
-        print("  -> 身份查询（别名豁免），无工具调用，进入回答阶段")
+        if plan_exit_reason == "alias_identity":
+            print(f"  -> 纯身份查询（别名豁免，{len(alias_matches)}个映射），无工具调用，进入回答阶段")
+        else:
+            print(f"  -> 无工具调用但符合豁免({plan_exit_reason})，进入回答阶段")
+        trace_emit("plan_exit", {
+            "iteration": iteration + 1,
+            "plan_exit_reason": plan_exit_reason,
+            "alias_count": len(alias_matches),
+            "run_id": state.get("run_id"),
+        })
         return {
             "messages": [response],
             "execution_plan": plan_content,
             "intent_labels": intent_labels,
+            "plan_retry": plan_retry_count,
+            "plan_exit_reason": plan_exit_reason,
         }
 
     if plan_retry_count < MAX_PLAN_RETRIES:
@@ -558,9 +673,11 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         _tool_str = "、".join(tool_hints)
         messages.append(response)
         messages.append(SystemMessage(content=(
-            "错误：检测到你的规划中没有包含任何工具调用。"
-            "根据规则，对于非身份查询类问题，你必须至少调用一个工具来检索信息。"
-            f"请重新规划。当前可调用的工具包括：{_tool_str}。"
+            "错误：检测到你的规划中没有包含任何工具调用，也没有输出【工具调用】JSON 块。"
+            "对于非身份查询类问题，你必须至少调用一个工具来检索信息。"
+            f"请重新规划，并在【执行报告】后输出【工具调用】JSON 块，格式为："
+            f'[{{"tool": "工具名", "args": {{"参数名": "参数值"}}}}]'
+            f"。当前可调用的工具包括：{_tool_str}。"
             "你的职责是调用工具获取信息。如果确实搜不到，正常输出执行报告即可，后续阶段会处理未收录情况。"
         )))
         trace_emit("llm_start", {"role": "plan_retry", "iteration": iteration + 1, "run_id": state.get("run_id"), "model": getattr(current_llm_with_tools, "model_name", None)})
@@ -583,17 +700,47 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
                     "plan_retry": plan_retry_count + 1,
                     "intent_labels": intent_labels,
                 }
+            # 重试后仍无原生 tool_calls，但正文含【工具调用】JSON → 同样构造真实调用
+            retry_json_calls = _parse_plan_json_tool_calls(plan_content, allowed_tool_names)
+            if retry_json_calls:
+                print(f"  -> [拦截] 重试 JSON工具块，调用 {len(retry_json_calls)} 个工具: {[tc['name'] for tc in retry_json_calls]}")
+                structured_retry = AIMessage(content=plan_content, tool_calls=retry_json_calls)
+                trace_emit("plan", {
+                    "iteration": iteration + 1,
+                    "execution_plan": plan_content[:500],
+                    "tool_call_names": [tc["name"] for tc in retry_json_calls],
+                    "tool_call_source": "json_block_retry",
+                    "run_id": state.get("run_id"),
+                })
+                if iteration + 1 >= MAX_AGENT_ITERATIONS:
+                    print(f"  -> 已达到最大迭代次数({MAX_AGENT_ITERATIONS})，本轮后进入回答阶段")
+                return {
+                    "messages": [structured_retry],
+                    "execution_plan": plan_content,
+                    "iteration": iteration + 1,
+                    "plan_retry": plan_retry_count + 1,
+                    "intent_labels": intent_labels,
+                }
             print(f"  -> [拦截] 重试后仍无工具调用，放弃")
+            plan_exit_reason = "retry_exhausted"
     else:
         print(f"  -> [拦截] 重试次数已耗尽，放弃工具调用")
+        plan_exit_reason = "retry_exhausted"
 
-    # 重试耗尽或豁免 → 进入回答阶段
+    # 重试耗尽 → 进入回答阶段
     print("  -> 无工具调用，进入回答阶段")
+    trace_emit("plan_exit", {
+        "iteration": iteration + 1,
+        "plan_exit_reason": plan_exit_reason,
+        "alias_count": len(alias_matches),
+        "run_id": state.get("run_id"),
+    })
     return {
         "messages": [response],
         "execution_plan": plan_content,
         "plan_retry": plan_retry_count,
         "intent_labels": intent_labels,
+        "plan_exit_reason": plan_exit_reason,
     }
 
 
@@ -626,6 +773,303 @@ def _is_not_found(tool_message) -> bool:
     """检查工具返回是否表示未找到/未匹配"""
     content = tool_message.content if hasattr(tool_message, 'content') else str(tool_message)
     return any(kw in content for kw in ("未找到", "未收录", "无匹配", "No match", "not found"))
+
+
+
+# ====== 任务未命中后的确定性恢复链 ======
+# 设计说明：
+# - query_quest/load_quest_content 未命中时，不允许 LLM 自由跳到其他任务/角色；
+#   代码层先强制 search_all 全局检索，全局也无结果时才进入疑似错别字纠正。
+# - 非法跳转（如“影蝶之章”未命中后直接搜“丝柯克”）在代码层被阻断。
+
+def _build_tool_name_by_call_id(messages):
+    """从 AIMessage.tool_calls 反查 tool_call_id -> 工具名。"""
+    mapping = {}
+    for msg in messages:
+        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
+            for tc in msg.tool_calls:
+                tid = tc.get("id")
+                if tid:
+                    mapping[tid] = tc.get("name", "")
+    return mapping
+
+
+def _tool_name_of(msg, name_by_call_id):
+    direct = getattr(msg, "name", "") or ""
+    if direct:
+        return direct
+    return name_by_call_id.get(getattr(msg, "tool_call_id", ""), "")
+
+
+def _tool_call_arg_value(messages, tool_call_id, keys):
+    """按 tool_call_id 反查该次调用的参数值。"""
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls"):
+            for tc in msg.tool_calls:
+                if tc.get("id") == tool_call_id:
+                    args = tc.get("args", {}) or {}
+                    for key in keys:
+                        value = args.get(key)
+                        if value:
+                            return str(value)
+    return ""
+
+
+def _last_tool_message(messages):
+    for msg in reversed(messages):
+        if isinstance(msg, ToolMessage):
+            return msg
+    return None
+
+
+def _attempted_task_names(messages):
+    """已经用 query_quest/load_quest_content 尝试过的任务名集合。"""
+    names = set()
+    for msg in messages:
+        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls"):
+            for tc in msg.tool_calls:
+                if tc.get("name") in ("query_quest", "load_quest_content"):
+                    args = tc.get("args", {}) or {}
+                    value = args.get("name") or args.get("quest_name")
+                    if value:
+                        names.add(str(value))
+    return names
+
+
+def _attempted_search_all_queries(messages):
+    """已经用 search_all 全局检索过的查询词集合。"""
+    queries = set()
+    for msg in messages:
+        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls"):
+            for tc in msg.tool_calls:
+                if tc.get("name") == "search_all":
+                    args = tc.get("args", {}) or {}
+                    value = args.get("query")
+                    if value:
+                        queries.add(str(value))
+    return queries
+
+
+def _maybe_auto_task_recovery(state, messages, routed_tools, iteration):
+    """任务未命中后的确定性恢复：先全局检索，再无结果则相似名纠错。
+
+    返回 None 表示不需要代码介入，按原流程继续交给 LLM。
+    """
+    if not messages:
+        return None
+
+    name_by_call_id = _build_tool_name_by_call_id(messages)
+    latest = _last_tool_message(messages)
+    if latest is None:
+        return None
+
+    latest_name = _tool_name_of(latest, name_by_call_id)
+    latest_content = latest.content if hasattr(latest, "content") else str(latest)
+
+    # 阶段1：任务查询未命中 → 强制先 search_all 全局检索
+    if latest_name in ("query_quest", "load_quest_content") and _is_not_found(latest):
+        failed_name = _tool_call_arg_value(
+            messages, getattr(latest, "tool_call_id", ""),
+            ("name", "quest_name", "query"),
+        )
+        if not failed_name:
+            failed_name = state.get("user_query", "")
+        if not failed_name:
+            return None
+        if failed_name in _attempted_search_all_queries(messages):
+            return None
+        content = (
+            "【执行报告】\n"
+            f"用户问题回显：{state.get('user_query', '')}\n"
+            "用户意图：任务名全局检索\n"
+            f"工具决策：任务查询对「{failed_name}」未命中，按硬规则先调用 search_all 全局检索，"
+            "确认知识库中是否真的不存在，避免直接跳到其他任务/角色。\n"
+            "【工具调用】\n"
+            f'[{{"tool": "search_all", "args": {{"query": "{failed_name}"}}}}]'
+        )
+        tool_call = {
+            "name": "search_all",
+            "args": {"query": failed_name},
+            "id": f"call_recovery_search_{iteration + 1}",
+            "type": "tool_call",
+        }
+        trace_emit("plan", {
+            "iteration": iteration + 1,
+            "execution_plan": content[:500],
+            "tool_call_names": ["search_all"],
+            "tool_call_source": "auto_recovery_search",
+            "run_id": state.get("run_id"),
+        })
+        return {
+            "messages": [AIMessage(content=content, tool_calls=[tool_call])],
+            "execution_plan": content,
+            "iteration": iteration + 1,
+            "intent_labels": state.get("intent_labels", []),
+        }
+
+    # 阶段2：search_all 也无结果 → 进入疑似错别字纠正（相似名候选，代码层执行）
+    if latest_name == "search_all" and _is_not_found(latest):
+        # 找到这次全局检索之前最近的一次任务未命中
+        latest_index = None
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i] is latest:
+                latest_index = i
+                break
+        if latest_index is None:
+            return None
+        prev_failure = None
+        for i in range(latest_index - 1, -1, -1):
+            msg = messages[i]
+            if not isinstance(msg, ToolMessage):
+                continue
+            name = _tool_name_of(msg, name_by_call_id)
+            if name in ("query_quest", "load_quest_content") and _is_not_found(msg):
+                prev_failure = msg
+                break
+            # 只认最近的任务查询失败；若中间已有其他成功结果，说明 LLM 已转向其他路径，不强制纠正
+            if _is_not_found(msg) or name in ("search_all",):
+                continue
+            break
+        if prev_failure is not None:
+            original_name = _tool_call_arg_value(
+                messages, getattr(prev_failure, "tool_call_id", ""),
+                ("name", "quest_name", "query"),
+            )
+        else:
+            # LLM 可能先直接 search_all 而不是先 query_quest；
+            # 此时以本次 search_all 的查询词作为原任务名，仍走同一套相似名纠正。
+            original_name = _tool_call_arg_value(
+                messages, getattr(latest, "tool_call_id", ""),
+                ("query",),
+            )
+        if not original_name:
+            return None
+        attempted = _attempted_task_names(messages)
+        candidates = find_similar_quest_names(original_name, top_n=1)
+        if not candidates:
+            return None
+        corrected = candidates[0]
+        if corrected == original_name or corrected in attempted:
+            return None
+        retry_tool = _tool_name_of(prev_failure, name_by_call_id) or "query_quest"
+        if retry_tool not in ("query_quest", "load_quest_content"):
+            retry_tool = "query_quest"
+        if retry_tool == "load_quest_content":
+            retry_args = {"quest_name": corrected}
+        else:
+            retry_args = {"name": corrected}
+        content = (
+            "【执行报告】\n"
+            f"用户问题回显：{state.get('user_query', '')}\n"
+            "用户意图：任务名疑似错别字纠正\n"
+            f"工具决策：search_all 对「{original_name}」也无结果，按相似度识别疑似正确名称「{corrected}」，"
+            "用同一任务查询工具重试一次。\n"
+            "【工具调用】\n"
+            f'[{{"tool": "{retry_tool}", "args": {json.dumps(retry_args, ensure_ascii=False)}}}]'
+        )
+        tool_call = {
+            "name": retry_tool,
+            "args": retry_args,
+            "id": f"call_recovery_typo_{iteration + 1}",
+            "type": "tool_call",
+        }
+        trace_emit("plan", {
+            "iteration": iteration + 1,
+            "execution_plan": content[:500],
+            "tool_call_names": [retry_tool],
+            "tool_call_source": "auto_recovery_typo",
+            "run_id": state.get("run_id"),
+        })
+        return {
+            "messages": [AIMessage(content=content, tool_calls=[tool_call])],
+            "execution_plan": content,
+            "iteration": iteration + 1,
+            "intent_labels": state.get("intent_labels", []),
+        }
+
+    return None
+
+# ====== 纯别名身份查询确定性识别 ======
+# 设计说明：
+# - 豁免判定固定解析"用户问题 + 结构化别名映射"，不再解析 LLM 写出的措辞。
+# - 只放行"纯身份查询"（以是谁/指谁等身份短语结尾）。
+# - 复合句（身份 + 追问，例如"岩王帝君是谁，是璃月的吗"）不属于纯身份查询，
+#   不移交、不豁免，走正常工具流程；这是有意保守，不是正则遗漏。
+_IDENTITY_TAIL_RE = re.compile(
+    r"(?:是谁|指谁|是什么人|是哪位|是什么角色)[？?吗嘛呢啊呀。！!、，\s]*$"
+)
+
+
+def _parse_alias_mappings(alias_notes: str) -> List[Tuple[str, str]]:
+    """从 alias_notes 文本解析 [(别名, 规范名)]，排除自映射。
+
+    这是 alias_pairs 结构化字段的兼容回退路径；当前 alias_notes 由 rewrite_query
+    生成，格式为 `"X" 指 Y`，修改该格式时必须同步本函数。
+    """
+    pairs: List[Tuple[str, str]] = []
+    for line in (alias_notes or "").splitlines():
+        m = re.search(r'"([^"]+)" 指 (.+)', line)
+        if not m:
+            continue
+        alias = re.sub(r"[「」]", "", m.group(1)).strip()
+        canonical = re.sub(r"[「」]", "", m.group(2)).strip()
+        if alias and canonical and alias != canonical:
+            pairs.append((alias, canonical))
+    return pairs
+
+
+def _get_alias_pairs(state: GenshinAdvisorState) -> List[Tuple[str, str]]:
+    """优先使用 rewrite_query 产出的结构化 alias_pairs，旧数据回退到文本解析。"""
+    pairs = state.get("alias_pairs") or []
+    if pairs:
+        return [(a, c) for a, c in pairs if a and c and a != c]
+    return _parse_alias_mappings(state.get("alias_notes") or "")
+
+
+def _get_pure_alias_identity_matches(state: GenshinAdvisorState) -> List[Tuple[str, str]]:
+    """判断当前问题是否为纯别名身份查询，返回应回答的 (别名, 规范名) 列表。
+
+    判定完全基于用户问题与别名映射，不依赖 Plan LLM 输出文字。
+    只命中"XX是谁/指谁/是什么人/是哪位/是什么角色"类尾部问题。
+    """
+    text = (state.get("rewritten_query") or state.get("user_query") or "").strip()
+    if not text or not _IDENTITY_TAIL_RE.search(text):
+        return []
+
+    hits = [
+        (alias, canonical)
+        for alias, canonical in _get_alias_pairs(state)
+        if alias in text
+    ]
+    if not hits:
+        return []
+
+    # 去重：优先保留最长别名（"岩王帝君"与"帝君"同时命中时只保留前者）
+    hits.sort(key=lambda x: -len(x[0]))
+    kept: List[Tuple[str, str]] = []
+    for alias, canonical in hits:
+        if any(alias != k[0] and alias in k[0] for k in kept):
+            continue
+        kept.append((alias, canonical))
+    if not kept:
+        return []
+
+    # 覆盖度护栏：纯身份直答要求所有“身份询问主体”都有别名映射覆盖。
+    # 例如“六星火神和现任火神分别是谁”只映射了“六星火神”，“现任火神”未被覆盖，
+    # 不能按纯别名身份直答，否则会漏答并跳过必要的检索。
+    # 这是保守策略：宁可多走一次工具，也不允许直答只覆盖一半。
+    story = re.sub(_IDENTITY_TAIL_RE, "", text)
+    chunks = re.split(r"[和与、及跟同还有以及]|分别|都|同时|也|还", story)
+    for chunk in chunks:
+        chunk = chunk.strip(" 　「」『』“”‘’'\"，,。！!？?：:、")
+        if not chunk:
+            continue
+        # 跳过纯连接词/身份填充残余（例如“分别是”“是谁”被切出的残留）
+        if re.fullmatch(r"(?:是|分别|和|与|、|及|跟|同|还有|以及|都|同时|也|还|谁|哪一位|哪个人|什么角色|指).*", chunk):
+            continue
+        if not any(alias in chunk for alias, _ in kept):
+            return []
+    return kept
 
 
 # ====== 元数据工具确定性直答 ======
@@ -860,6 +1304,25 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         response_mode = "not_found"
     else:
         response_mode = "found"
+
+    # ---- 代码短路：纯别名身份查询直答 ----
+    # F2 类问题：零工具 + 问题为"XX是谁/指谁" + 别名标注给出映射时，直接回答映射关系。
+    # 必须放在 not_found 短路之前，否则会被"零工具→未收录"误伤。
+    if tool_call_count == 0 and not full_text_loaded:
+        alias_matches = _get_pure_alias_identity_matches(state)
+        if alias_matches:
+            parts = [f"「{alias}」指「{canonical}」" for alias, canonical in alias_matches]
+            alias_answer = "；".join(parts) + "。"
+            print(f"  -> [代码短路] 纯别名身份直答：{alias_answer}")
+            trace_emit("answer_end", {
+                "response_mode": "found",
+                "final_response": alias_answer,
+                "short_circuit": True,
+                "answer_source": "alias_direct",
+                "run_id": state.get("run_id"),
+            })
+            return {"final_response": alias_answer, "messages": messages}
+
 
     # ---- 代码短路：元数据工具确定性直答 ----
     # 如果本轮只调用了结构化元数据工具，直接复述工具结果，不经过回答 LLM，
