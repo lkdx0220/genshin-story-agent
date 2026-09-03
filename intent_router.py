@@ -11,23 +11,28 @@ import re
 import json
 from typing import List, Tuple
 from langchain_core.messages import HumanMessage
-from langchain_openai import ChatOpenAI
 from dotenv import load_dotenv
+
+from app.config import QWEN_API_KEY, QWEN_BASE_URL
+from app.llm import QwenFallbackChatOpenAI
 
 load_dotenv()
 
 # ====== 路由器模型（轻量级，不需要强模型） ======
-ROUTER_MODEL_NAME = os.getenv("ROUTER_MODEL", "qwen-plus")
-DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
-DASHSCOPE_BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+# 新 token-plan 接口不支持 qwen-plus，默认用 qwen3.7-plus 做路由；
+# 必须关闭 token-plan 默认思考，否则 max_tokens=50 会被思考耗尽导致空回复。
+# 回退到原 DashScope 时自动恢复 qwen-plus。
+ROUTER_MODEL_NAME = os.getenv("ROUTER_MODEL", "qwen3.7-plus")
 
-_router_llm = ChatOpenAI(
+_router_llm = QwenFallbackChatOpenAI(
     model=ROUTER_MODEL_NAME,
-    api_key=DASHSCOPE_API_KEY,
-    base_url=DASHSCOPE_BASE_URL,
+    api_key=QWEN_API_KEY,
+    base_url=QWEN_BASE_URL,
     temperature=0,
     max_tokens=50,
     request_timeout=30,
+    fallback_model="qwen-plus",
+    extra_body={"enable_thinking": False},
 )
 
 # ====== 工具分组映射 ======
@@ -68,6 +73,14 @@ LABEL_CN = {
     "C2": "世界生态", "D": "剧情任务", "E": "书籍文献",
     "F": "溯源追踪", "ALL": "全量工具",
 }
+
+# 任务/剧情元数据查询的确定性硬规则：不依赖路由模型的判断，
+# 只要用户明确问任务/章节/子任务元数据，就必须暴露 D 组工具。
+# 触发后若 LLM 只给了 B 等标签，这里强制补 D，避免 F1 这类
+# “胡桃的传说任务叫什么名字”被路由成纯角色查询而拿不到 query_quest。
+_TASK_METADATA_HARD_RULE = re.compile(
+    r"(传说任务|魔神任务|世界任务|活动剧情|之章|子任务|包含几幕|有几幕|第.幕|任务叫什么|任务名字|任务名称)"
+)
 
 ROUTER_PROMPT = """你是一个意图分类器。根据用户问题，输出 1-2 个意图标签，或特殊标签 "ALL"。
 
@@ -679,6 +692,12 @@ def route_intent(
 
     if not labels:
         labels = ["ALL"]
+
+    # 任务/剧情元数据硬规则：只要用户明确问任务/章节/子任务，强制补 D。
+    # 放在 LLM 之后做确定性兜底，避免路由模型单点偏差导致漏掉任务类工具。
+    if "ALL" not in labels and _TASK_METADATA_HARD_RULE.search(user_query):
+        if "D" not in labels:
+            labels = labels + ["D"]
 
     _route_cache[cache_key] = labels
     return labels

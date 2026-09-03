@@ -24,8 +24,12 @@ from app.progress import _emit_progress, _cancel_events
 from app.trace_recorder import emit as trace_emit
 from app.tools import tools_by_name as _tools_by_name
 from app.tools.query import find_similar_quest_names
-from app.retrieval import _sanitize_query, _is_compound_hit, _judge_alias_sandbox
-from character_aliases import ALIAS_MAP, ALIASES_SORTED
+from app.retrieval import _sanitize_query, _is_compound_hit, _judge_alias_sandbox, TITLE_REGISTRY
+from app.data import (
+    角色知识库, 地区知识库, 任务知识库, 武器知识库, 圣遗物知识库, 素材知识库,
+    _npcs_data, _normalize_for_match, _load_content_json,
+)
+from character_aliases import ALIAS_MAP, ALIASES_SORTED, resolve_aliases
 from intent_router import route_intent, get_tools_for_intent, get_pseudo_legendary_note
 
 
@@ -157,13 +161,42 @@ ASSESS_PROMPT = """你是原神剧情助手的查询分类器。你的唯一任�
 用户问题：「{user_query}」
 
 分类标准：
-- L1（简单事实）：单一属性查询（XX的武器/地区/元素）、基本定义（XX是什么意思）。这类问题通常只需 0-1 次工具调用就能回答。
+- L1（简单事实）：单一属性查询（XX的武器/地区/元素）。这类问题通常只需 0-1 次工具调用就能回答。
 - 注意：身份查询（XX是谁）虽然看似简单，但需要知识库数据支撑，归为 L2。
+- 注意：概念本质/定义类（XX是什么/什么是XX/XX的本质/XX的定义/何为XX）不是 L1 的“基本定义”，归为 L2。
 - L2（复杂推理）：对比分析（XX和YY的区别）、多步推理（XX的成长经历/做了什么）、原因解释（为什么XX）、原话引用（XX说了什么）、溯源追踪（XX最早出现在哪里）、跨源拼装（列出所有提到XX的文案）。
 
 核心原则：**犹豫就L2**。如果你不确定该分到哪类，输出L2。
 
 只输出一个词：L1 或 L2。不要输出任何其他内容。"""
+
+
+
+_CONCEPT_ESSENCE_MARKERS = ("是什么", "什么是", "何为", "本质", "定义", "含义", "意思")
+
+
+def _is_concept_essence_question(user_query: str, conversation_summary: str = "", turn_number: int = 0) -> bool:
+    """判断是否为概念本质/定义类问题（用于强制归入 L2 路径）。
+
+    只触发能路由到 C2/ALL 的抽象概念问法；简单属性查询（如"温迪的武器是什么"，
+    路由到 B）不会误触发；身份/任务元数据问法也不会触发。
+    """
+    query = (user_query or "").strip()
+    if not query or not any(marker in query for marker in _CONCEPT_ESSENCE_MARKERS):
+        return False
+    if any(marker in query for marker in (
+            "是谁", "指谁", "哪个角色", "哪一位",
+            "包含几幕", "有哪些子任务", "有几幕", "第几幕", "章节", "任务", "之章")):
+        return False
+    try:
+        labels = route_intent(
+            user_query=query,
+            conversation_summary=conversation_summary,
+            turn_number=turn_number,
+        )
+    except Exception:
+        return False
+    return "C2" in labels or "ALL" in labels
 
 
 def assess_query(state: GenshinAdvisorState) -> Dict[str, Any]:
@@ -183,15 +216,18 @@ def assess_query(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     execution_mode = "L1" if "L1" in result else "L2"
 
-    # L1/L2 硬规则：问题长度>30字 或 别名标注含≥2个实体 或 结构/多步清单类问题 → 强制 L2
+    # L1/L2 硬规则：问题长度>30字 或 别名标注含≥2个实体 或 结构/多步清单类问题 或 概念本质/定义类 → 强制 L2
     # 防止 assess_query 误判导致 L1 越权处理复杂问题
     alias_notes = state.get("alias_notes", "") or ""
     entity_count = alias_notes.count("指") if alias_notes else 0
     structure_pattern = re.compile(r'(几幕|子任务|包含哪些|有哪些子任务|章节结构|幕数|任务结构|完整剧情|讲了什么|清单|列举)')
     structure_hit = bool(structure_pattern.search(user_query))
-    if len(user_query) > 30 or entity_count >= 2 or structure_hit:
+    conversation_summary = state.get("conversation_summary", "") or ""
+    turn_number = len(state.get("conversation_history") or [])
+    concept_hit = _is_concept_essence_question(user_query, conversation_summary, turn_number)
+    if len(user_query) > 30 or entity_count >= 2 or structure_hit or concept_hit:
         execution_mode = "L2"
-        print(f"  -> 硬规则触发（长度={len(user_query)}、实体={entity_count}、结构类={structure_hit}），强制 L2")
+        print(f"  -> 硬规则触发（长度={len(user_query)}、实体={entity_count}、结构类={structure_hit}、概念本质类={concept_hit}），强制 L2")
 
     print(f"  -> 判定: {execution_mode}")
 
@@ -200,7 +236,7 @@ def assess_query(state: GenshinAdvisorState) -> Dict[str, Any]:
         "user_query": user_query,
         "query_length": len(user_query),
         "entity_count": entity_count,
-        "hard_rule": len(user_query) > 30 or entity_count >= 2,
+        "hard_rule": len(user_query) > 30 or entity_count >= 2 or concept_hit,
         "run_id": state.get("run_id"),
     })
     return {"execution_mode": execution_mode}
@@ -545,6 +581,12 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     if auto_recovery is not None:
         return auto_recovery
 
+    # 概念三视图补位（挂载点A）：任务恢复链未介入时，检查已有工具结果是否覆盖三个维度。
+    concept_auto = _maybe_auto_concept_dimension(state, messages, routed_tools, iteration, intent_labels=intent_labels)
+    if concept_auto is not None:
+        return concept_auto
+
+
     trace_emit("llm_start", {"role": "plan", "iteration": iteration + 1, "run_id": state.get("run_id"), "model": getattr(current_llm_with_tools, "model_name", None)})
     try:
         response = current_llm_with_tools.invoke(messages)
@@ -607,6 +649,17 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             "iteration": iteration + 1,
             "intent_labels": intent_labels,
         }
+
+
+    # 概念三视图补位（挂载点B）：LLM 本轮没出任何工具调用且想进入回答阶段，
+    # 先检查概念维度是否齐；不齐则代码直接补发，Planner 不能提前收工。
+    concept_auto = _maybe_auto_concept_dimension(
+        state, messages, routed_tools, iteration,
+        intent_labels=intent_labels, response=response,
+    )
+    if concept_auto is not None:
+        return concept_auto
+
 
     # 无工具调用 → 检查是否需要强制重试
     plan_retry_count = state.get("plan_retry", 0) or 0
@@ -769,10 +822,322 @@ def route_after_plan(state: GenshinAdvisorState) -> str:
     return "answer_agent"
 
 
+_NOT_FOUND_PREFIXES = (
+    "未找到",
+    "未收录",
+    "无匹配",
+    "不存在",
+    "No match",
+    "not found",
+    "混合检索未找到",
+    "语义搜索未找到",
+    "在世界观设定中未找到",
+    "书籍数据文件未找到",
+)
+
+
 def _is_not_found(tool_message) -> bool:
-    """检查工具返回是否表示未找到/未匹配"""
+    """检查工具返回是否表示工具级“未找到/未匹配”。
+
+    只认工具返回开头就是未命中提示的格式；不再对成功返回的整段知识库文本
+    做子串搜索，避免把原文中“未找到第二个「镌光铭印」”这类正文误判为未命中。
+    """
     content = tool_message.content if hasattr(tool_message, 'content') else str(tool_message)
-    return any(kw in content for kw in ("未找到", "未收录", "无匹配", "No match", "not found"))
+    text = str(content).strip()
+    if not text:
+        return False
+    return text.startswith(_NOT_FOUND_PREFIXES)
+
+
+
+
+# ====== 概念本质类问题：三视图确定性覆盖 ======
+# 设计说明：
+# - 概念本质类问题（"XX是什么/本质/定义"）失败根因是 Planner 覆盖维度不全就提前收工。
+#   是否搜够属于"结果属性"，不能交给 LLM 的过程自觉；这里由代码做补位验收。
+# - LLM 可加不可删：LLM 首轮照常选择查询词；代码只补缺失维度，每个维度最多补一次。
+# - 查询词由"概念名 × 通用维度模板"生成，不含任何评测关键词，不泄露测试答案。
+
+_CONCEPT_DIMENSION_TEMPLATES = (
+    ("definition", "本质 定义"),
+    ("power_system", "能量 体系"),
+    ("historical_impact", "知识 污染"),
+)
+
+_CONCEPT_DIMENSION_MARKERS = {
+    "definition": ("本质", "定义", "是什么", "何为", "概念"),
+    "power_system": ("能量", "体系", "力量", "元素", "三界", "虚界", "光界", "对立"),
+    "historical_impact": ("知识", "污染", "历史", "影响", "来源", "起源", "后果", "灾难", "坎瑞亚", "世界树"),
+}
+
+_ENTITY_INDEX = None
+
+
+def _ensure_entity_index() -> dict:
+    """懒构建精确实体索引，用于把角色/任务/书籍/地区/具体物品排除出概念守卫。
+
+    匹配策略全部是精确相等（经 _normalize_for_match 去装饰标点），
+    不使用 query_quest 的 substring 包含匹配；否则"深渊"会误命中"深渊法师"。
+    """
+    global _ENTITY_INDEX
+    if _ENTITY_INDEX is not None:
+        return _ENTITY_INDEX
+
+    index = {
+        "character": set(),
+        "quest": set(),
+        "region": set(),
+        "book": set(),
+        "item": set(),
+    }
+
+    # 角色：角色名称 + 称号 + NPC 名称
+    for entry in 角色知识库:
+        if not isinstance(entry, dict):
+            continue
+        name = _normalize_for_match(str(entry.get("角色名称", "") or ""))
+        if name:
+            index["character"].add(name)
+        for title in str(entry.get("称号", "") or "").split("/"):
+            title = _normalize_for_match(title.strip())
+            if title:
+                index["character"].add(title)
+    for npc_name in _npcs_data:
+        name = _normalize_for_match(str(npc_name))
+        if name:
+            index["character"].add(name)
+
+    # 任务：TITLE_REGISTRY + 任务知识库的任务名称/系列任务/所属角色
+    for title in TITLE_REGISTRY:
+        name = _normalize_for_match(str(title))
+        if name:
+            index["quest"].add(name)
+    for entry in 任务知识库:
+        if not isinstance(entry, dict):
+            continue
+        name = _normalize_for_match(str(entry.get("任务名称") or entry.get("title") or ""))
+        if name:
+            index["quest"].add(name)
+        for part in str(entry.get("系列任务") or "").replace("，", ",").split(","):
+            part = _normalize_for_match(part.strip())
+            if part:
+                index["quest"].add(part)
+        owner = _normalize_for_match(str(entry.get("所属角色") or ""))
+        if owner:
+            index["quest"].add(owner)
+
+    # 地区
+    for entry in 地区知识库:
+        if isinstance(entry, dict):
+            name = _normalize_for_match(str(entry.get("地区名称", "") or ""))
+            if name:
+                index["region"].add(name)
+
+    # 书籍：books.json 的 title 与 metadata.书籍名
+    for item in _load_content_json("books"):
+        if not isinstance(item, dict):
+            continue
+        for key in ("title",):
+            name = _normalize_for_match(str(item.get(key, "") or ""))
+            if name:
+                index["book"].add(name)
+        meta = item.get("metadata") or {}
+        if isinstance(meta, dict):
+            name = _normalize_for_match(str(meta.get("书籍名", "") or ""))
+            if name:
+                index["book"].add(name)
+
+    # 具体物品：武器/圣遗物/素材知识库 + content_data 中的怪物/材料/采集物/食谱/食物
+    for entry in 武器知识库:
+        if isinstance(entry, dict):
+            name = _normalize_for_match(str(entry.get("武器名称", "") or ""))
+            if name:
+                index["item"].add(name)
+    for entry in 圣遗物知识库:
+        if isinstance(entry, dict):
+            name = _normalize_for_match(str(entry.get("圣遗物名称", "") or ""))
+            if name:
+                index["item"].add(name)
+    for entry in 素材知识库:
+        if isinstance(entry, dict):
+            name = _normalize_for_match(str(entry.get("素材名称", "") or ""))
+            if name:
+                index["item"].add(name)
+    for file_key in ("monsters", "materials", "collectibles", "recipes", "foods"):
+        for item in _load_content_json(file_key):
+            if not isinstance(item, dict):
+                continue
+            name = _normalize_for_match(str(item.get("名称", "") or ""))
+            if name:
+                index["item"].add(name)
+
+    _ENTITY_INDEX = index
+    return _ENTITY_INDEX
+
+
+def _resolve_known_entity_type(subject: str) -> str:
+    """把主语解析为具体实体类型；解析不到返回空字符串（按抽象概念处理）。"""
+    normalized = _normalize_for_match((subject or "").strip())
+    if not normalized or len(normalized) < 2:
+        return ""
+
+    index = _ensure_entity_index()
+
+    # 角色优先级最高：先查别名反向映射，再查角色名/称号/NPC 名。
+    # 注意：ALIAS_MAP 也收录"天理"等非角色条目，只有映射目标确实在角色索引中才算角色。
+    canonical = ALIAS_MAP.get(normalized)
+    if canonical and canonical in index["character"]:
+        return "character"
+    if normalized in index["character"]:
+        return "character"
+
+    if normalized in index["quest"]:
+        return "quest"
+    if normalized in index["region"]:
+        return "region"
+    if normalized in index["book"]:
+        return "book"
+    if normalized in index["item"]:
+        return "item"
+    return ""
+
+
+def _detect_concept_subject(original_query: str, intent_labels) -> str:
+    """判断问题是否为"抽象概念 XX 是什么/本质/定义"，返回概念主语；不满足返回空字符串。
+
+    只做保守触发：主语能精确解析为角色/任务/书籍/地区/具体物品时一律不触发；
+    任务元数据问法（包含几幕/有哪些子任务等）与身份问法（是谁/指谁）也不触发。
+    """
+    if not intent_labels or ("C2" not in intent_labels and "ALL" not in intent_labels):
+        return ""
+    query = (original_query or "").strip()
+    if not query:
+        return ""
+
+    concept_markers = ("是什么", "什么是", "何为", "本质", "定义")
+    if not any(marker in query for marker in concept_markers):
+        return ""
+    exclusion_markers = (
+        "是谁", "指谁", "哪个角色", "哪一位",
+        "包含几幕", "有哪些子任务", "有几幕", "第几幕", "章节", "任务", "之章",
+    )
+    if any(marker in query for marker in exclusion_markers):
+        return ""
+
+    # 优先取书名号/引号内的实体
+    candidate = ""
+    for pattern in (
+        r"[「『]([^」』]{2,16})[」』]",
+        r"[“\"]([^”\"]{2,16})[”\"]",
+    ):
+        match = re.search(pattern, query)
+        if match:
+            candidate = match.group(1)
+            break
+
+    # 无引号则按概念句式提取主语
+    if not candidate:
+        patterns = (
+            r"什么是(.{2,16}?)[？?，,。！!]?$",
+            r"何为(.{2,16}?)[？?，,。！!]?$",
+            r"(.{2,16}?)的(?:本质|定义)(?:是|为)?(?:什么)?[？?。]?$",
+            r"(.{2,16}?)(?:本质上|本质)?(?:是|为)?什么[？?。]?$",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, query)
+            if match:
+                candidate = match.group(1)
+                break
+
+    candidate = _normalize_for_match(candidate.strip())
+    candidate = candidate.rstrip("的")
+    if not candidate or len(candidate) < 2 or len(candidate) > 16:
+        return ""
+    if any(ch in candidate for ch in ("谁", "哪", "何", "几")):
+        return ""
+
+    if _resolve_known_entity_type(candidate):
+        return ""
+    return candidate
+
+
+def _covered_concept_dimensions(messages) -> set:
+    """扫描已执行的 hybrid_search 查询，返回已尝试过的三视图维度集合。"""
+    covered = set()
+    for msg in messages:
+        if not isinstance(msg, AIMessage) or not hasattr(msg, "tool_calls"):
+            continue
+        for tc in msg.tool_calls or []:
+            if not isinstance(tc, dict) or tc.get("name") != "hybrid_search":
+                continue
+            args = tc.get("args") or {}
+            query_text = str(args.get("query") or "")
+            for dim, markers in _CONCEPT_DIMENSION_MARKERS.items():
+                if any(marker in query_text for marker in markers):
+                    covered.add(dim)
+    return covered
+
+
+def _maybe_auto_concept_dimension(state, messages, routed_tools, iteration, intent_labels=None, response=None):
+    """概念三视图补位守卫：缺哪个维度补哪个，返回 None 表示无需介入。"""
+    labels = intent_labels if intent_labels is not None else state.get("intent_labels", [])
+    subject = _detect_concept_subject(state.get("user_query", ""), labels)
+    if not subject:
+        return None
+
+    tool_names = {getattr(t, "name", str(t)) for t in routed_tools}
+    if "hybrid_search" not in tool_names:
+        return None
+    if iteration + 1 >= MAX_AGENT_ITERATIONS:
+        return None
+
+    missing = [
+        dim for dim, _template in _CONCEPT_DIMENSION_TEMPLATES
+        if dim not in _covered_concept_dimensions(messages)
+    ]
+    if not missing:
+        return None
+
+    # 挂载点A（LLM 调用前）：只在已有工具结果后补位，不抢 Planner 的首轮决策权。
+    if response is None and _last_tool_message(messages) is None:
+        return None
+
+    template_by_dim = dict(_CONCEPT_DIMENSION_TEMPLATES)
+    calls = []
+    for dim in missing:
+        calls.append({
+            "name": "hybrid_search",
+            "args": {"query": f"{subject} {template_by_dim[dim]}"},
+            "id": f"call_concept_{dim}_{iteration + 1}",
+            "type": "tool_call",
+        })
+
+    missing_names = "、".join(f"{subject} {template_by_dim[dim]}" for dim in missing)
+    content = (
+        "【执行报告】\n"
+        f"用户问题回显：{state.get('user_query', '')}\n"
+        "用户意图：概念本质类问题的三视图检索\n"
+        f"工具决策：系统检测到概念「{subject}」的检索维度尚未覆盖，按硬规则自动补齐：{missing_names}。\n"
+        "【工具调用】\n"
+        + json.dumps([{"tool": c["name"], "args": c["args"]} for c in calls], ensure_ascii=False)
+    )
+    print(f"  -> [概念三视图] 自动补搜: {missing_names}")
+
+    trace_emit("plan", {
+        "iteration": iteration + 1,
+        "execution_plan": content[:500],
+        "tool_call_names": [c["name"] for c in calls],
+        "tool_call_source": "concept_dimension",
+        "concept": subject,
+        "dimensions": missing,
+        "run_id": state.get("run_id"),
+    })
+    return {
+        "messages": [AIMessage(content=content, tool_calls=calls)],
+        "execution_plan": content,
+        "iteration": iteration + 1,
+        "intent_labels": labels,
+    }
 
 
 
@@ -1249,10 +1614,8 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             tool_call_count += len(msg.tool_calls)
         elif isinstance(msg, ToolMessage):
             content = msg.content if hasattr(msg, 'content') else str(msg)
-            # 检查是成功还是失败
-            is_failure = ("未找到" in content or "未收录" in content or
-                         "无匹配" in content or "没有找到" in content
-                         or content.strip().startswith("当前知识库未收录"))
+            # 检查是成功还是失败：使用前缀式未命中判定，避免正文子串误判
+            is_failure = _is_not_found(msg) or content.strip().startswith("当前知识库未收录")
             is_intercepted = "系统拦截" in content
 
             if is_failure:

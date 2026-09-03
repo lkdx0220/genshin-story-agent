@@ -30,7 +30,8 @@ if getattr(sys, 'frozen', False):
 else:
     load_dotenv()
 
-QWEN_API_KEY = os.getenv("DASHSCOPE_API_KEY")
+# text-embedding-v4 不在 token-plan 新接口中，固定使用原 DashScope + 旧 Key（若未配置则退回当前 Key）。
+QWEN_API_KEY = os.getenv("DASHSCOPE_FALLBACK_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
 EMBEDDING_MODEL = "text-embedding-v4"
 EMBEDDING_DIM = 1024
 EMBEDDING_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
