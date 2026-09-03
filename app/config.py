@@ -43,8 +43,12 @@ CONTENT_DIR = os.path.join(_PROJECT_ROOT, "content_data")
 PROMPTS_DIR = os.path.join(_PROJECT_ROOT, "prompts")
 
 # ====== API 配置 ======
+# 主：token-plan 专用接口（新 Key 对应的 OpenAI 兼容端点）
 QWEN_API_KEY = os.getenv("DASHSCOPE_API_KEY")
-QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+QWEN_BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1")
+# 备用：原 DashScope 接口（新 Key 配额用尽/联不通时自动切回）
+QWEN_FALLBACK_API_KEY = os.getenv("DASHSCOPE_FALLBACK_API_KEY", "") or None
+QWEN_FALLBACK_BASE_URL = os.getenv("DASHSCOPE_FALLBACK_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"

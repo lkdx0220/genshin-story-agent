@@ -18,7 +18,7 @@ from typing import Dict, List, Optional
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
-from app.config import CONTENT_DIR, QWEN_API_KEY
+from app.config import CONTENT_DIR, QWEN_API_KEY, QWEN_FALLBACK_API_KEY
 from app.data import (
     _match_all_in, _load_content_json, _normalize_for_match,
 )
@@ -120,11 +120,13 @@ def _rerank(query: str, documents: List[str], top_n: int = 10) -> Optional[List[
     """对候选文档列表重排序，返回按相关性降序排列的原始索引列表。失败时返回 None。"""
     if len(documents) <= top_n:
         return None  # 候选太少，无需重排
+    # qwen3-rerank 不在 token-plan 新接口中，固定使用原 DashScope 原生接口 + 旧 Key。
+    _rerank_api_key = QWEN_FALLBACK_API_KEY or QWEN_API_KEY
     try:
         resp = requests.post(
             "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
             headers={
-                "Authorization": f"Bearer {QWEN_API_KEY}",
+                "Authorization": f"Bearer {_rerank_api_key}",
                 "Content-Type": "application/json",
             },
             json={
