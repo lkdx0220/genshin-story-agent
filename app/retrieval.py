@@ -204,7 +204,7 @@ except Exception as e:
 
 # 向量 ID 前缀映射（前缀名 → 前缀长度）
 _VEC_PREFIX_MAP = {
-    "kb_quests_bm25": len("quest:"),
+    "kb_quests_keyword": len("quest:"),
     "kb_lore": len("lore:"),
     "kb_books": len("book:"),
     "kb_characters": len("character:"),
@@ -239,8 +239,8 @@ def _get_doc_key(item: dict) -> str:
     if collection in _VEC_PREFIX_MAP:
         prefix_len = _VEC_PREFIX_MAP[collection]
         rest = doc_id[prefix_len:]
-        if collection in ("kb_quests", "kb_quests_bm25"):
-            # "quest:{title}:chunk:{N}" → 取第一段为标题
+        if collection in ("kb_quests", "kb_quests_keyword", "kb_lore", "kb_books"):
+            # "quest:{title}:chunk:{N}"、"lore:{title}:entry:{N}:chunk:{N}" → 取第一段为标题
             title = rest.split(":", 1)[0]
         else:
             title = rest
@@ -248,7 +248,7 @@ def _get_doc_key(item: dict) -> str:
         title = doc_id
 
     # 校验：quests 类型的 title 必须在注册表中
-    if collection == "kb_quests_bm25" and title not in TITLE_REGISTRY:
+    if collection == "kb_quests_keyword" and title not in TITLE_REGISTRY:
         return doc_id  # 兜底：保留原始 ID，防止错误合并
     return title
 
@@ -411,7 +411,7 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
                 c = quest_candidates[idx]
                 results.append({
                     "id": f"quest:{c[0]}:chunk:0",
-                    "collection": "kb_quests_bm25",
+                    "collection": "kb_quests_keyword",
                     "document": c[2],
                     "category": c[1],
                 })
@@ -419,7 +419,7 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
             for c in quest_candidates[:top_k]:
                 results.append({
                     "id": f"quest:{c[0]}:chunk:0",
-                    "collection": "kb_quests_bm25",
+                    "collection": "kb_quests_keyword",
                     "document": c[2],
                     "category": c[1],
                 })
@@ -549,11 +549,10 @@ def hybrid_search(query: str, top_k: int = 10) -> str:
 
     # 关键词路
     kw_docs = _keyword_search_docs(query, top_k=max(top_k, 15))
-    # 向量路：排除 kb_quests_bm25（9000字大切片不适合语义搜索）
+    # 向量路：仅搜索当前有效集合
     vec_docs = []
     if _vector_store is not None:
-        vec_raw = _vector_store.search(query, top_k=max(top_k, 15),
-                                       exclude=["kb_quests_bm25"], collection=None)
+        vec_raw = _vector_store.search(query, top_k=max(top_k, 15), collection=None)
         vec_docs = vec_raw
 
     # RRF 融合

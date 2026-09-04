@@ -44,8 +44,8 @@ EMBEDDING_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
 VECTOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kb_vectors")
 
 # 集合名称
-# kb_quests 已废弃，拆分为 kb_quests_vec（向量语义检索）和 kb_quests_bm25（关键词检索）
-COLLECTIONS = ["kb_quests_vec", "kb_quests_bm25", "kb_lore", "kb_books", "kb_characters", "kb_regions"]
+# kb_quests_bm25 已剔除：实际BM25/关键词检索不读取该向量集合
+COLLECTIONS = ["kb_quests_vec", "kb_lore", "kb_books", "kb_characters", "kb_regions"]
 
 # 嵌入批大小（API 限制每批最多 10 条）
 BATCH_SIZE = 10
