@@ -17,23 +17,29 @@ L2: Plan Agent → 工具调用（29 tools）→ 熔断截断 → Answer Agent
 ```
 
 - **意图路由**：三级决策分层（规则层 → 轻量LLM → 强模型），平衡准确率与成本
-- **混合检索**：BM25 关键词匹配 + 向量语义搜索，RRF 融合排序
+- **混合检索**：关键词/BM25 文本匹配（字符串命中 + SimpleBM25 + rerank）+ 向量语义搜索，RRF 融合排序；向量库仅保留 `kb_quests_vec`、`kb_lore`、`kb_books`、`kb_characters`、`kb_regions`，`kb_quests_bm25` 已剔除
 - **工具封装**：29 个工具按功能域划分（查询/列表/搜索/内容加载）
 - **熔断机制**：工具返回超阈值时截断直接生成回答，防止无限循环
 - **别名消歧**：LLM 消歧 + 人工审核双通道，处理多义别名
 
 ## Wiki 数据同步
 
-知识库数据来源于 B 站原神 Wiki。以下脚本用于增量更新内容数据：
+知识库数据主要来源于 B 站原神 Wiki，并已接入米游社观测枢公开只读接口做任务/地图文本核对与补充。以下脚本用于增量更新内容数据：
 
 ```bash
-# 抓取各区域「限定文本」板块（更新 lore.json）
+# 抓取 B 站各区域限定文本（更新 lore.json）
 python scripts/scrape_limited_texts.py
 
-# 重建角色向量索引（更新 kb_vectors/）
-python scripts/kb_build_index.py
+# 米游社观测枢任务/地图文本抓取与解析
+python wiki_data_tools/_fetch_mihoyo_tasks.py --list-only --all-versions
+python wiki_data_tools/_fetch_mihoyo_map_text.py --all-regions
+python wiki_data_tools/_parse_mihoyo_tasks.py --raw content_data/mihoyo_tasks_raw.json
+python wiki_data_tools/_parse_mihoyo_map_text.py --raw content_data/mihoyo_map_text_raw_full.json
 
-# 预处理任务数据（生成 quests_processed.json 等）
+# 重建全部向量索引（内容目录已修正为项目根 content_data）
+python scripts/kb_build_index.py --force
+
+# 预处理长任务切片（生成 quests_processed.json）
 python scripts/quest_preprocessor.py
 ```
 
@@ -109,7 +115,7 @@ pip install pyinstaller
 python scripts/build_exe.py
 ```
 
-生成的 `原神剧情助手.exe` 在项目根目录，可独立分发。打包前需确保 `.env` 已正确配置（API key 会编译进 exe）。
+生成的 `原神剧情助手.exe` 在项目根目录，可独立分发。打包不会把 `.env` 编译进 exe；运行时请把 `.env` 放在 exe 同目录。若缺少 API Key，启动时会明确报错。
 
 ## 目录结构
 
@@ -135,6 +141,14 @@ wiki_data_tools/        # Wiki 数据爬取与重建工具
 - BM25 + 向量 RRF 混合检索
 - Flask Web API
 - PyInstaller 打包为 exe
+
+## 数据规模（2026-09）
+
+- NPC：`npcs_processed.json` 2640 条
+- 世界观/地图文本：`lore.json` 7493 条（其中地图文本 7260 条）
+- 任务：世界任务 762、活动剧情 657、传说任务 238、魔神任务 224，长任务预处理 268 条
+- 其他内容：材料 812、食物 714、怪物 550、食谱 453、书籍 105、采集物 61
+- 向量库：`kb_quests_vec` 7200、`kb_lore` 7625、`kb_books` 353、`kb_characters` 131、`kb_regions` 8，合计 15317；`kb_quests_bm25` 已移除
 
 ## 评估
 

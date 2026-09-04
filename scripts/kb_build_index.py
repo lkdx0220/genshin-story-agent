@@ -266,28 +266,11 @@ def _type_label(raw_type: str, source_file: str) -> str:
 # ====== 建库主流程 ======
 
 def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
-    """索引所有任务:
-    - kb_quests_bm25: 全文（短任务）或 自然边界优先的 BM25 切片（长任务）
-    - kb_quests_vec: 全量 1500字自然场景切片（所有任务统一切分）
-    """
+    """索引所有任务到 kb_quests_vec（仅向量语义轨；不再构建已废弃的 BM25 向量集合）。"""
     print("[建库] 索引任务...")
 
-    # 加载预处理切片
-    processed_path = os.path.join(CONTENT_DIR, "quests_processed.json")
-    if os.path.exists(processed_path):
-        with open(processed_path, "r", encoding="utf-8") as f:
-            processed = json.load(f)
-        print(f"  预处理切片: {len(processed)} 条长任务")
-    else:
-        processed = {}
-        print("  未找到 quests_processed.json，将跳过长任务切片")
-
-    processed_titles = set(processed.keys())
-
-    # 双轨道分开积累
-    ids_bm25, docs_bm25, metas_bm25 = [], [], []
+    # 只保留向量语义轨道：每个块都带任务标题/层级前缀，便于独立检索时知道任务归属
     ids_vec, docs_vec, metas_vec = [], [], []
-    total_bm25 = 0
     total_vec = 0
 
     for filename in os.listdir(CONTENT_DIR):
@@ -311,7 +294,7 @@ def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
 
             parent = parent_map.get(title, "")
 
-            # 构建嵌入用的层级前缀
+            # 构建嵌入用的层级前缀（每个向量块都携带，避免首块之外丢失上下文）
             hierarchy_prefix = ""
             if chapter_name and chapter_name != "开场动画":
                 hierarchy_prefix = f"【{chapter_name}"
@@ -320,6 +303,7 @@ def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
                 hierarchy_prefix += "】\n"
             elif chapter_name == "开场动画":
                 hierarchy_prefix = "【开场动画】\n"
+            quest_prefix = hierarchy_prefix + f"任务：{title}\n"
 
             def _base_meta(chunk_idx, total, preview, source_tag):
                 return {
@@ -336,65 +320,24 @@ def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
                     "source": source_tag,
                 }
 
-            if title in processed_titles:
-                p = processed[title]
+            text = q.get("text", "")
+            if not text or len(text.strip()) < 50:
+                continue
 
-                # BM25 轨道: 自然边界优先切片
-                chunks_bm25 = p.get("chunks_bm25", p.get("chunks", []))
-                for i, chunk in enumerate(chunks_bm25):
-                    if not chunk.strip():
-                        continue
-                    chunk_id = f"quest:{title}:chunk:{i}"
-                    ids_bm25.append(chunk_id)
-                    documents = (hierarchy_prefix + chunk) if i == 0 else chunk
-                    docs_bm25.append(documents)
-                    metas_bm25.append(_base_meta(i, len(chunks_bm25), chunk[:200], "quest_bm25_chunk"))
-
-                # 向量轨道: 使用新版 chunk_natural 实时切分（不依赖预处理旧数据，确保原则3/4生效）
-                text = q.get("text", "")
-                chunks_vec = chunk_natural(text) if text else []
-                for i, chunk in enumerate(chunks_vec):
-                    if not chunk.strip():
-                        continue
-                    chunk_id = f"quest:{title}:chunk:{i}"
-                    ids_vec.append(chunk_id)
-                    documents = (hierarchy_prefix + chunk) if i == 0 else chunk
-                    docs_vec.append(documents)
-                    metas_vec.append(_base_meta(i, len(chunks_vec), chunk[:200], "quest_vec_chunk"))
+            # 向量轨：>1500 字按自然场景切分，<=1500 字单块
+            if len(text) > VEC_CHUNK_SIZE:
+                vec_chunks = chunk_natural(text)
             else:
-                # 中/短任务（≤ 9000 字）：向量轨按自然场景切分，BM25 轨保留全文（阈值未变）
-                text = q.get("text", "")
-                if not text or len(text.strip()) < 50:
+                vec_chunks = [text]
+
+            for i, chunk in enumerate(vec_chunks):
+                if not chunk.strip():
                     continue
+                chunk_id = f"quest:{title}:chunk:{i}"
+                ids_vec.append(chunk_id)
+                docs_vec.append(quest_prefix + chunk)
+                metas_vec.append(_base_meta(i, len(vec_chunks), chunk[:200], "quest_vec_chunk"))
 
-                # BM25 轨：全文（9000 字以内不需要滑动窗口）
-                quest_id_full = f"quest:{title}:full"
-                documents_full = hierarchy_prefix + text if hierarchy_prefix else text
-                ids_bm25.append(quest_id_full)
-                docs_bm25.append(documents_full)
-                metas_bm25.append(_base_meta(0, 1, text[:200], "quest_full_bm25"))
-
-                # 向量轨：>1500 字按自然场景切分
-                if len(text) > VEC_CHUNK_SIZE:
-                    vec_chunks = chunk_natural(text)
-                else:
-                    vec_chunks = [text]
-
-                for i, chunk in enumerate(vec_chunks):
-                    if not chunk.strip():
-                        continue
-                    chunk_id = f"quest:{title}:chunk:{i}"
-                    ids_vec.append(chunk_id)
-                    documents = (hierarchy_prefix + chunk) if i == 0 else chunk
-                    docs_vec.append(documents)
-                    metas_vec.append(_base_meta(i, len(vec_chunks), chunk[:200], "quest_vec_chunk"))
-
-            # 批量写入（两轨道独立）
-            if len(ids_bm25) >= 100:
-                store.add("kb_quests_bm25", ids_bm25, docs_bm25, metas_bm25)
-                total_bm25 += len(ids_bm25)
-                print(f"  [BM25] 已写入 {total_bm25} 条...")
-                ids_bm25, docs_bm25, metas_bm25 = [], [], []
             if len(ids_vec) >= 100:
                 store.add("kb_quests_vec", ids_vec, docs_vec, metas_vec)
                 total_vec += len(ids_vec)
@@ -402,15 +345,11 @@ def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
                 ids_vec, docs_vec, metas_vec = [], [], []
                 time.sleep(3)  # 写入间隔，避免触发嵌入 API 限流
 
-    # 剩余写入
-    if ids_bm25:
-        store.add("kb_quests_bm25", ids_bm25, docs_bm25, metas_bm25)
-        total_bm25 += len(ids_bm25)
     if ids_vec:
         store.add("kb_quests_vec", ids_vec, docs_vec, metas_vec)
         total_vec += len(ids_vec)
 
-    print(f"  任务索引完成: BM25={total_bm25} 条, Vector={total_vec} 条")
+    print(f"  任务索引完成: Vector={total_vec} 条")
 
 
 def index_lore(store: KBVectorStore):
@@ -422,36 +361,69 @@ def index_lore(store: KBVectorStore):
         return
 
     ids, docs, metas = [], [], []
-    for i, entry in enumerate(lore):
-        title = entry.get("title", f"lore_{i}")
+    total_vectors = 0
+    for idx, entry in enumerate(lore):
+        title = entry.get("title", f"lore_{idx}")
         text = entry.get("text", "")
         if not text.strip():
             continue
         source = entry.get("source", "")
-        lore_id = f"lore:{title}"
-        ids.append(lore_id)
-        docs.append(f"【{title}】({source})\n{text}")
-        metas.append({
-            "source_file": "lore.json",
-            "title": title,
-            "entry_type": "世界观设定",
-            "parent": "",
-            "version": "",
-            "chunk_index": 0,
-            "total_chunks": 1,
-            "text_preview": text[:200],
-            "source": "lore",
-        })
-        if len(ids) >= 100:
-            store.add("kb_lore", ids, docs, metas)
-            ids, docs, metas = [], [], []
+        chunks = chunk_natural(text)
+        total = len(chunks)
+        total_vectors += total
+        for ci, chunk in enumerate(chunks):
+            lore_id = f"lore:{title}:entry:{idx}:chunk:{ci}"
+            doc = f"【{title}】({source})\n{chunk}"
+            ids.append(lore_id)
+            docs.append(doc)
+            metas.append({
+                "source_file": "lore.json",
+                "title": title,
+                "entry_type": "世界观设定",
+                "parent": "",
+                "version": "",
+                "chunk_index": ci,
+                "total_chunks": total,
+                "text_preview": chunk[:200],
+                "source": "lore",
+            })
+            if len(ids) >= 100:
+                store.add("kb_lore", ids, docs, metas)
+                ids, docs, metas = [], [], []
+                time.sleep(3)
     if ids:
         store.add("kb_lore", ids, docs, metas)
-    print(f"  世界观设定索引完成: {len(lore)} 条")
+    print(f"  世界观设定索引完成: {len(lore)} 条 -> {total_vectors} 个向量块")
+def _clean_html_text(text: str) -> str:
+    """清洗书籍元数据卷内容中的简单 HTML/实体标记，统一为纯文本。"""
+    if not text:
+        return ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(
+        r"</?(?:p|div|li|ul|ol|h[1-6]|blockquote|span|b|strong|i|em|u|a)[^>]*>",
+        "\n", text, flags=re.I,
+    )
+    text = re.sub(r"<[^>]+>", "", text)
+    text = (
+        text.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+        .replace("&#39;", "'")
+    )
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def index_books(store: KBVectorStore):
-    """索引书籍（books.json）"""
+    """索引书籍（books.json）
+
+    按 metadata 中的卷内容分卷，每卷作为独立单元：
+    - 短卷 1 个向量块；
+    - 长卷卷内再按 chunk_natural 自然切片。
+    """
     print("[建库] 索引书籍...")
     books = _load_json("books.json")
     if not books:
@@ -459,42 +431,69 @@ def index_books(store: KBVectorStore):
         return
 
     ids, docs, metas = [], [], []
-    for book in books:
+    total_vectors = 0
+    for idx, book in enumerate(books):
         title = book.get("title", "")
-        text = book.get("text", "")
-        metadata = book.get("metadata", {})
-        if not text.strip():
+        if not title:
             continue
+        metadata = book.get("metadata", {})
+        # 收集卷内容（metadata 中以 卷N内容 形式存在）
+        vol_items = []
+        for key, value in metadata.items():
+            m = re.match(r"^卷(\d+)内容$", key)
+            if m:
+                vol_items.append((int(m.group(1)), key, value))
+        if not vol_items:
+            continue
+        vol_items.sort(key=lambda x: x[0])
+
         total_vols = metadata.get("卷数", "")
         genre = metadata.get("体裁", "")
         version = metadata.get("实装版本", "")
         author = metadata.get("作者", "游戏内未提及")
 
-        book_id = f"book:{title}"
-        ids.append(book_id)
-        # 文档内容：标题 + 元数据摘要 + 正文
-        doc = f"【{title}】体裁: {genre}, {total_vols}, 版本: {version}, 作者: {author}\n{text[:8000]}"
-        docs.append(doc)
-        metas.append({
-            "source_file": "books.json",
-            "title": title,
-            "entry_type": "书籍",
-            "parent": "",
-            "version": version,
-            "chunk_index": 0,
-            "total_chunks": 1,
-            "text_preview": text[:200],
-            "source": "book",
-            "author": author,
-            "genre": genre,
-            "total_vols": total_vols,
-        })
-        if len(ids) >= 50:
-            store.add("kb_books", ids, docs, metas)
-            ids, docs, metas = [], [], []
+        for vol_no, _key, raw_text in vol_items:
+            vol_text = _clean_html_text(raw_text)
+            if not vol_text:
+                continue
+            vol_name = metadata.get(f"卷{vol_no}名", "")
+
+            chunks = chunk_natural(vol_text)
+            total = len(chunks)
+            total_vectors += total
+            for ci, chunk in enumerate(chunks):
+                book_id = f"book:{title}:vol:{vol_no}:chunk:{ci}"
+                # 向量文档：书名 + 卷名 + 元数据 + 卷内切片正文
+                doc_header = f"【{title}】"
+                if vol_name:
+                    doc_header += f"《{vol_name}》"
+                doc_header += f"\n体裁: {genre}, 卷数: {total_vols}, 版本: {version}, 作者: {author}\n"
+                doc = doc_header + chunk
+                ids.append(book_id)
+                docs.append(doc)
+                metas.append({
+                    "source_file": "books.json",
+                    "title": title,
+                    "entry_type": "书籍",
+                    "parent": "",
+                    "version": version,
+                    "volume": vol_no,
+                    "volume_name": vol_name,
+                    "chunk_index": ci,
+                    "total_chunks": total,
+                    "text_preview": chunk[:200],
+                    "source": "book",
+                    "author": author,
+                    "genre": genre,
+                    "total_vols": total_vols,
+                })
+                if len(ids) >= 50:
+                    store.add("kb_books", ids, docs, metas)
+                    ids, docs, metas = [], [], []
+                    time.sleep(3)
     if ids:
         store.add("kb_books", ids, docs, metas)
-    print(f"  书籍索引完成: {len(books)} 条")
+    print(f"  书籍索引完成: {len(books)} 条 -> {total_vectors} 个向量块")
 
 
 def index_characters(store: KBVectorStore):
