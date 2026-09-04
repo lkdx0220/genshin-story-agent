@@ -98,8 +98,7 @@ def build():
         "--hidden-import=app.agent.nodes",
         "--hidden-import=app.agent.executor",
         "--hidden-import=app.workflow",
-        # 内嵌 .env 文件（API key 编译进 exe，分发时可删除目录中的 .env）
-        "--add-data=.env;.",
+        # 不再把 .env 打进 exe：运行时从 exe 同目录读取外部 .env，避免密钥泄露。
         # 排除不需要的大型包以减小体积
         "--exclude-module=torch",
         "--exclude-module=torchvision",
@@ -132,6 +131,7 @@ def post_build():
         print(f"[完成] {EXE_NAME}.exe 已生成 ({size_mb:.1f} MB)")
         print(f"[完成] 双击 {EXE_NAME}.exe 即可启动")
         print(f"[提示] 压缩整个 CASE-原神剧情助手 文件夹发给朋友即可使用")
+        print(f"[提示] 运行时请将 .env 放在 exe 同目录，不要内嵌到成品中")
     else:
         print("[错误] 打包产物未找到，请检查终端输出")
 

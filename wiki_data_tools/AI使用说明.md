@@ -82,7 +82,7 @@
 ## 3. 任务/活动剧情类
 
 ### `_fixup_quest_subpages.py`
-- **作用**：补抓活动剧情子页面，提取对话并追加到 `quests_活动活动.json`。
+- **作用**：补抓活动剧情子页面，提取对话并追加到 `quests_活动剧情.json`。
 - **重要函数**：`extract_dialogue_from_wikitext()`
   - 处理 `{{折叠}}`、NPC 对话、表格等。
   - 是处理活动/任务正文的参考实现。
@@ -136,7 +136,7 @@
 
 | 脚本 | 作用 |
 |---|---|
-| `scripts/scrape_limited_texts.py` | 抓取各地区「万国诸卷拾遗」限定文本，追加到 `lore.json` |
+| `scripts/scrape_limited_texts.py` | 抓取各地区「地图文本」限定文本，追加到 `lore.json` |
 | `scripts/quest_preprocessor.py` | 长任务预处理，生成 `quests_processed.json` |
 | `scripts/kb_build_index.py` | 全量/增量重建知识库向量索引 |
 | `scripts/build_knowledge_base.py` | 从 Wiki 重建 `genshin_knowledge_base/*.py` 结构化知识库 |
@@ -173,7 +173,37 @@
 
 ---
 
-## 9. 重要：合并/新增前必须全库检索
+## 9. 米游社观测枢专用抓取（新增）
+
+### `wiki_data_tools/_fetch_mihoyo_tasks.py`
+- **作用**：从米游社观测枢官网前端接口抓取任务列表和任务详情原始 JSON，主要用于 B 站 Wiki 更新慢时补最新版本任务数据（当前默认补 7.0）。
+- **数据来源**：米游社观测枢网页公开只读 JSON 接口，不需要登录、不需要签名、不需要验证码。
+- **使用限制**：
+  - 仅供低频、内部、非商业的知识库维护使用；
+  - 禁止高频批量抓取、禁止公开分发抓到的完整原文；
+  - 本脚本只负责“抓取原始数据”，不会直接改动 `content_data/quests_*.json`。
+- **接口要点**：
+  - 任务列表：`/common/blackboard/ys_obc/v1/home/content/list?channel_id=43`
+  - 任务详情：`/hoyowiki/genshin/wapi/entry_page?entry_page_id=<content_id>`
+  - 请求必须带 `x-rpc-wiki_app: genshin`，并带 `app_sn=ys_obc&lang=zh-cn`。
+- **用法**：
+  - `python _fetch_mihoyo_tasks.py`：抓取版本 7.0 的任务详情，写入 `content_data/mihoyo_tasks_raw.json`。
+  - `python _fetch_mihoyo_tasks.py --list-only`：只拉任务卡片列表，不拉详情。
+  - `python _fetch_mihoyo_tasks.py --version 7.0 --limit 10`：只抓前 10 条指定版本。
+  - `python _fetch_mihoyo_tasks.py --all-versions`：抓全部版本（数量大，不建议默认使用）。
+  - `python _fetch_mihoyo_tasks.py --output <路径>`：自定义输出文件。
+- **输出结构**：
+  - `source`、`channel_id`、`fetched_at`、`total`、`success`、`items`
+  - 每条 item 含 `content_id`、`title`、`filters`、`page`
+  - `page.modules` 包含任务概述、任务流程、地图说明、完整对话等原始模块数据。
+- **后续处理注意**：
+  - 解析/合并前必须遵守第 10 节的全库检索规则；
+  - 先备份目标 `quests_*.json`，再按现有数据结构合并；
+  - 如需批量详情，可参考 `entry_pages` 批量接口，但必须降低频率。
+
+---
+
+## 10. 重要：合并/新增前必须全库检索
 
 - 当发现“旧版本地有、新版本地没有”的内容时，**不能直接判定为删除**。
 - 必须先在**整个本地知识库**里做全盘检索：

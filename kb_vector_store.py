@@ -25,13 +25,17 @@ import requests
 from dotenv import load_dotenv
 
 if getattr(sys, 'frozen', False):
-    # exe 模式：从 PyInstaller 解压目录读取 .env
-    load_dotenv(os.path.join(sys._MEIPASS, '.env'))
+    # exe 模式：从 exe 同目录读取外部 .env，避免把密钥打进成品。
+    _ENV_PATH = os.path.join(os.path.dirname(sys.executable), '.env')
+    if os.path.exists(_ENV_PATH):
+        load_dotenv(_ENV_PATH)
 else:
     load_dotenv()
 
 # text-embedding-v4 不在 token-plan 新接口中，固定使用原 DashScope + 旧 Key（若未配置则退回当前 Key）。
-QWEN_API_KEY = os.getenv("DASHSCOPE_FALLBACK_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
+QWEN_API_KEY = os.getenv("DASHSCOPE_FALLBACK_API_KEY") or os.getenv("DASHSCOPE_API_KEY") or ""
+if not QWEN_API_KEY:
+    raise RuntimeError("缺少嵌入 API Key：请配置 DASHSCOPE_API_KEY 或 DASHSCOPE_FALLBACK_API_KEY")
 EMBEDDING_MODEL = "text-embedding-v4"
 EMBEDDING_DIM = 1024
 EMBEDDING_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
@@ -82,7 +86,7 @@ class GenshinEmbedder:
                     time.sleep(wait)
                 else:
                     wait = (attempt + 1) * 5 + random.uniform(0, 2)
-                    print(f"  [Embedding] API 错误 {resp.status_code}: {resp.text[:200]}，等待 {wait:.1f}s 后重试 ({attempt+1}/{max_retries})...")
+                    print(f"  [Embedding] API 错误 {resp.status_code}，等待 {wait:.1f}s 后重试 ({attempt+1}/{max_retries})...")
                     time.sleep(wait)
             except Exception as e:
                 wait = (attempt + 1) * 3 + random.uniform(0, 1)
@@ -108,13 +112,20 @@ class KBVectorStore:
 
     # ====== 内部文件路径 ======
 
+    def _validate_collection(self, collection: str) -> None:
+        if collection not in COLLECTIONS:
+            raise ValueError(f"未知的向量集合: {collection!r}")
+
     def _vec_path(self, collection: str) -> str:
+        self._validate_collection(collection)
         return os.path.join(VECTOR_DIR, f"{collection}_vectors.npy")
 
     def _meta_path(self, collection: str) -> str:
+        self._validate_collection(collection)
         return os.path.join(VECTOR_DIR, f"{collection}_meta.json")
 
     def _doc_path(self, collection: str) -> str:
+        self._validate_collection(collection)
         return os.path.join(VECTOR_DIR, f"{collection}_docs.json")
 
     # ====== 加载/保存 ======

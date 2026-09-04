@@ -209,11 +209,11 @@ def build_lore_entries(region, parsed_entries):
         
         # 构建 title 路径
         if sub:
-            lore_title = f"万国诸卷拾遗/{region} / 限定文本 / {sub} / {title}"
-            breadcrumb = f"首页 > 北陆图书馆 > 万国诸卷拾遗/{region} > 限定文本 > {sub} > {title}"
+            lore_title = f"地图文本/{region} / 限定文本 / {sub} / {title}"
+            breadcrumb = f"首页 > 北陆图书馆 > 地图文本/{region} > 限定文本 > {sub} > {title}"
         else:
-            lore_title = f"万国诸卷拾遗/{region} / 限定文本 / {title}"
-            breadcrumb = f"首页 > 北陆图书馆 > 万国诸卷拾遗/{region} > 限定文本 > {title}"
+            lore_title = f"地图文本/{region} / 限定文本 / {title}"
+            breadcrumb = f"首页 > 北陆图书馆 > 地图文本/{region} > 限定文本 > {title}"
         
         result.append({
             "title": lore_title,
@@ -229,7 +229,7 @@ def main():
     stats = {}
     
     for region in REGIONS:
-        page_title = f"万国诸卷拾遗/{region}"
+        page_title = f"万国诸卷拾遗/{region}"  # B站Wiki原页面名，仅作抓取源，输出使用“地图文本”
         print(f"\n{'='*50}")
         print(f"  正在抓取: {page_title}")
         

@@ -138,8 +138,8 @@ def load_quest_content(quest_name: str, query: str = "") -> str:
 
     output = []
     for title, cat, text in results[:4]:
-        # 类型名规范化：活动活动→活动剧情；指定标题强制标注为活动剧情
-        if title in FORCE_ACTIVITY_TITLES or cat == "活动活动":
+        # 指定标题强制标注为活动剧情（活动剧情类数据本身已使用该分类名）
+        if title in FORCE_ACTIVITY_TITLES:
             cat = "活动剧情"
         char_count = len(text)
 

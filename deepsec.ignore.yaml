@@ -1,0 +1,4 @@
+# DeepSec 项目级忽略策略
+# 远程 L3（LLM 语义审查）属于建议性分析，统一忽略，避免大量数据/开发脚本噪音。
+rule_ids:
+  - l3_llm_semantic_review

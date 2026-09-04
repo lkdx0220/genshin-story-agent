@@ -28,6 +28,7 @@ if sys.platform == 'win32':
 
 from flask import Flask, request, jsonify, render_template_string, Response
 from flask_cors import CORS
+import re
 
 # 导入 Agent 工具
 try:
@@ -46,6 +47,38 @@ except ImportError as e:
 app = Flask(__name__)
 CORS(app)
 app.config['JSON_AS_ASCII'] = False
+app.config['MAX_CONTENT_LENGTH'] = 64 * 1024
+
+# ====== API 访问控制 ======
+# 未配置 API_TOKEN 时仅允许本机访问；配置后远程须携带 Bearer Token。
+API_TOKEN = os.getenv("API_TOKEN", "").strip()
+_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", None}
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _is_local_request() -> bool:
+    return (request.remote_addr or "") in _LOCAL_HOSTS or (request.remote_addr or "").startswith("127.")
+
+
+def _check_api_access():
+    """保护所有 /api/* 路由：本机免 token，远程需 Bearer Token。"""
+    if not request.path.startswith("/api/"):
+        return None
+    if request.method == "OPTIONS":
+        return None
+    if _is_local_request():
+        return None
+    if not API_TOKEN:
+        return jsonify({
+            "error": "该 API 仅限本机访问。若需远程访问，请在服务端配置 API_TOKEN。"
+        }), 403
+    auth = request.headers.get("Authorization", "")
+    if auth != f"Bearer {API_TOKEN}":
+        return jsonify({"error": "无效或缺失 API_TOKEN"}), 403
+    return None
+
+
+app.before_request(_check_api_access)
 
 # 取消信号映射：session_id → threading.Event
 _cancel_events: Dict[str, threading.Event] = {}
@@ -224,10 +257,10 @@ def api_sessions():
 @app.route('/api/cancel', methods=['POST'])
 def api_cancel():
     """中断当前会话的 Agent 运行"""
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     session_id = data.get("session_id", "")
-    if not session_id:
-        return jsonify({"success": False, "error": "缺少 session_id"}), 400
+    if not _valid_session_id(session_id):
+        return jsonify({"success": False, "error": "非法的 session_id"}), 400
     run_id = _session_cancel_keys.get(session_id)
     if not run_id:
         return jsonify({"success": False, "error": "未找到运行中的会话"}), 404
@@ -245,6 +278,8 @@ def api_session_detail(session_id):
     _rl = _check_rate_limit()
     if _rl is not None:
         return _rl
+    if not _valid_session_id(session_id):
+        return jsonify({"success": False, "error": "非法的 session_id"}), 400
     if request.method == 'DELETE':
         fpath = _session_file(session_id)
         if os.path.exists(fpath):
@@ -303,7 +338,10 @@ def api_weapon():
     data = request.get_json()
     if not data or "weapon" not in data:
         return jsonify({"error": "缺少 weapon 参数"}), 400
-    result = tool.invoke(data["weapon"])
+    try:
+        result = tool.invoke(data["weapon"])
+    except Exception as e:
+        return jsonify({"error": "查询武器信息失败"}), 500
     return jsonify({"success": True, "result": result})
 
 
@@ -351,12 +389,16 @@ _sessions: Dict[str, list] = {}
 SESSION_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conversation_memory")
 
 
+def _valid_session_id(session_id: str) -> bool:
+    return bool(_SESSION_ID_RE.fullmatch(session_id or ""))
+
+
 def _session_file(session_id: str) -> str:
     """获取会话存储文件路径"""
+    if not _valid_session_id(session_id):
+        raise ValueError("非法的 session_id")
     os.makedirs(SESSION_DIR, exist_ok=True)
-    # 截断 session_id 中的危险字符
-    safe_id = "".join(c for c in session_id if c.isalnum() or c in "._-")
-    return os.path.join(SESSION_DIR, f"session_{safe_id}.json")
+    return os.path.join(SESSION_DIR, f"session_{session_id}.json")
 
 
 def _load_session_from_disk(session_id: str) -> dict:
@@ -410,12 +452,19 @@ def api_chat():
     if _rl is not None:
         return _rl
     import genshin_story_agent as agent_module
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data or "message" not in data:
         return jsonify({"error": "缺少 message 参数"}), 400
 
     message = data["message"]
+    if not isinstance(message, str) or not message.strip():
+        return jsonify({"error": "message 必须是非空字符串"}), 400
+    if len(message) > 5000:
+        return jsonify({"error": "message 过长，最多 5000 字"}), 400
+
     session_id = data.get("session_id", "default")
+    if not _valid_session_id(session_id):
+        return jsonify({"error": "非法的 session_id"}), 400
 
     # 加载历史
     history = _sessions.get(session_id)
@@ -538,4 +587,4 @@ if __name__ == '__main__':
     print("  地址: http://localhost:5000")
     print("  接口: /api/character /api/region /api/story /api/chat 等")
     print("=" * 50)
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=os.getenv("FLASK_DEBUG", "0") == "1")

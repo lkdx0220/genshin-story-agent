@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""从 wiki API 数据中提取版本号，更新 quests_活动活动.json 的 metadata.所属版本"""
+"""从 wiki API 数据中提取版本号，更新 quests_活动剧情.json 的 metadata.所属版本"""
 
 import json
 import re
@@ -8,7 +8,7 @@ import os
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WIKI_FILE = r"C:\Users\24701\AppData\Local\Temp\trae\toolcall-output\fa71ec72-b60d-4802-bb40-9c378fde21c0.txt"
-QUESTS_FILE = os.path.join(BASE_DIR, "content_data", "quests_活动活动.json")
+QUESTS_FILE = os.path.join(BASE_DIR, "content_data", "quests_活动剧情.json")
 
 # 版本号映射：6.x -> 月之x
 VERSION_MAP_6X = {
@@ -150,7 +150,7 @@ def main():
             print(f"    {name} -> {ver}")
 
     print("\n" + "=" * 60)
-    print("步骤2：更新 quests_活动活动.json")
+    print("步骤2：更新 quests_活动剧情.json")
 
     with open(QUESTS_FILE, "r", encoding="utf-8") as f:
         quests = json.load(f)
