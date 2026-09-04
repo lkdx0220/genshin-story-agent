@@ -3,12 +3,12 @@
 补漏脚本：补抓活动剧情子页面
 
 流程：
-1. 读取 quests_活动活动.json，找出 Type A 活动（主页面无角色对话，有子页面链接）
+1. 读取 quests_活动剧情.json，找出 Type A 活动（主页面无角色对话，有子页面链接）
 2. 对每个 Type A 活动，请求 wiki API 获取主页面 HTML
 3. 从 HTML 中解析「活动剧情」栏的实际子页面链接
 4. 与已有数据交叉比对，找出缺失的子页面
 5. 逐个抓取缺失子页面的 wikitext，提取对话内容
-6. 将新条目追加到 quests_活动活动.json
+6. 将新条目追加到 quests_活动剧情.json
 
 用法：python wiki_data_tools/_fixup_quest_subpages.py
 """
@@ -28,7 +28,7 @@ PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 CONTENT_DIR = os.path.join(PROJECT_DIR, 'content_data')
 
 # 输入/输出
-QUESTS_FILE = os.path.join(CONTENT_DIR, 'quests_活动活动.json')
+QUESTS_FILE = os.path.join(CONTENT_DIR, 'quests_活动剧情.json')
 CHECKPOINT_FILE = os.path.join(CONTENT_DIR, '_quest_subpage_fixup_cp.json')
 
 # 请求配置
@@ -211,17 +211,17 @@ def extract_dialogue_from_wikitext(wikitext):
 
 
 def build_quest_entry(title, pageid, text, parent_title):
-    """构建与 quests_活动活动.json 格式一致的活动条目"""
+    """构建与 quests_活动剧情.json 格式一致的活动条目"""
     return {
-        'source': '活动活动',
-        'category': '活动活动',
+        'source': '活动剧情',
+        'category': '活动剧情',
         'title': title,
         'pageid': pageid or 0,
         'metadata': {
             '任务名称': title,
             '所属版本': '',      # 从主活动继承
             '任务地区': '',
-            '任务类型': '活动活动',
+            '任务类型': '活动剧情',
             '出场人物': '',
             '相关活动': parent_title,
             '系列任务': ''

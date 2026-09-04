@@ -27,6 +27,8 @@ import subprocess
 import tempfile
 import urllib.parse
 
+from _safe_http import ensure_wiki_url
+
 # ====== 配置 ======
 
 WIKI_API = "https://wiki.biligame.com/ys/api.php"
@@ -102,9 +104,10 @@ def safe_write(filepath, data):
 def api_get(params, retries=3):
     """调用 wiki API（使用 curl，TLS 指纹不被 CDN 封禁），带重试和 rate limit 保护。"""
     params["format"] = "json"
-    url = WIKI_API + "?" + urllib.parse.urlencode(params)
+    url = ensure_wiki_url(WIKI_API + "?" + urllib.parse.urlencode(params))
 
     for attempt in range(retries):
+        tmp_path = None
         try:
             fd, tmp_path = tempfile.mkstemp(suffix=".json")
             os.close(fd)
@@ -124,18 +127,13 @@ def api_get(params, retries=3):
             if http_code == "200":
                 with open(tmp_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                os.unlink(tmp_path)
                 return data
             elif http_code == "567":
                 wait = 10 * (2 ** attempt)
                 log(f"  CDN 限流(567)，等待 {wait}s 后重试 (第 {attempt+1}/{retries} 次)...")
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
                 time.sleep(wait)
             else:
                 log(f"  HTTP {http_code}，第 {attempt+1}/{retries} 次重试...")
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
                 time.sleep(REQUEST_INTERVAL * (attempt + 1))
         except subprocess.TimeoutExpired:
             log(f"  curl 超时，第 {attempt+1}/{retries} 次重试...")
@@ -143,6 +141,9 @@ def api_get(params, retries=3):
         except Exception as e:
             log(f"  API 请求失败: {e}，第 {attempt+1}/{retries} 次重试...")
             time.sleep(REQUEST_INTERVAL * (attempt + 1))
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
     return None
 
 

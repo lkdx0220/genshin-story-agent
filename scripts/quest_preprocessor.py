@@ -37,7 +37,9 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 
 # ====== 配置 ======
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or ""
+if not DEEPSEEK_API_KEY:
+    raise RuntimeError("缺少 DEEPSEEK_API_KEY，请配置后再运行任务预处理。")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

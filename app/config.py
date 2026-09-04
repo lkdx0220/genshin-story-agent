@@ -13,8 +13,10 @@ from dotenv import load_dotenv
 
 # ====== .env 加载（兼容 PyInstaller 打包模式）======
 if getattr(sys, 'frozen', False):
-    # exe 模式：从 PyInstaller 解压目录读取 .env
-    load_dotenv(os.path.join(sys._MEIPASS, '.env'))
+    # exe 模式：从 exe 同目录读取外部 .env，避免把密钥打进成品。
+    _ENV_PATH = os.path.join(os.path.dirname(sys.executable), '.env')
+    if os.path.exists(_ENV_PATH):
+        load_dotenv(_ENV_PATH)
 else:
     load_dotenv()
 

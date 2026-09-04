@@ -3,27 +3,13 @@
 """生成最终对比测试的 HTML 片段"""
 import json, html as html_mod
 
-data = json.load(open(r'C:\Users\24701\Desktop\原神剧情\CASE-原神剧情助手-修改用\_final_test_report.json', encoding='utf-8'))
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+data = json.load(open(BASE_DIR / '_final_test_report.json', encoding='utf-8'))
 
 # 成对输出 Q1-Q8
 pairs = [(data[i], data[i+1]) for i in range(0, len(data), 2)]
-
-# 从 output log 提取工具调用信息
-import re, os
-log_path = r'C:\Users\24701\AppData\Local\Temp\trae-agent-toolhost\jobs\job-ef264b7cbcd34e5eae4a0d0c40ea7c7f\output.log'
-log_text = open(log_path, encoding='utf-8').read()
-
-# 提取每个测试的工具调用摘要
-def extract_tool_summary(log_text, qid, version):
-    """从log中提取工具调用行"""
-    # 找对应的section
-    pattern = rf'{qid}.*?--- {version} ---.*?ELAPSED:'
-    lines = []
-    # 简单策略：找所有 "-> 调用" 和 "[工具]" 行
-    for m in re.finditer(r'(-> 调用 \d+ 个工具: \[.*?\])|(\[工具\] .*?(?=->|$))', log_text):
-        lines.append(m.group(0)[:200])
-    # 只取一部分
-    return lines
 
 # 手动构建已知的工具调用摘要（从输出日志中提取）
 tool_summaries = {
@@ -136,6 +122,6 @@ html_parts.append('''
 
 # 写入
 output = '\n'.join(html_parts)
-with open(r'C:\Users\24701\Desktop\原神剧情\CASE-原神剧情助手-修改用\_final_html_section.html', 'w', encoding='utf-8') as f:
+with open(BASE_DIR / '_final_html_section.html', 'w', encoding='utf-8') as f:
     f.write(output)
 print(f"Generated {len(output)} chars")

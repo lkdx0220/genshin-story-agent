@@ -106,6 +106,31 @@ body{
   padding:12px 16px;border-top:1px solid var(--border);
   font-size:11px;color:var(--text-muted);
 }
+/* ---- 访问令牌 ---- */
+.token-row{
+  display:flex;gap:6px;align-items:center;
+  margin-bottom:8px;padding:8px 10px;
+  background:rgba(255,255,255,0.03);
+  border:1px solid var(--border);
+  border-radius:6px;
+}
+.token-row input{
+  flex:1;min-width:0;
+  background:var(--bg-input);
+  border:1px solid var(--border);
+  border-radius:4px;
+  color:var(--text);
+  font-size:11px;
+  padding:5px 8px;
+  outline:none;
+}
+.token-row input:focus{border-color:var(--gold-dim)}
+.token-row button{
+  background:var(--gold-dim);
+  border:none;color:#0a0e17;
+  font-size:11px;border-radius:4px;
+  padding:5px 10px;cursor:pointer;
+}
 /* ---- 主对话区 ---- */
 .main{
   flex:1;display:flex;flex-direction:column;
@@ -393,7 +418,13 @@ body{
     </button>
   </div>
   <div class="conversation-list" id="convList"></div>
-  <div class="sidebar-footer">v4.0 &middot; Plan/Answer 架构</div>
+  <div class="sidebar-footer">
+    <div class="token-row">
+      <input id="apiTokenInput" type="password" placeholder="访问令牌（远程时填写）" autocomplete="off">
+      <button onclick="saveApiToken()" title="保存令牌">保存</button>
+    </div>
+    <div>v4.0 &middot; Plan/Answer 架构</div>
+  </div>
 </aside>
 
 <!-- 主区域 -->
@@ -485,13 +516,28 @@ const API_BASE = window.location.origin;
 let conversations = [];
 let currentConvId = null;
 let isStreaming = false;
+let apiToken = localStorage.getItem('api_token') || '';
+
+function getAuthHeaders(extra){
+  const headers = Object.assign({}, extra || {});
+  if(apiToken) headers['Authorization'] = 'Bearer ' + apiToken;
+  return headers;
+}
+
+function saveApiToken(){
+  const input = document.getElementById('apiTokenInput');
+  apiToken = (input.value || '').trim();
+  localStorage.setItem('api_token', apiToken);
+  input.value = apiToken;
+  console.log('已保存访问令牌');
+}
 
 function generateConvId(){return 'conv_'+Date.now()}
 
 // ====== 对话管理 ======
 async function loadSessions(){
   try{
-    const resp=await fetch(API_BASE+'/api/sessions');
+    const resp=await fetch(API_BASE+'/api/sessions',{headers:getAuthHeaders()});
     const data=await resp.json();
     if(data.sessions&&data.sessions.length>0){
       conversations=data.sessions.map(s=>({
@@ -552,7 +598,7 @@ function switchConv(id){
   const welcome=document.getElementById('welcome');
   if(welcome)welcome.style.display='none';
   area.innerHTML='<div style="text-align:center;padding:40px;color:var(--text-dim)">加载中...</div>';
-  fetch(API_BASE+'/api/sessions/'+encodeURIComponent(id))
+  fetch(API_BASE+'/api/sessions/'+encodeURIComponent(id),{headers:getAuthHeaders()})
     .then(r=>r.json())
     .then(data=>{
       const pairs=data.pairs||[];
@@ -602,7 +648,7 @@ function deleteConv(id){
       if(conversations.length>0){switchConv(conversations[conversations.length-1].id)}
       else{newChat()}
     }else{renderSidebar()}
-    fetch(API_BASE+'/api/sessions/'+encodeURIComponent(id),{method:'DELETE'})
+    fetch(API_BASE+'/api/sessions/'+encodeURIComponent(id),{method:'DELETE',headers:getAuthHeaders()})
       .catch(e=>console.error('删除会话文件失败:',e));
   });
 }
@@ -681,7 +727,7 @@ async function stopGeneration(){
   try{
     await fetch(API_BASE+'/api/cancel',{
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:getAuthHeaders({'Content-Type':'application/json'}),
       body:JSON.stringify({session_id:currentConvId})
     });
   }catch(e){
@@ -764,7 +810,7 @@ async function sendMessage(){
   try{
     const resp=await fetch(API_BASE+'/api/chat',{
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:getAuthHeaders({'Content-Type':'application/json'}),
       body:JSON.stringify({message:text,session_id:currentConvId})
     });
 
@@ -903,14 +949,25 @@ function toggleSidebar(){
 // 页面关闭时自动取消正在运行的 Agent
 window.addEventListener('beforeunload',()=>{
   if(isStreaming && currentConvId){
-    navigator.sendBeacon(API_BASE+'/api/cancel',
-      new Blob([JSON.stringify({session_id:currentConvId})],{type:'application/json'}));
+    fetch(API_BASE+'/api/cancel',{
+      method:'POST',
+      headers:getAuthHeaders({'Content-Type':'application/json'}),
+      body:JSON.stringify({session_id:currentConvId}),
+      keepalive:true
+    }).catch(()=>{});
   }
 });
 
 function escHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 
 // ====== 初始化 ======
+(function(){
+  const tokenInput = document.getElementById('apiTokenInput');
+  if(tokenInput){
+    tokenInput.value = apiToken;
+    tokenInput.addEventListener('change', saveApiToken);
+  }
+})();
 loadSessions();
 </script>
 

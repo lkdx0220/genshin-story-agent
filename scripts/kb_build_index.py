@@ -28,7 +28,8 @@ except ImportError:
     print("[警告] 无法导入 ACT_TO_QUESTS，parent 映射将为空")
     ACT_TO_QUESTS = {}
 
-CONTENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "content_data")
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONTENT_DIR = os.path.join(PROJECT_DIR, "content_data")
 
 
 # ====== 活动剧情子任务 → 所属活动名（硬编码，来源：铁律6） ======

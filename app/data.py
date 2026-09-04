@@ -131,9 +131,9 @@ def _normalize_for_match(s: str) -> str:
 
 
 def _aggregate_map_text(book_name: str) -> str:
-    """聚合 lore.json 中的地图文本（如「万国诸卷拾遗」），按地区分组列出子区域。
+    """聚合 lore.json 中的地图文本（如「地图文本」），按地区分组列出子区域。
 
-    「万国诸卷拾遗」是北陆图书馆的地图文本系列，数据存在 lore.json 而非 books.json。
+    「地图文本」是北陆图书馆的地图文本系列，数据存在 lore.json 而非 books.json。
     书籍查询工具在 books.json 中查不到书名时，用本函数判断它是否是地图文本。
     返回空字符串表示该名称不是地图文本；否则返回按地区分组的聚合结果。
     """
@@ -148,7 +148,7 @@ def _aggregate_map_text(book_name: str) -> str:
     normalized_book = _normalize_for_match(book_name)
     if not normalized_book:
         return ""
-    # 收集 title 含该书名的条目，例如 title="万国诸卷拾遗/稻妻 / 鸣神岛"
+    # 收集 title 含该书名的条目，例如 title="地图文本/稻妻 / 鸣神岛"
     entries = [e for e in lore if normalized_book in _normalize_for_match(e.get("title", ""))]
     if not entries:
         return ""
