@@ -71,6 +71,59 @@ def _judge_alias_sandbox(alias: str, canonical: str, context: str) -> bool:
         return False
 
 
+def _judge_alias_sandbox_batch(candidates: list) -> list:
+    """批量安全沙箱：一次 LLM 调用判断多个候选别名。
+
+    candidates: [(alias, canonical, context), ...]
+    返回与 candidates 等长的 bool 列表；True 表示替换，False 表示保留。
+    解析失败时回退到逐个 _judge_alias_sandbox，保证不静默丢结果。
+    """
+    if not candidates:
+        return []
+    lines = []
+    for i, (alias, canonical, context) in enumerate(candidates, 1):
+        lines.append(
+            f"{i}. 候选别名「{alias}」，可能指向角色「{canonical}」；上下文片段：「{context}」"
+        )
+    nl = chr(10)
+    prompt = (
+        "你是原神知识库的别名查询工具。下面是多个候选别名，请逐一判断每个候选别名"
+        "在其给定的上下文中是否指代对应角色。" + nl + nl
+        + nl.join(lines)
+        + nl + nl + "判断规则：" + nl
+        + '- 如果候选别名在上下文中是地名、建筑名、书名、物品名、技能名等非角色名词的组成部分（如"风龙废墟"中的"风龙"是地名的一部分），输出 KEEP' + nl
+        + '- 如果确实指代角色本身（如"风龙的力量"中的"风龙"指角色特瓦林），输出 REPLACE' + nl + nl
+        + "严格按以下格式逐行输出，每行一个结果，不要输出其他内容：" + nl
+        + "1 KEEP" + nl + "2 REPLACE" + nl + "..."
+    )
+    try:
+        response = alias_judge_llm.invoke([HumanMessage(content=prompt)])
+        text = response.content or ""
+    except Exception as e:
+        print(f"  [AliasJudgeBatch] 调用失败: {e}，默认保留原样")
+        return [False] * len(candidates)
+
+    result_map = {}
+    for line in text.splitlines():
+        parts = line.strip().split()
+        if len(parts) < 2:
+            continue
+        first = parts[0].rstrip(':：')
+        if not first.isdigit():
+            continue
+        idx = int(first)
+        verdict = parts[1].upper()
+        if 1 <= idx <= len(candidates) and verdict in ("KEEP", "REPLACE"):
+            result_map[idx] = verdict == "REPLACE"
+
+    if len(result_map) != len(candidates):
+        print(f"  [AliasJudgeBatch] 解析不完整 ({len(result_map)}/{len(candidates)})，回退单个判断")
+        return [_judge_alias_sandbox(alias, canonical, context)
+                for alias, canonical, context in candidates]
+
+    return [result_map[i] for i in range(1, len(candidates) + 1)]
+
+
 def _expand_query_with_aliases(query: str) -> List[str]:
     """扩展查询词：术语别名 + 角色别名反向展开。
     角色别名反向展开解决"用户用规范名搜索，但文本中角色以别名出现"的问题

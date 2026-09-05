@@ -24,7 +24,7 @@ from app.progress import _emit_progress, _cancel_events
 from app.trace_recorder import emit as trace_emit
 from app.tools import tools_by_name as _tools_by_name
 from app.tools.query import find_similar_quest_names
-from app.retrieval import _sanitize_query, _is_compound_hit, _judge_alias_sandbox, TITLE_REGISTRY
+from app.retrieval import _sanitize_query, _is_compound_hit, _judge_alias_sandbox_batch, TITLE_REGISTRY
 from app.data import (
     角色知识库, 地区知识库, 任务知识库, 武器知识库, 圣遗物知识库, 素材知识库,
     _npcs_data, _normalize_for_match, _load_content_json,
@@ -82,8 +82,15 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
         print(f"  消毒: {sanitized}")
 
     # Step 2: 检测潜在别名命中，收集映射信息（不替换原文）
+    # 性能优化：
+    # 1) 自映射（规范名=别名）确定性标注，不浪费 LLM 判断，保留 alias_notes 行为；
+    # 2) 已接受的长别名覆盖的区间，其子串不再单独判断（如“雷电将军”已命中则“将军”跳过）；
+    # 3) 剩余需要 AI 沙箱判断的复合命中合并为一次批量调用，避免逐个串行。
     alias_notes_parts = []  # 收集别名说明，最终拼接为系统消息补充
     alias_pairs = []        # 结构化别名映射 [(别名, 规范名)]，供下游确定性身份直答使用
+    covered_spans = []      # 已接受别名覆盖的 (start, end) 区间，防止子串重复判断
+
+    compound_candidates = []  # 批量待判断候选 (alias, canonical, context, pos, span)
 
     # ·/- 归一化：用户常用 "-" 代替 "·"（如 "芙宁娜-德-枫丹"），统一转为 "·" 后再匹配
     match_text = sanitized.replace('-', '·')
@@ -93,25 +100,49 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
         if pos < 0:
             continue
 
-        if _is_compound_hit(sanitized, alias, pos):
-            # 复合词命中，需要 AI 沙箱判断
-            canonical = ALIAS_MAP[alias]
-            ctx_start = max(0, pos - 8)
-            ctx_end = min(len(sanitized), pos + len(alias) + 8)
-            context = sanitized[ctx_start:ctx_end]
+        canonical = ALIAS_MAP[alias]
+        span = (pos, pos + len(alias))
+        # 已经被更长的已接受别名覆盖，子串不再判断
+        if any(s <= pos and pos + len(alias) <= e for s, e in covered_spans):
+            continue
 
-            if _judge_alias_sandbox(alias, canonical, context):
-                print(f"  [AI判定] '{alias}' → '{canonical}' (上下文: \"{context}\")")
-                alias_notes_parts.append(f'"{alias}" 指 {canonical}')
-                alias_pairs.append((alias, canonical))
-            else:
-                print(f"  [AI判定] '{alias}' 在上下文中不是角色别名，保留原样 (上下文: \"{context}\")")
-        else:
-            # 独立词命中，直接记录映射
-            canonical = ALIAS_MAP[alias]
+        # 自映射（别名=规范名）：确定性标注，不需要 LLM 判断，保留原有 alias_notes 行为
+        if canonical == alias:
             print(f"  [检测到] '{alias}' → '{canonical}'")
             alias_notes_parts.append(f'"{alias}" 指 {canonical}')
             alias_pairs.append((alias, canonical))
+            covered_spans.append(span)
+            continue
+
+        if _is_compound_hit(sanitized, alias, pos):
+            # 复合词命中，延迟到循环结束后统一批量判断
+            ctx_start = max(0, pos - 8)
+            ctx_end = min(len(sanitized), pos + len(alias) + 8)
+            context = sanitized[ctx_start:ctx_end]
+            # 暂存：alias, canonical, context, pos, span
+            compound_candidates.append((alias, canonical, context, pos, span))
+        else:
+            # 独立词命中，直接记录映射
+            print(f"  [检测到] '{alias}' → '{canonical}'")
+            alias_notes_parts.append(f'"{alias}" 指 {canonical}')
+            alias_pairs.append((alias, canonical))
+            covered_spans.append(span)
+
+    # 批量 AI 沙箱判断：一次调用处理所有复合命中候选
+    if compound_candidates:
+        batch_candidates = [(a, c, ctx) for a, c, ctx, _pos, _span in compound_candidates]
+        batch_results = _judge_alias_sandbox_batch(batch_candidates)
+        for (alias, canonical, context, pos, span), accepted in zip(compound_candidates, batch_results):
+            if not accepted:
+                print(f"  [AI判定] '{alias}' 在上下文中不是角色别名，保留原样 (上下文: \"{context}\")")
+                continue
+            # 批量内仍按最长优先处理：若已被更长的已接受别名覆盖，跳过子串
+            if any(s <= pos and pos + len(alias) <= e for s, e in covered_spans):
+                continue
+            print(f"  [AI判定] '{alias}' → '{canonical}' (上下文: \"{context}\")")
+            alias_notes_parts.append(f'"{alias}" 指 {canonical}')
+            alias_pairs.append((alias, canonical))
+            covered_spans.append(span)
 
     if alias_notes_parts:
         # 代码加固：多实体强制注入 —— 如果检测到多个别名/实体，明确列出并强制要求全部回答
@@ -558,7 +589,11 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             system_content += f"\n\n## 之前的对话摘要\n{conv_summary}\n（以上是之前对话的摘要，供你理解上下文。请注意：如果用户当前问题与摘要中的话题相关，请结合上下文回答；如果不相关，请忽略。）"
 
         # 构建消息：SystemPrompt + 最近N轮历史 + 当前问题
-        messages = [SystemMessage(content=system_content)]
+        # 显式 Context Cache：SystemPrompt 作为稳定前缀打 cache_control 标记，
+        # 同一会话后续 plan 轮次可命中缓存，减少 Prefill 耗时。
+        messages = [SystemMessage(content=[
+            {"type": "text", "text": system_content, "cache_control": {"type": "ephemeral"}},
+        ])]
 
         # 注入最近 N 轮对话历史
         conv_history = state.get("conversation_history") or []
@@ -605,6 +640,7 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     # 保存执行计划（response.content 即模型输出的【执行报告】文本）
     plan_content = response.content if hasattr(response, 'content') else ''
+    print(f"  [PlanOut] 第{iteration+1}轮 plan_content长度={len(plan_content)}")
 
     trace_emit("plan", {
         "iteration": iteration + 1,
@@ -1728,7 +1764,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 注入规划阶段的执行报告作为上下文
     if execution_plan:
         answer_messages.append(SystemMessage(content=(
-            f"以下是规划阶段的分析结果，请基于此结果和工具返回的内容生成回答：\n\n{execution_plan}"
+            f"以下是规划阶段的简短结论（仅作参考，最终以工具返回原文为准）：\n\n{execution_plan[:500]}"
         )))
 
     # 注入用户原始问题
