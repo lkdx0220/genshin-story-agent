@@ -192,7 +192,7 @@ alias_judge_llm = ChatOpenAI(
     api_key=DEEPSEEK_API_KEY,
     base_url=DEEPSEEK_BASE_URL,
     temperature=0,
-    max_tokens=20,
+    max_tokens=100,
     request_timeout=10,
 )
 
