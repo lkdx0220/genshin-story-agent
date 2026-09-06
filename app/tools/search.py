@@ -84,10 +84,12 @@ def search_activity(keyword: str, activity_name: str = "") -> str:
     # Reranker 重排序
     rerank_docs = [f"【{r['title']}】{r['snippet']}" for r in results]
     reranked = _rerank(keyword, rerank_docs, top_n=10)
-    if reranked:
+    if reranked is None:
+        ordered = results[:10]
+    elif reranked:
         ordered = [results[i] for i in reranked]
     else:
-        ordered = results[:10]
+        ordered = []
 
     lines = [f"\n===== 活动剧情搜索「{keyword}」" + (f"（{activity_name}）" if activity_name else "") + f" ({len(results)}条候选，取前{len(ordered)}条) ====="]
     for r in ordered:
@@ -298,12 +300,13 @@ def search_all(query: str) -> str:
         rerank_docs = [f"【{c[0]}】{c[2]}" for c in quest_candidates]
         # 用原始 query 做 Rerank（保持语义精度）
         reranked = _rerank(query, rerank_docs, top_n=10)
-        if reranked:
-            for idx in reranked:
-                all_results.append(("任务内容", quest_candidates[idx][3]))
-        else:
+        if reranked is None:
             for c in quest_candidates[:10]:
                 all_results.append(("任务内容", c[3]))
+        elif reranked:
+            for idx in reranked:
+                all_results.append(("任务内容", quest_candidates[idx][3]))
+        # else: rerank 已执行但全部低于阈值，不输出弱任务结果
 
     if not all_results:
         return f"未找到与「{query}」相关的任何内容。"
@@ -360,10 +363,12 @@ def search_lore(keyword: str) -> str:
     # Reranker 重排序
     rerank_docs = [f"【{c['title']}】{c['text']}" for c in candidates]
     reranked = _rerank(keyword, rerank_docs, top_n=8)
-    if reranked:
+    if reranked is None:
+        ordered = candidates[:8]
+    elif reranked:
         ordered = [candidates[i] for i in reranked]
     else:
-        ordered = candidates[:8]
+        ordered = []
 
     lines = [f"\n===== 世界观设定「{keyword}」({len(candidates)}条候选，取前{len(ordered)}条) ====="]
     for c in ordered:

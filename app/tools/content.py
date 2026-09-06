@@ -163,10 +163,12 @@ def load_quest_content(quest_name: str, query: str = "") -> str:
                     if top_chunks:
                         # Reranker 语义重排序
                         reranked_idx = _rerank(query, top_chunks, top_n=3)
-                        if reranked_idx:
+                        if reranked_idx is None:
+                            top_chunks = top_chunks[:3]
+                        elif reranked_idx:
                             top_chunks = [top_chunks[i] for i in reranked_idx[:3]]
                         else:
-                            top_chunks = top_chunks[:3]
+                            top_chunks = []
                         print(f"  -> BM25+Reranker: \"{query}\" -> {len(top_chunks)} 个切片")
                         chunk_texts = "\n\n---\n\n".join(top_chunks)
                         output.append(

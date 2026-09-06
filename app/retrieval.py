@@ -167,10 +167,40 @@ def _expand_query_with_aliases(query: str) -> List[str]:
     return results
 
 
+# ====== 检索质量过滤常量 ======
+# 向量路最低余弦相似度：低于该值视为弱召回，不进入 RRF。
+VECTOR_MIN_SIMILARITY = 0.35
+# 关键词路/rerank 最低相关分：先保守取值，后续用 bad case 集标定。
+RERANK_MIN_SCORE = 0.25
+# 常见停用字/词：关键词路禁止“只命中这些字”的候选进入 RRF。
+_COMMON_STOPWORDS = {
+    "的", "了", "是", "人", "我", "你", "他", "她", "它", "我们", "你们", "他们",
+    "在", "有", "和", "与", "吗", "呢", "啊", "这", "那", "不", "也", "都",
+    "就", "要", "会", "上", "下", "中", "大", "小", "谁", "什么", "为什么",
+    "怎么", "如何", "哪些", "哪", "多少", "请", "问", "一下", "每个", "一个",
+}
+
+
+def _is_stopword_term(term: str) -> bool:
+    """判断一个检索词是否只由停用字/停用词构成。"""
+    if not term:
+        return True
+    normalized = term.strip()
+    if not normalized:
+        return True
+    return all(ch in _COMMON_STOPWORDS or ch in "？?，。！!、 " for ch in normalized)
+
+
 # ====== Reranker（qwen3-rerank，DashScope 原生接口）======
 
-def _rerank(query: str, documents: List[str], top_n: int = 10) -> Optional[List[int]]:
-    """对候选文档列表重排序，返回按相关性降序排列的原始索引列表。失败时返回 None。"""
+def _rerank(query: str, documents: List[str], top_n: int = 10):
+    """对候选文档列表重排序，返回按相关性降序排列的原始索引列表。
+
+    返回值约定：
+    - None：未执行重排（候选太少或 API 失败），调用方按原逻辑回退；
+    - []：已执行重排，但所有候选分数低于阈值，应视为无合格结果；
+    - [idx,...]：按相关分从高到低返回通过阈值的索引。
+    """
     if len(documents) <= top_n:
         return None  # 候选太少，无需重排
     # qwen3-rerank 不在 token-plan 新接口中，固定使用原 DashScope 原生接口 + 旧 Key。
@@ -197,8 +227,15 @@ def _rerank(query: str, documents: List[str], top_n: int = 10) -> Optional[List[
         if resp.status_code == 200:
             data = resp.json()
             results = data.get("output", {}).get("results", [])
-            if results:
-                return [r["index"] for r in results]
+            if not results:
+                return []
+            passed = []
+            for r in results:
+                score = r.get("relevance_score", r.get("score", None))
+                if score is not None and score < RERANK_MIN_SCORE:
+                    continue
+                passed.append(r["index"])
+            return passed
     except Exception as e:
         print(f"  [Reranker] 调用失败: {e}")
     return None
@@ -419,6 +456,12 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
             search_terms.append(tok)
     query_tokens = [t for t in cleaned.split() if len(t) >= 2]
 
+    # 过滤纯停用词/疑问词构成的检索词；没有有效内容词时关键词路直接返回空，
+    # 避免“的/人/是”这类常见字把大量无关结果送进 RRF。
+    search_terms = [t for t in search_terms if t and not _is_stopword_term(t)]
+    if not search_terms:
+        return []
+
 
     # --- 任务内容关键词搜索 ---
     quest_candidates = []
@@ -460,7 +503,16 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
     if quest_candidates:
         rerank_docs = [f"【{c[0]}】{c[2]}" for c in quest_candidates]
         reranked = _rerank(query, rerank_docs, top_n=min(top_k, len(quest_candidates)))
-        if reranked:
+        if reranked is None:
+            # 候选太少或 rerank 失败：按原逻辑取前 top_k
+            for c in quest_candidates[:top_k]:
+                results.append({
+                    "id": f"quest:{c[0]}:chunk:0",
+                    "collection": "kb_quests_keyword",
+                    "document": c[2],
+                    "category": c[1],
+                })
+        elif reranked:
             for idx in reranked:
                 c = quest_candidates[idx]
                 results.append({
@@ -469,14 +521,7 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
                     "document": c[2],
                     "category": c[1],
                 })
-        else:
-            for c in quest_candidates[:top_k]:
-                results.append({
-                    "id": f"quest:{c[0]}:chunk:0",
-                    "collection": "kb_quests_keyword",
-                    "document": c[2],
-                    "category": c[1],
-                })
+        # else: rerank 已执行但所有候选低于阈值，关键词路不输出弱结果
 
     # --- 世界观设定搜索 ---
     lore_path = os.path.join(CONTENT_DIR, "lore.json")
@@ -504,10 +549,12 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
             if lore_candidates:
                 rerank_docs = [f"【{c['title']}】{c['text']}" for c in lore_candidates]
                 reranked = _rerank(query, rerank_docs, top_n=min(5, len(lore_candidates)))
-                if reranked:
+                if reranked is None:
+                    ordered = lore_candidates[:5]
+                elif reranked:
                     ordered = [lore_candidates[i] for i in reranked]
                 else:
-                    ordered = lore_candidates[:5]
+                    ordered = []
                 for c in ordered:
                     text = c["text"]
                     # 长文档 snippet 定位：找到搜索词出现位置，从该位置截取窗口
@@ -607,7 +654,8 @@ def hybrid_search(query: str, top_k: int = 10) -> str:
     vec_docs = []
     if _vector_store is not None:
         vec_raw = _vector_store.search(query, top_k=max(top_k, 15), collection=None)
-        vec_docs = vec_raw
+        # 向量路质量过滤：低于最低相似度的弱召回直接丢弃，不进入 RRF。
+        vec_docs = [d for d in vec_raw if d.get("score", 0.0) >= VECTOR_MIN_SIMILARITY]
 
     # RRF 融合
     merged = _rrf_fusion(kw_docs, vec_docs, k=60)
