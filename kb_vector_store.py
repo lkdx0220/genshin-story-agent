@@ -45,7 +45,8 @@ VECTOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kb_vector
 
 # 集合名称
 # kb_quests_bm25 已剔除：实际BM25/关键词检索不读取该向量集合
-COLLECTIONS = ["kb_quests_vec", "kb_lore", "kb_books", "kb_characters", "kb_regions"]
+# kb_npcs 为 NPC 独立向量集合，与 kb_characters（角色知识库）分离
+COLLECTIONS = ["kb_quests_vec", "kb_lore", "kb_books", "kb_characters", "kb_npcs", "kb_regions"]
 
 # 嵌入批大小（API 限制每批最多 10 条）
 BATCH_SIZE = 10

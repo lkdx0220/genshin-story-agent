@@ -561,6 +561,48 @@ def index_characters(store: KBVectorStore):
     print(f"  角色索引完成: {len(角色知识库)} 条")
 
 
+def index_npcs(store: KBVectorStore):
+    """索引 NPC（npcs_processed.json）到独立向量集合 kb_npcs。"""
+    print("[建库] 索引 NPC...")
+    npcs_path = os.path.join(CONTENT_DIR, "npcs_processed.json")
+    if not os.path.exists(npcs_path):
+        print("  未找到 npcs_processed.json")
+        return
+    with open(npcs_path, "r", encoding="utf-8") as f:
+        npcs = json.load(f)
+
+    ids, docs, metas = [], [], []
+    total = 0
+    for name, npc in npcs.items():
+        doc = npc.get("doc_for_embed", "") if isinstance(npc, dict) else ""
+        if not doc or len(doc.strip()) < 20:
+            continue
+        ids.append(f"npc:{name}")
+        docs.append(doc)
+        metas.append({
+            "source_file": "npcs_processed.json",
+            "title": name,
+            "entry_type": "NPC",
+            "parent": "",
+            "version": npc.get("version", "") if isinstance(npc, dict) else "",
+            "chunk_index": 0,
+            "total_chunks": 1,
+            "text_preview": doc[:200],
+            "source": "npc",
+            "region": npc.get("region", "") if isinstance(npc, dict) else "",
+            "occupation": npc.get("occupation", "") if isinstance(npc, dict) else "",
+        })
+        total += 1
+        if len(ids) >= 100:
+            store.add("kb_npcs", ids, docs, metas)
+            print(f"  [NPC] 已写入 {total} 条...")
+            ids, docs, metas = [], [], []
+            time.sleep(3)
+    if ids:
+        store.add("kb_npcs", ids, docs, metas)
+    print(f"  NPC索引完成: {total} 条")
+
+
 def index_regions(store: KBVectorStore):
     """索引地区（genshin_knowledge_base 地区知识库）"""
     print("[建库] 索引地区...")
@@ -636,6 +678,7 @@ def _index_all(store: KBVectorStore):
     index_lore(store)
     index_books(store)
     index_characters(store)
+    index_npcs(store)
     index_regions(store)
 
     stats = store.get_stats()

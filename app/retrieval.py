@@ -261,6 +261,7 @@ _VEC_PREFIX_MAP = {
     "kb_lore": len("lore:"),
     "kb_books": len("book:"),
     "kb_characters": len("character:"),
+    "kb_npcs": len("npc:"),
     "kb_regions": len("region:"),
 }
 
