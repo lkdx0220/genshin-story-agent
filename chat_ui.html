@@ -818,6 +818,7 @@ async function sendMessage(){
     const decoder=new TextDecoder();
     let buffer='';
     let aiText='';
+    let streamRaw='';
     let finalToolCalls=[];
 
     while(true){
@@ -844,7 +845,26 @@ async function sendMessage(){
           }else if(event.type==='answer_start'){
             // 进入回答阶段，更新进度文字但不移除
             const pt=document.getElementById('progressText');
-            if(pt)pt.textContent='正在生成回答…';
+            if(pt)pt.textContent='正在组织语言…';
+          }else if(event.type==='answer_delta'){
+            // 流式回答：把增量追加到进度气泡中
+            const pb=document.getElementById('progressBubble');
+            if(pb){
+              let st=document.getElementById('streamText');
+              if(!st){
+                st=document.createElement('div');
+                st.id='streamText';
+                st.style.marginTop='6px';
+                st.style.fontSize='14px';
+                st.style.lineHeight='1.7';
+                pb.appendChild(st);
+                const pt=document.getElementById('progressText');
+                if(pt)pt.remove();
+              }
+              streamRaw += (event.delta||'');
+              st.innerHTML=renderMarkdown(streamRaw);
+              scrollBottom();
+            }
           }else if(event.type==='done'){
             aiText=event.answer||'';
             finalToolCalls=event.tool_calls||[];

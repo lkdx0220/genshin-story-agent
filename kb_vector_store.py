@@ -28,9 +28,9 @@ if getattr(sys, 'frozen', False):
     # exe 模式：从 exe 同目录读取外部 .env，避免把密钥打进成品。
     _ENV_PATH = os.path.join(os.path.dirname(sys.executable), '.env')
     if os.path.exists(_ENV_PATH):
-        load_dotenv(_ENV_PATH)
+        load_dotenv(_ENV_PATH, override=True)
 else:
-    load_dotenv()
+    load_dotenv(override=True)
 
 # text-embedding-v4 不在 token-plan 新接口中，固定使用原 DashScope + 旧 Key（若未配置则退回当前 Key）。
 QWEN_API_KEY = os.getenv("DASHSCOPE_FALLBACK_API_KEY") or os.getenv("DASHSCOPE_API_KEY") or ""

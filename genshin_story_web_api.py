@@ -581,10 +581,45 @@ def api_chat():
 
 
 if __name__ == '__main__':
-    print("\n" + "=" * 50)
+    import socket
+    import urllib.request
+
+    def _port_free(port: int) -> bool:
+        """检查 127.0.0.1 上端口是否空闲。"""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(("127.0.0.1", port)) != 0
+
+    def _pick_port() -> int:
+        """优先使用 5000；被本项目旧实例占用时先关闭旧实例，仍占用则找空闲端口。"""
+        if _port_free(5000):
+            return 5000
+
+        print("[启动] 检测到 5000 端口被旧实例占用，尝试关闭旧实例...")
+        try:
+            urllib.request.urlopen("http://127.0.0.1:5000/api/shutdown", timeout=2)
+        except Exception:
+            # /api/shutdown 正常响应前就会退出进程，没有响应体是正常的
+            pass
+
+        for _ in range(5):
+            time.sleep(1)
+            if _port_free(5000):
+                print("[启动] 旧实例已关闭，继续使用端口 5000")
+                return 5000
+
+        print("[启动] 端口 5000 仍被占用（可能不是本项目服务），自动寻找空闲端口...")
+        for port in range(5001, 5051):
+            if _port_free(port):
+                print(f"[启动] 使用空闲端口 {port}")
+                return port
+        raise SystemExit("找不到可用端口，请先释放 5000 附近端口")
+
+    port = _pick_port()
+    print()
+    print("=" * 50)
     print("  原神剧情助手 Web API")
     print("=" * 50)
-    print("  地址: http://localhost:5000")
+    print(f"  地址: http://localhost:{port}")
     print("  接口: /api/character /api/region /api/story /api/chat 等")
     print("=" * 50)
-    app.run(host='0.0.0.0', port=5000, debug=os.getenv("FLASK_DEBUG", "0") == "1")
+    app.run(host='127.0.0.1', port=port, debug=os.getenv("FLASK_DEBUG", "0") == "1")

@@ -23,7 +23,7 @@ from app.tools.list import (
 )
 from app.tools.search import (
     search_activity, find_first_mention,
-    search_all, search_lore,  # search_all 已注册为正式工具；search_lore 仍为内部辅助函数
+    search_all, search_lore, search_world,  # search_world 为碰壁后补充工具，初始不暴露
 )
 from app.tools.content import (
     load_book_content, load_quest_content,
@@ -37,7 +37,7 @@ tools = [
     list_characters_by_element, list_characters_by_region, list_characters_by_weapon, list_characters_by_rarity,
     list_all_quest_series,
     list_all_books, list_all_lore_entries, list_all_weapons_and_artifacts, list_all_game_items,
-    search_activity, search_all,
+    search_activity, search_all, search_world,
     load_book_content, load_quest_content, get_book_metadata,
     count_character_lines, find_first_mention,
     query_monster, query_artifact, query_material, query_collectible, list_collectibles_by_region, query_recipe,
