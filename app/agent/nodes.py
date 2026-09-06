@@ -15,6 +15,7 @@ from app.config import (
 )
 from app.llm import (
     llm, plan_llm, plan_llm_l2, assess_llm, llm_invoke_with_retry, _select_answer_llm,
+    answer_llm_medium,
 )
 from app.schema import (
     GenshinAdvisorState,
@@ -23,6 +24,19 @@ from app.schema import (
 from app.progress import _emit_progress, _cancel_events
 from app.trace_recorder import emit as trace_emit
 from app.tools import tools_by_name as _tools_by_name
+from app.tools.search import search_world
+
+# search_world 是“搜索碰壁后”才暴露的补充工具，不能进入初始工具集。
+_HIDDEN_TOOL_NAMES = {"search_world"}
+
+
+def _get_initial_tools():
+    """返回初始可暴露给 LLM 的工具列表（排除隐藏的碰壁后工具）。"""
+    return [
+        t for t in _tools_by_name.values()
+        if getattr(t, "name", "") not in _HIDDEN_TOOL_NAMES
+    ]
+
 from app.tools.query import find_similar_quest_names
 from app.retrieval import _sanitize_query, _is_compound_hit, _judge_alias_sandbox_batch, TITLE_REGISTRY
 from app.data import (
@@ -308,7 +322,7 @@ def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 首轮：构建消息
     if not messages:
         # 使用全部工具
-        all_tools = list(_tools_by_name.values())
+        all_tools = _get_initial_tools()
         current_llm_with_tools = plan_llm.bind_tools(all_tools)
 
         system_content = AGENT_SYSTEM_PROMPT_FAST
@@ -332,12 +346,12 @@ def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         messages.append(HumanMessage(content=original_query))
     else:
         # 后续轮次：延用全部工具
-        all_tools = list(_tools_by_name.values())
+        all_tools = _get_initial_tools()
         current_llm_with_tools = plan_llm.bind_tools(all_tools)
 
     # ---- 代码短路：元数据工具确定性直答 ----
     # 如果本轮只调用了结构化元数据工具，直接复述工具结果，不经过回答 LLM。
-    direct_answer = _get_direct_metadata_answer(messages)
+    direct_answer = _get_direct_metadata_answer(messages, original_query)
     if direct_answer:
         print("  -> [代码短路] 元数据直答路径，跳过 LLM")
         return {
@@ -516,6 +530,41 @@ def _parse_plan_json_tool_calls(content: str, allowed_tool_names: set) -> List[D
     return _normalize_json_tool_calls(_extract_json_tool_calls(content), allowed_tool_names)
 
 
+# ====== 搜索碰壁后补充暴露世界/组织检索工具 ======
+# search_all 不覆盖 lore.json 和 NPC 所属组织；当普通搜索未命中时，
+# 才把 search_world 追加到后续 Plan 轮次的工具集中，初始不暴露。
+
+def _is_search_dead_end(messages) -> bool:
+    """判断本轮对话中是否已有搜索类工具返回未命中。
+
+    不只看最后一条：即使后续有成功的旁路搜索，只要核心名称此前碰壁，
+    也应把 search_world 暴露给 Planner 作为补充检索手段。
+    """
+    if not messages:
+        return False
+    name_by_call_id = _build_tool_name_by_call_id(messages)
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        name = _tool_name_of(msg, name_by_call_id)
+        if name not in ("search_all", "hybrid_search", "search_activity", "query_quest", "load_quest_content"):
+            continue
+        if _is_not_found(msg):
+            return True
+    return False
+
+
+def _maybe_add_dead_end_search_world(messages, routed_tools):
+    """搜索碰壁时把 search_world 追加到工具集；否则保持原工具集。"""
+    if not _is_search_dead_end(messages):
+        return routed_tools
+    names = {getattr(t, "name", str(t)) for t in routed_tools}
+    if getattr(search_world, "name", None) in names:
+        return routed_tools
+    print("  -> [search_world] 搜索碰壁，追加 search_world")
+    return list(routed_tools) + [search_world]
+
+
 # ====== 统一 Agent 循环（L2 路径）======
 
 def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
@@ -606,9 +655,22 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     else:
         # 后续轮次：延用已有的 intent 和工具集
         intent_labels = state.get("intent_labels", [])
-        routed_tools = list(_tools_by_name.values())
+        routed_tools = _get_initial_tools()
         if intent_labels:
             routed_tools = get_tools_for_intent(intent_labels, _tools_by_name)
+        # 搜索碰壁后补充暴露 search_world（lore/NPC组织），初始不暴露。
+        had_search_world = any(
+            getattr(t, "name", "") == "search_world" for t in routed_tools
+        )
+        routed_tools = _maybe_add_dead_end_search_world(messages, routed_tools)
+        if not had_search_world and any(
+            getattr(t, "name", "") == "search_world" for t in routed_tools
+        ):
+            messages.append(SystemMessage(content=(
+                "系统提示：常规搜索（search_all/hybrid_search）已碰壁。"
+                "现已补充工具 search_world，可搜索世界观设定、组织/NPC背景（如至冬组织名、lore.json 条目）。"
+                "若目标名称可能属于此类数据，请调用 search_world 继续检索。"
+            )))
         current_llm_with_tools = plan_llm_l2.bind_tools(routed_tools)
 
     # 任务未命中后的确定性恢复：在让 LLM 自由选择下一步之前，先走 search_all → 相似名纠错。
@@ -1473,6 +1535,45 @@ def _get_pure_alias_identity_matches(state: GenshinAdvisorState) -> List[Tuple[s
     return kept
 
 
+# ====== 是否需要综合叙述（而不是元数据直答）======
+# 元数据直答只适合“几星/神之眼/命座/版本”这类单点事实；
+# “介绍一下/讲讲/性格/经历/什么样”需要 Answer LLM 综合工具结果生成自然回答。
+
+_SYNTHESIS_MARKERS = (
+    "介绍", "介绍下", "讲讲", "说说", "描述",
+    "人物故事", "角色故事", "人物经历", "角色经历",
+    "性格", "为人", "什么样", "怎么样", "是个什么样的人",
+    "角色是什么", "角色是谁", "是什么角色",
+    "这个角色是什么", "这个角色是谁", "什么样的角色",
+    "是谁", "指谁", "是什么人", "什么人物", "是哪位", "哪位",
+    "人物简介", "角色简介", "小传", "身份", "背景",
+    "详述", "概括", "讲了什么", "讲什么",
+)
+
+# 只有用户明确要求“贴原始数据”时，才允许把元数据工具的完整结果直接当作答案；
+# 否则一律走 Answer LLM 综合叙述，避免把角色详情/元数据卡原样糊到用户脸上。
+_RAW_METADATA_REQUEST_MARKERS = (
+    "详情", "详细", "资料", "数据", "角色卡", "人物卡",
+    "原始", "全部", "所有", "完整", "贴出来", "列出来", "列出",
+)
+
+
+def _should_synthesize_answer(original_query: str) -> bool:
+    """判断用户问题是否需要综合叙述，而不是直接复述元数据工具结果。"""
+    query = (original_query or "").strip()
+    if not query:
+        return False
+    return any(marker in query for marker in _SYNTHESIS_MARKERS)
+
+
+def _should_return_raw_metadata(original_query: str) -> bool:
+    """是否允许把元数据工具的原始完整结果直接返回。"""
+    query = (original_query or "").strip()
+    if not query:
+        return False
+    return any(marker in query for marker in _RAW_METADATA_REQUEST_MARKERS)
+
+
 # ====== 元数据工具确定性直答 ======
 # 这些工具返回的是结构化元数据，本身已足够回答用户问题。
 # 如果本轮只调用了这些工具，就不再让回答 LLM 自由生成，直接从工具结果拼接答案，
@@ -1491,12 +1592,19 @@ DIRECT_ANSWER_TOOLS = {
 }
 
 
-def _get_direct_metadata_answer(messages: list) -> str | None:
+def _get_direct_metadata_answer(messages: list, original_query: str = "") -> str | None:
     """如果当前只发生了元数据类工具调用，直接返回其原始结果。
 
     返回 None 表示不适用（存在非元数据工具、或没有任何工具消息）。
     返回字符串时，调用方应跳过回答 LLM，直接将字符串作为 final_response。
     """
+    # 默认不允许把完整元数据卡直接当答案；只有用户明确要求“详情/资料/原始数据”才返回。
+    # 介绍类、是谁类、背景类问题统一交给 Answer LLM 综合叙述。
+    if _should_synthesize_answer(original_query):
+        return None
+    if not _should_return_raw_metadata(original_query):
+        return None
+
     tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
     if not tool_messages:
         return None
@@ -1603,6 +1711,10 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     alias_notes = state.get("alias_notes", "")
     intent_labels = state.get("intent_labels", [])
     answer_llm = _select_answer_llm(intent_labels)
+    # “介绍/讲讲/性格/经历”等综合叙述题，改用 medium 模型，避免轻量模型偶发误判未收录。
+    if _should_synthesize_answer(original_query):
+        answer_llm = answer_llm_medium
+        print("  -> [综合叙述] 使用 medium Answer LLM")
     print(f"  [AnswerLLM] 意图={intent_labels} → {answer_llm.model_name}, thinking={answer_llm.model_kwargs.get('reasoning_effort', 'none')}, max_tokens={answer_llm.max_tokens}")
 
     # 前置拦截：plan_agent / tool_executor 已产生中断消息，跳过 LLM 调用
@@ -1726,7 +1838,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # ---- 代码短路：元数据工具确定性直答 ----
     # 如果本轮只调用了结构化元数据工具，直接复述工具结果，不经过回答 LLM，
     # 防止模型在“作者未提及”之外联想稻妻/雷神/白狐等不存在的信息。
-    direct_answer = _get_direct_metadata_answer(messages)
+    direct_answer = _get_direct_metadata_answer(messages, original_query)
     if direct_answer:
         print("  -> [代码短路] 元数据直答路径，跳过 LLM")
         return {"final_response": direct_answer, "messages": messages}
@@ -1776,18 +1888,36 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             answer_messages.append(msg)
 
     trace_emit("llm_start", {"role": "answer", "run_id": state.get("run_id"), "model": getattr(answer_llm, "model_name", None)})
+    # 流式生成：逐 chunk 推送给前端；失败则回退非流式。
+    content_parts = []
+    stream_error = None
     try:
-        response = llm_invoke_with_retry(answer_messages, llm_instance=answer_llm)
+        for chunk in answer_llm.stream(answer_messages):
+            if isinstance(chunk, str):
+                delta = chunk
+            else:
+                delta = getattr(chunk, "content", "") or ""
+            if delta:
+                content_parts.append(delta)
+                _emit_progress("answer_delta", {"delta": delta})
     except Exception as e:
-        response = AIMessage(content=f"抱歉，处理出错：{e}")
-    trace_emit("llm_end", {"role": "answer", "run_id": state.get("run_id"), "status": "success", "final_response_len": len(response.content or '')})
+        print(f"  -> [流式] 流式生成失败，回退非流式: {e}")
+        stream_error = e
 
-    content = response.content if hasattr(response, 'content') else ''
+    if stream_error is not None or not content_parts:
+        try:
+            response = llm_invoke_with_retry(answer_messages, llm_instance=answer_llm)
+            content = response.content if hasattr(response, 'content') else ''
+        except Exception as e:
+            content = f"抱歉，处理出错：{e}"
+        # 兜底：如果 LLM 返回空内容（reasoning 耗尽 token 预算），根据工具返回结果拼凑回答
+        if not content or not content.strip():
+            content = _build_fallback_answer(messages, original_query)
+            print("  -> [空回复兜底] LLM 返回空，使用兜底方案")
+    else:
+        content = "".join(content_parts)
 
-    # 兜底：如果 LLM 返回空内容（reasoning 耗尽 token 预算），根据工具返回结果拼凑回答
-    if not content or not content.strip():
-        content = _build_fallback_answer(messages, original_query)
-        print("  -> [空回复兜底] LLM 返回空，使用兜底方案")
+    trace_emit("llm_end", {"role": "answer", "run_id": state.get("run_id"), "status": "success", "final_response_len": len(content)})
 
     trace_emit("answer_end", {
         "response_mode": response_mode,

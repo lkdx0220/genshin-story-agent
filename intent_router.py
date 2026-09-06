@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from app.config import QWEN_API_KEY, QWEN_BASE_URL
 from app.llm import QwenFallbackChatOpenAI
 
-load_dotenv()
+load_dotenv(override=True)
 
 # ====== 路由器模型（轻量级，不需要强模型） ======
 # 新 token-plan 接口不支持 qwen-plus，默认用 qwen3.7-plus 做路由；

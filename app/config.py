@@ -16,9 +16,9 @@ if getattr(sys, 'frozen', False):
     # exe 模式：从 exe 同目录读取外部 .env，避免把密钥打进成品。
     _ENV_PATH = os.path.join(os.path.dirname(sys.executable), '.env')
     if os.path.exists(_ENV_PATH):
-        load_dotenv(_ENV_PATH)
+        load_dotenv(_ENV_PATH, override=True)
 else:
-    load_dotenv()
+    load_dotenv(override=True)
 
 # ====== HuggingFace 镜像（避免 sentence-transformers 联网）======
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")

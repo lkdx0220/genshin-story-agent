@@ -84,6 +84,25 @@ class QwenFallbackChatOpenAI(ChatOpenAI):
                 return self._fallback_client.invoke(*args, **kwargs)
             raise
 
+    def stream(self, *args, **kwargs):
+        """流式调用同样走主/备自动切换，保证主 Key 失效时流式不因 401 而退化。
+
+        stream() 返回迭代器，实际报错发生在迭代过程中，因此用生成器包装，
+        在主接口抛错时切到备用接口重新流式。
+        """
+        if _QWEN_FALLBACK_ACTIVE:
+            yield from self._fallback_client.stream(*args, **kwargs)
+            return
+        try:
+            yield from self._primary_client.stream(*args, **kwargs)
+        except Exception as e:
+            if self._fallback_api_key and self._fallback_api_key != self._primary_api_key:
+                print(f"  [QwenFallback] 流式主 Key/接口调用失败，切换备用 DashScope: {e}")
+                self._switch_to_fallback()
+                yield from self._fallback_client.stream(*args, **kwargs)
+            else:
+                raise
+
 
 
 # ====== 通用 LLM（默认）======

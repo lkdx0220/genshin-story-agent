@@ -12,7 +12,7 @@ from langchain_core.tools import tool
 from app.config import CONTENT_DIR
 from app.data import (
     角色知识库, 地区知识库, 主线剧情知识库, 武器知识库, 任务知识库,
-    圣遗物知识库, _match_all_in, _load_content_json, _normalize_for_match,
+    圣遗物知识库, _npcs_data, _match_all_in, _load_content_json, _normalize_for_match,
 )
 from app.formatters import (
     _format_role_info, _format_region_info, _format_story_info,
@@ -369,3 +369,190 @@ def search_lore(keyword: str) -> str:
     for c in ordered:
         lines.append(f"\n【{c['title']}】（{c['source']}）\n  {c['text']}")
     return "\n".join(lines)
+
+
+
+
+def _search_lore_snippets(keyword: str, max_candidates: int = 5, snippet_chars: int = 400) -> str:
+    """轻量世界观搜索：只返回命中条目标题与关键片段，避免把整段 lore 灌给 LLM。"""
+    lore_path = os.path.join(CONTENT_DIR, "lore.json")
+    if not os.path.exists(lore_path):
+        return "世界观设定数据(lore.json)尚未构建。"
+    try:
+        with open(lore_path, "r", encoding="utf-8") as f:
+            lore = json.load(f)
+    except Exception:
+        return "世界观设定数据读取失败。"
+    if not lore:
+        return "世界观设定数据为空。"
+
+    search_terms = [keyword]
+    if len(keyword) >= 3:
+        search_terms.append(keyword[:-1])
+    if len(keyword) >= 4:
+        search_terms.append(keyword[:-2])
+
+    candidates = []
+    seen = set()
+    for term in search_terms:
+        for entry in lore:
+            if term in entry["text"]:
+                key = entry["title"] + entry["text"][:40]
+                if key not in seen:
+                    seen.add(key)
+                    candidates.append((entry, term))
+                if len(candidates) >= max_candidates * 2:
+                    break
+        if len(candidates) >= max_candidates * 2:
+            break
+
+    if not candidates:
+        return f"在世界观设定中未找到与「{keyword}」相关的内容。"
+
+    lines = [f"===== 世界观设定「{keyword}」({len(candidates)}条候选) ====="]
+    for entry, term in candidates[:max_candidates]:
+        text = entry["text"]
+        idx = text.find(term)
+        if idx < 0:
+            idx = 0
+        start = max(0, idx - snippet_chars // 2)
+        end = min(len(text), idx + len(term) + snippet_chars // 2)
+        snippet = text[start:end].replace(chr(10), " ")
+        lines.append(f"【{entry['title']}】（{entry.get('source', '')}）")
+        lines.append(f"  ...{snippet}...")
+        lines.append("")
+    return chr(10).join(lines)
+
+
+
+def _snippet_around(text: str, keyword: str, width: int = 300) -> str:
+    """返回 keyword 在 text 中命中的前后片段，用于武器/圣遗物/书籍等长文本。"""
+    idx = text.find(keyword)
+    if idx < 0:
+        idx = 0
+    start = max(0, idx - width // 2)
+    end = min(len(text), idx + len(keyword) + width // 2)
+    snippet = text[start:end].replace(chr(10), " ")
+    return f"...{snippet}..."
+
+
+# ====== 世界/组织背景补充检索工具（不在初始工具集中，搜索碰壁后才暴露） ======
+@tool
+def search_world(query: str) -> str:
+    """搜索世界观设定与组织/NPC背景（lore.json + NPC所属组织）。
+
+    这是 search_all 的补充工具：search_all 不覆盖 lore.json 和 NPC 所属组织字段，
+    当普通全局搜索碰壁时再暴露给 Planner 使用。
+    """
+    results = []
+
+    # 1) lore.json 世界观设定（只用关键片段，避免长文本塞满上下文）
+    lore_text = _search_lore_snippets(query)
+    if not lore_text.startswith("在世界观设定中未找到"):
+        results.append(lore_text)
+
+    # 2) 武器故事 / 圣遗物故事 / 书籍正文（卢契烬等组织名常出现在这些长文本里）
+    for wpn in 武器知识库:
+        if not isinstance(wpn, dict):
+            continue
+        weapon_hay = " ".join([
+            str(wpn.get("武器名称", "")),
+            str(wpn.get("简介", "")),
+            str(wpn.get("武器故事", "")),
+        ])
+        if query in weapon_hay:
+            story = str(wpn.get("武器故事", ""))
+            results.append(
+                "【武器】" + str(wpn.get("武器名称", "")) + chr(10)
+                + _snippet_around(story, query, 400)
+            )
+
+    for art in 圣遗物知识库:
+        if not isinstance(art, dict):
+            continue
+        art_hay = str(art.get("圣遗物名称", ""))
+        stories = art.get("部位故事", {})
+        if isinstance(stories, dict):
+            for key, val in stories.items():
+                if query in str(val):
+                    results.append(
+                        "【圣遗物】" + str(art.get("圣遗物名称", "")) + " · " + str(key) + chr(10)
+                        + _snippet_around(str(val), query, 400)
+                    )
+
+    for book in _load_content_json("books"):
+        if not isinstance(book, dict):
+            continue
+        book_hay = " ".join([
+            str(book.get("title", "")),
+            str(book.get("text", "")),
+        ])
+        if query in book_hay:
+            results.append(
+                "【书籍】" + str(book.get("title", "")) + chr(10)
+                + _snippet_around(str(book.get("text", "")), query, 400)
+            )
+
+    # 3) NPC / 组织字段
+    def _npc_formatted(name, npc):
+        if not isinstance(npc, dict):
+            return None
+        org = npc.get("org") or npc.get("所属组织") or npc.get("org_race") or ""
+        race = npc.get("race") or npc.get("种族") or ""
+        occupation = npc.get("occupation") or npc.get("职业") or ""
+        region = npc.get("region") or npc.get("所在国家") or ""
+        lines = [f"【{name}】"]
+        if org:
+            lines.append(f"所属组织: {org}")
+        if race:
+            lines.append(f"种族: {race}")
+        if occupation:
+            lines.append(f"职业: {occupation}")
+        if region:
+            lines.append(f"地区: {region}")
+        return chr(10).join(lines)
+
+    npc_hits = []
+    # 3) npcs_processed.json（已加载到 _npcs_data）
+    for name, npc in _npcs_data.items():
+        text = " ".join([
+            str(name),
+            str(npc.get("org", "")) if isinstance(npc, dict) else "",
+            str(npc.get("所属组织", "")) if isinstance(npc, dict) else "",
+            str(npc.get("org_race", "")) if isinstance(npc, dict) else "",
+            str(npc.get("职业", "")) if isinstance(npc, dict) else "",
+            str(npc.get("occupation", "")) if isinstance(npc, dict) else "",
+        ])
+        if query in text:
+            fmt = _npc_formatted(name, npc)
+            if fmt:
+                npc_hits.append(fmt)
+
+    # 4) npcs_wiki_details.json（含更完整的 org_race）
+    wiki_path = os.path.join(CONTENT_DIR, "npcs_wiki_details.json")
+    if os.path.exists(wiki_path):
+        try:
+            with open(wiki_path, "r", encoding="utf-8") as f:
+                wiki_npcs = json.load(f)
+        except Exception:
+            wiki_npcs = {}
+        if isinstance(wiki_npcs, dict):
+            for name, npc in wiki_npcs.items():
+                text = " ".join([
+                    str(name),
+                    str(npc.get("org_race", "")) if isinstance(npc, dict) else "",
+                    str(npc.get("origin", "")) if isinstance(npc, dict) else "",
+                    str(npc.get("region", "")) if isinstance(npc, dict) else "",
+                ])
+                if query in text:
+                    fmt = _npc_formatted(name, npc)
+                    if fmt and fmt not in npc_hits:
+                        npc_hits.append(fmt)
+
+    if npc_hits:
+        results.append("相关组织/NPC：" + chr(10) + chr(10).join(npc_hits[:20]))
+
+    if not results:
+        return f"在世界观设定与组织/NPC数据中未找到与「{query}」相关的内容。"
+    return chr(10).join(results)
+
