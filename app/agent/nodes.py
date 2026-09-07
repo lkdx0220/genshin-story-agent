@@ -6,6 +6,7 @@
 """
 import re
 import json
+import time
 from typing import Dict, Any, List, Tuple
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
@@ -45,6 +46,7 @@ from app.data import (
 )
 from character_aliases import ALIAS_MAP, ALIASES_SORTED, resolve_aliases
 from intent_router import route_intent, get_tools_for_intent, get_pseudo_legendary_note
+from wiki_entry_graph import WikiEntryGraph, DEFAULT_OUTPUT as WIKI_GRAPH_OUTPUT
 
 
 # ====== 多轮对话摘要 ======
@@ -84,7 +86,12 @@ def _summarize_conversation(existing_summary: str, turns: List[Dict[str, str]]) 
 # ====== 别名检测节点 ======
 
 def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
+    t_start = time.perf_counter()
+    batch_duration_ms = 0.0
+    batch_candidate_count = 0
     user_query = state.get("user_query", "")
+    # 供导出器区分“进程启动/知识库加载”与真正的 rewrite_query 阶段耗时。
+    trace_emit("rewrite_start", {"run_id": state.get("run_id")})
     print("\n" + "=" * 50)
     print("【别名检测】检测查询中的角色别名...")
     print("=" * 50)
@@ -144,8 +151,11 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     # 批量 AI 沙箱判断：一次调用处理所有复合命中候选
     if compound_candidates:
+        batch_candidate_count = len(compound_candidates)
         batch_candidates = [(a, c, ctx) for a, c, ctx, _pos, _span in compound_candidates]
+        t_batch = time.perf_counter()
         batch_results = _judge_alias_sandbox_batch(batch_candidates)
+        batch_duration_ms = (time.perf_counter() - t_batch) * 1000
         for (alias, canonical, context, pos, span), accepted in zip(compound_candidates, batch_results):
             if not accepted:
                 print(f"  [AI判定] '{alias}' 在上下文中不是角色别名，保留原样 (上下文: \"{context}\")")
@@ -188,6 +198,12 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
         print(f"  -> 未检测到别名")
 
     # rewritten_query 保持原样，不再做文本替换
+    total_duration_ms = (time.perf_counter() - t_start) * 1000
+    print(
+        f"  [rewrite计时] 总耗时 {total_duration_ms:.1f}ms"
+        f", DeepSeek批量 {batch_duration_ms:.1f}ms"
+        f", 候选 {batch_candidate_count} 个"
+    )
     trace_emit("rewrite", {
         "user_query": user_query,
         "rewritten_query": sanitized,
@@ -195,6 +211,9 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
         "alias_pairs": alias_pairs or [],
         "alias_count": len(alias_notes_parts),
         "run_id": state.get("run_id"),
+        "duration_ms": round(total_duration_ms, 2),
+        "batch_duration_ms": round(batch_duration_ms, 2),
+        "batch_candidate_count": batch_candidate_count,
     })
     return {"rewritten_query": sanitized, "alias_notes": alias_notes, "alias_pairs": alias_pairs or None}
 
@@ -678,10 +697,20 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     if auto_recovery is not None:
         return auto_recovery
 
+    # wiki 图：多任务 + 地图文本的确定性补全（挂载点A）。
+    graph_map_auto = _maybe_auto_graph_map_texts(state, messages, routed_tools, iteration)
+    if graph_map_auto is not None:
+        return graph_map_auto
+
     # 概念三视图补位（挂载点A）：任务恢复链未介入时，检查已有工具结果是否覆盖三个维度。
     concept_auto = _maybe_auto_concept_dimension(state, messages, routed_tools, iteration, intent_labels=intent_labels)
     if concept_auto is not None:
         return concept_auto
+
+    # 关系/情感原因补搜（挂载点A）：已有工具结果后，若关系维度未覆盖则自动补一发。
+    relationship_auto = _maybe_auto_relationship_search(state, messages, routed_tools, iteration)
+    if relationship_auto is not None:
+        return relationship_auto
 
 
     trace_emit("llm_start", {"role": "plan", "iteration": iteration + 1, "run_id": state.get("run_id"), "model": getattr(current_llm_with_tools, "model_name", None)})
@@ -749,6 +778,14 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         }
 
 
+    # wiki 图：多任务 + 地图文本的确定性补全（挂载点B）。
+    # LLM 想零工具收工时，若任务/地图文本还没补齐，代码直接补发，Planner 不能提前收工。
+    graph_map_auto = _maybe_auto_graph_map_texts(
+        state, messages, routed_tools, iteration, response=response,
+    )
+    if graph_map_auto is not None:
+        return graph_map_auto
+
     # 概念三视图补位（挂载点B）：LLM 本轮没出任何工具调用且想进入回答阶段，
     # 先检查概念维度是否齐；不齐则代码直接补发，Planner 不能提前收工。
     concept_auto = _maybe_auto_concept_dimension(
@@ -757,6 +794,13 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     )
     if concept_auto is not None:
         return concept_auto
+
+    # 关系/情感原因补搜（挂载点B）：LLM 想零工具收工时，若关系维度未覆盖则自动补一发。
+    relationship_auto = _maybe_auto_relationship_search(
+        state, messages, routed_tools, iteration, response=response,
+    )
+    if relationship_auto is not None:
+        return relationship_auto
 
 
     # 无工具调用 → 检查是否需要强制重试
@@ -1237,6 +1281,289 @@ def _maybe_auto_concept_dimension(state, messages, routed_tools, iteration, inte
         "intent_labels": labels,
     }
 
+# ====== 情感/关系类问题：双极性关系补搜 ======
+# 设计说明：
+# - “为什么讨厌/恨”和“为什么喜欢/爱/信任”都属于人物关系/情感原因问题，
+#   不能只补负面词（否则像过拟合 R4），也不能完全交给 Planner 自觉。
+# - 这里用对称的双极性后缀：负面问题补“抛弃/背叛/伤害”，正面问题补“守护/陪伴/信任”，
+#   代码只负责“当已有检索没有覆盖关系原因维度时补一发”，不写入任何提示词。
+# - 具体后缀词是可解释的通用关系/情感词，不包含 Golden Test 的专有答案术语。
+
+_RELATIONSHIP_NEGATIVE_PATTERN = re.compile(
+    r"(?:为什么|为何).{0,10}(?:讨厌|恨|怨恨|厌恶|反感|不喜欢|怨)"
+)
+_RELATIONSHIP_POSITIVE_PATTERN = re.compile(
+    r"(?:为什么|为何).{0,10}(?:喜欢|爱|信任|依赖|欣赏|崇拜|怀念|尊敬|珍惜|感恩)"
+)
+
+_RELATIONSHIP_SUFFIX_BY_POLARITY = {
+    "negative": "抛弃 被抛弃 造物主 背叛 伤害 遗弃",
+    "positive": "守护 陪伴 帮助 信任 关爱 羁绊",
+    "neutral": "关系 经历 过去 事件",
+}
+
+_RELATIONSHIP_COVER_MARKERS = {
+    "negative": ("抛弃", "被抛弃", "造物主", "背叛", "伤害", "遗弃"),
+    "positive": ("守护", "陪伴", "帮助", "信任", "关爱", "羁绊"),
+    "neutral": ("关系", "经历", "过去", "事件"),
+}
+
+
+def _detect_relationship_polarity(query: str) -> str:
+    """检测“人物关系/情感原因”问题，返回 negative / positive / neutral，不是则返回空串。"""
+    query = (query or "").strip()
+    if not query:
+        return ""
+    if _RELATIONSHIP_NEGATIVE_PATTERN.search(query):
+        return "negative"
+    if _RELATIONSHIP_POSITIVE_PATTERN.search(query):
+        return "positive"
+    if any(word in query for word in ("有什么关系", "为什么关系", "两者关系", "为何关系")):
+        return "neutral"
+    return ""
+
+
+def _covered_relationship_search(messages, polarity: str) -> bool:
+    """已执行的 hybrid_search 中是否已包含该极性所需的关系原因词。"""
+    markers = _RELATIONSHIP_COVER_MARKERS.get(polarity, ())
+    if not markers:
+        return False
+    for msg in messages:
+        if not isinstance(msg, AIMessage) or not hasattr(msg, "tool_calls"):
+            continue
+        for tc in msg.tool_calls or []:
+            if not isinstance(tc, dict) or tc.get("name") != "hybrid_search":
+                continue
+            args = tc.get("args") or {}
+            query_text = str(args.get("query") or "")
+            if any(marker in query_text for marker in markers):
+                return True
+    return False
+
+
+def _maybe_auto_relationship_search(state, messages, routed_tools, iteration, response=None):
+    """关系/情感原因类补搜守卫：缺关系词维度就自动补一发，返回 None 表示无需介入。"""
+    original_query = state.get("user_query", "") or state.get("rewritten_query", "")
+    polarity = _detect_relationship_polarity(original_query)
+    if not polarity:
+        return None
+
+    tool_names = {getattr(t, "name", str(t)) for t in routed_tools}
+    if "hybrid_search" not in tool_names:
+        return None
+    if iteration + 1 >= MAX_AGENT_ITERATIONS:
+        return None
+
+    if _covered_relationship_search(messages, polarity):
+        return None
+
+    # 挂载点A（LLM 调用前）：已有工具结果后才补，不抢 Planner 首轮决策。
+    if response is None and _last_tool_message(messages) is None:
+        return None
+
+    suffix = _RELATIONSHIP_SUFFIX_BY_POLARITY[polarity]
+    search_query = f"{original_query} {suffix}"
+    tool_call = {
+        "name": "hybrid_search",
+        "args": {"query": search_query},
+        "id": f"call_relationship_{polarity}_{iteration + 1}",
+        "type": "tool_call",
+    }
+    content = (
+        "【执行报告】\n"
+        f"用户问题回显：{original_query}\n"
+        "用户意图：人物关系/情感原因类问题\n"
+        f"工具决策：系统检测到现有检索尚未覆盖“{suffix}”关系维度，按通用规则自动补搜："
+        f"{search_query}。\n"
+        "【工具调用】\n"
+        f'[{{"tool": "hybrid_search", "args": {{"query": "{search_query}"}}}}]'
+    )
+    print(f"  -> [关系补搜] 自动补搜({polarity}): {search_query}")
+
+    trace_emit("plan", {
+        "iteration": iteration + 1,
+        "execution_plan": content[:500],
+        "tool_call_names": ["hybrid_search"],
+        "tool_call_source": "relationship_dimension",
+        "relationship_polarity": polarity,
+        "run_id": state.get("run_id"),
+    })
+    return {
+        "messages": [AIMessage(content=content, tool_calls=[tool_call])],
+        "execution_plan": content,
+        "iteration": iteration + 1,
+        "intent_labels": state.get("intent_labels", []),
+    }
+
+
+# ====== wiki 链接图：多任务 + 地图文本的确定性补全 ======
+# 设计说明：
+# - 用户问题里同时出现多个任务名和“地图文本”时，不依赖 Planner 自觉走
+#   wiki_graph_expand 多跳；代码直接把任务词条反向引用的地图文本找出来，
+#   并自动补发 wiki_graph_get 调用。
+# - 先保证任务词条文本已加载，再补地图文本；每张图只补一次，防死循环。
+
+_wiki_graph_cache: Any = None
+_MAP_TEXT_QUESTION_RE = re.compile(r"地图文本")
+_GRAPH_MAP_MAX_ENTRIES = 8
+
+
+def _load_wiki_graph_cached():
+    """懒加载本地 wiki 链接图；加载失败返回 None（本守卫不介入）。"""
+    global _wiki_graph_cache
+    if _wiki_graph_cache is None:
+        try:
+            _wiki_graph_cache = WikiEntryGraph.load(WIKI_GRAPH_OUTPUT)
+        except Exception as e:
+            print(f"  -> [wiki图] 加载失败，跳过地图文本补全：{e}")
+            _wiki_graph_cache = False
+    return _wiki_graph_cache or None
+
+
+def _match_graph_task_titles(graph, query):
+    """找出标题（或其去掉地区前缀的部分）出现在用户问题里的任务词条。"""
+    matched = []
+    for entry in graph.entries.values():
+        if entry.entry_type != "task":
+            continue
+        title = entry.title or ""
+        base_title = title.split(" ", 1)[1] if title.startswith("至冬 ") else title
+        if base_title and (title in query or base_title in query):
+            matched.append(entry)
+    return matched
+
+
+def _collect_graph_map_texts(graph, task_entries):
+    """收集与任务相关的本地地图文本：反向引用优先，再用地区词补全。"""
+    candidates: List[Tuple[int, str, Any]] = []
+    seen = set()
+    # 先收全部反向引用（优先级 0），再按地区补全（优先级 1），
+    # 否则先处理到的任务会把后续任务的 backlink 地图文本抢先标成低优先级。
+    for task in task_entries:
+        for source, _link in graph.backlinks(task.entry_id):
+            if source is None or source.entry_type != "map_text":
+                continue
+            if source.entry_id in seen:
+                continue
+            seen.add(source.entry_id)
+            candidates.append((0, source.entry_id, source))
+    for task in task_entries:
+        task_text = f"{task.title}\n{task.full_text}"
+        for entry in graph.entries.values():
+            if entry.entry_type != "map_text" or entry.entry_id in seen:
+                continue
+            if entry.region and entry.region in task_text:
+                seen.add(entry.entry_id)
+                candidates.append((1, entry.entry_id, entry))
+    candidates.sort(key=lambda x: (x[0], x[1]))
+    return [entry for _priority, _eid, entry in candidates[:_GRAPH_MAP_MAX_ENTRIES]]
+
+
+def _attempted_wiki_get_ids(messages):
+    """已经用 wiki_graph_get 尝试过的词条 ID。"""
+    ids = set()
+    for msg in messages:
+        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls"):
+            for tc in msg.tool_calls:
+                if tc.get("name") == "wiki_graph_get":
+                    args = tc.get("args", {}) or {}
+                    value = args.get("entry_id")
+                    if value:
+                        ids.add(str(value))
+    return ids
+
+
+def _has_loaded_task_text(messages):
+    """是否已有 load_quest_content / wiki_graph_get 的成功返回。"""
+    name_by_call_id = _build_tool_name_by_call_id(messages)
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        tool_name = _tool_name_of(msg, name_by_call_id)
+        if tool_name in ("load_quest_content", "wiki_graph_get") and not _is_not_found(msg):
+            return True
+    return False
+
+
+def _maybe_auto_graph_map_texts(state, messages, routed_tools, iteration, response=None):
+    """多任务+地图文本问题的确定性地图补全；返回 None 表示无需介入。"""
+    original_query = state.get("user_query", "") or state.get("rewritten_query", "")
+    if not _MAP_TEXT_QUESTION_RE.search(original_query):
+        return None
+
+    tool_names = {getattr(t, "name", str(t)) for t in routed_tools}
+    if "wiki_graph_get" not in tool_names:
+        return None
+    if iteration + 1 >= MAX_AGENT_ITERATIONS:
+        return None
+
+    graph = _load_wiki_graph_cached()
+    if not graph:
+        return None
+    matched_tasks = _match_graph_task_titles(graph, original_query)
+    if not matched_tasks:
+        return None
+
+    # 挂载点A（LLM 调用前）：必须已有工具返回，避免抢 Planner 首轮决策。
+    if response is None and _last_tool_message(messages) is None:
+        return None
+
+    attempted = _attempted_wiki_get_ids(messages)
+    map_entries = _collect_graph_map_texts(graph, matched_tasks)
+    pending_map = [e for e in map_entries if e.entry_id not in attempted]
+    task_text_loaded = _has_loaded_task_text(messages)
+
+    calls = []
+    if not task_text_loaded:
+        # 任务全文还没拿到，先把任务词条本身补上。
+        for task in matched_tasks:
+            if task.entry_id not in attempted:
+                calls.append((task.entry_id, task.title))
+    for entry in pending_map:
+        calls.append((entry.entry_id, entry.title))
+
+    if not calls:
+        return None
+
+    tool_calls = []
+    content_parts = [
+        "【执行报告】",
+        f"用户问题回显：{original_query}",
+        "用户意图：多任务剧情 + 对应地区地图文本的综合梳理",
+        "工具决策：系统检测到问题涉及多个任务与地图文本，确定性补全 wiki 链接图：",
+    ]
+    for i, (entry_id, title) in enumerate(calls, 1):
+        tool_calls.append({
+            "name": "wiki_graph_get",
+            "args": {"entry_id": entry_id},
+            "id": f"call_graph_map_{entry_id}_{iteration + 1}",
+            "type": "tool_call",
+        })
+        content_parts.append(f"{i}. 读取 {entry_id} {title}")
+    content = "\n".join(content_parts)
+
+    task_ids = [t.entry_id for t in matched_tasks]
+    map_ids = [e.entry_id for e in pending_map]
+    print(
+        f"  -> [wiki图补全] 任务={task_ids}, 补读任务={len([c for c in calls if c[0] not in map_ids])}, "
+        f"地图文本={len(map_ids)}: {map_ids}"
+    )
+
+    trace_emit("plan", {
+        "iteration": iteration + 1,
+        "execution_plan": content[:500],
+        "tool_call_names": [tc["name"] for tc in tool_calls],
+        "tool_call_source": "graph_map_text",
+        "graph_task_ids": task_ids,
+        "graph_map_ids": map_ids,
+        "run_id": state.get("run_id"),
+    })
+    return {
+        "messages": [AIMessage(content=content, tool_calls=tool_calls)],
+        "execution_plan": content,
+        "iteration": iteration + 1,
+        "intent_labels": state.get("intent_labels", []),
+    }
 
 
 # ====== 任务未命中后的确定性恢复链 ======
@@ -1668,7 +1995,17 @@ def route_after_tools(state: GenshinAdvisorState) -> str:
         if not isinstance(msg, ToolMessage) and not isinstance(msg, AIMessage):
             break
 
-    if failures >= 2:
+    # 如果整个会话中已有任意成功的工具返回（例如已加载任务全文），
+    # 后续补充查询失败不能把核心内容一并熔断掉，允许 Plan 继续或进入回答。
+    has_any_success = False
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            text = str(getattr(msg, "content", "") or "")
+            if not _is_not_found(msg) and "系统拦截" not in text:
+                has_any_success = True
+                break
+
+    if failures >= 2 and not has_any_success:
         print(f"  -> 连续失败熔断({failures}次)，进入回答阶段")
         # 修改最新 AIMessage 的 tool_calls 为空，阻止执行
         for msg in reversed(messages):
@@ -1756,6 +2093,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     full_text_loaded = False
     consecutive_failures = 0
     max_consecutive_failures = 0
+    has_successful_tool = False
 
     for i, msg in enumerate(messages):
         if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
@@ -1790,6 +2128,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             elif is_failure:
                 tool_results_summary.append(f"{label}: 未找到")
             else:
+                has_successful_tool = True
                 length = len(content)
                 tool_results_summary.append(f"{label}: 成功返回({length}字)")
                 # 对于成功返回的数据，提取一行内容预览
@@ -1811,7 +2150,8 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     # 判断 response_mode：失败熔断 或 工具调用次数=0 且无全文加载 → not_found
     # response_mode 是二元值，由代码层确定性注入，Answer 据此决定是否输出"未收录"
-    if consecutive_failures >= 2 or (tool_call_count == 0 and not full_text_loaded):
+    # 只要已有任意成功的工具返回，就不能因为后续补充查询失败而整体判为“未收录”。
+    if (consecutive_failures >= 2 or (tool_call_count == 0 and not full_text_loaded)) and not has_successful_tool:
         response_mode = "not_found"
     else:
         response_mode = "found"

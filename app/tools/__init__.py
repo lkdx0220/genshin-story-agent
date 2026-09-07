@@ -28,6 +28,9 @@ from app.tools.search import (
 from app.tools.content import (
     load_book_content, load_quest_content,
 )
+from app.tools.wiki_graph import (
+    wiki_graph_search, wiki_graph_expand, wiki_graph_get,
+)
 from app.retrieval import hybrid_search, kb_vector_search
 
 
@@ -43,6 +46,7 @@ tools = [
     query_monster, query_artifact, query_material, query_collectible, list_collectibles_by_region, query_recipe,
     query_food,
     hybrid_search,
+    wiki_graph_search, wiki_graph_expand, wiki_graph_get,
 ]
 
 # ====== 工具名 → 函数映射（供意图路由器动态注入）======
