@@ -6,6 +6,7 @@ __pycache__/
 # 运行时产物 / 本地数据
 conversation_memory/
 kb_vectors/
+content_data/wiki_raw/
 dist/
 *.exe
 
