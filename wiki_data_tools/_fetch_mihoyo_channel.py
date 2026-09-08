@@ -19,6 +19,7 @@
   python _fetch_mihoyo_channel.py --channel 43 --seed content_data/mihoyo_tasks_raw.json
 """
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -29,11 +30,18 @@ import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from wiki_graph_channels import CHANNEL_TYPE_MAP, CHANNEL_TIERS, CHANNEL_NAMES
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.dirname(SCRIPT_DIR)
 RAW_DIR = os.path.join(BASE_DIR, "content_data", "wiki_raw")
+MANIFEST_PATH = os.path.join(RAW_DIR, "_manifest.json")
+REPORT_PATH = os.path.join(RAW_DIR, "_last_report.json")
 
 BLACKBOARD_BASE = "https://act-api-takumi-static.mihoyo.com/common/blackboard/ys_obc/v1"
 WIKI_BASE = "https://act-api-takumi-static.mihoyo.com/hoyowiki/genshin"
@@ -147,6 +155,80 @@ def fetch_entry_page(content_id):
     return data.get("data", {}).get("page")
 
 
+# ====== manifest / 指纹工具 ======
+
+def _sha1_text(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+
+def _stable_json(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def card_fingerprint(item: dict, channel_id: int) -> str:
+    """卡片级指纹：列表字段变化即视为词条卡片更新。"""
+    payload = {
+        "title": str(item.get("title") or ""),
+        "filters_text": str(parse_channel_filters(item, channel_id).get("filters_text") or "[]"),
+        "alias_name": str(item.get("alias_name") or ""),
+        "corner_mark": str(item.get("corner_mark") or ""),
+        "summary": str(item.get("summary") or ""),
+    }
+    return _sha1_text(_stable_json(payload))
+
+
+def page_content_hash(page) -> str:
+    """详情页 JSON 的内容哈希，用于变更检测（page 结构级）。"""
+    if not isinstance(page, dict):
+        return ""
+    return _sha1_text(_stable_json(page))
+
+
+def load_manifest(path: str = MANIFEST_PATH):
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def save_manifest(manifest: dict, path: str = MANIFEST_PATH):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    safe_write(path, manifest)
+
+
+def save_report(report: dict, path: str = REPORT_PATH):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    safe_write(path, report)
+
+
+def read_raw_channel(channel_id: int):
+    """读取频道 raw；不存在返回 None。"""
+    output_path = os.path.join(RAW_DIR, f"channel_{channel_id}.json")
+    if not os.path.exists(output_path):
+        return None
+    try:
+        with open(output_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def raw_page_hash_map(channel_id: int) -> dict:
+    """返回该频道 raw 中 content_id -> page_hash 的映射（无 page 的给空串）。"""
+    doc = read_raw_channel(channel_id)
+    out = {}
+    if not doc:
+        return out
+    for it in doc.get("items") or []:
+        cid = str(it.get("content_id"))
+        page = it.get("page")
+        out[cid] = str(it.get("page_hash") or page_content_hash(page) if page else "")
+    return out
+
+
 def select_channels(channel_ids, tier):
     """返回按建议顺序排列的 (channel_id, graph_type) 列表。"""
     order = [
@@ -206,6 +288,15 @@ def process_channel(channel_id, graph_type, args):
 
     if args.limit > 0:
         items = items[:args.limit]
+
+    # --ids：只处理指定 content_id（用于增量抓取 new/updated）。
+    if getattr(args, "ids", None):
+        id_set = set(str(x) for x in args.ids)
+        items = [it for it in items if str(it.get("content_id")) in id_set]
+        log(f"按 --ids 过滤后待处理: {len(items)}")
+        if not items:
+            log("没有匹配的 ID，跳过")
+            return
 
     if args.list_only:
         summary = []
@@ -273,7 +364,9 @@ def process_channel(channel_id, graph_type, args):
             "filters": parse_channel_filters(it, channel_id),
             "page": page,
         }
-        if page is None:
+        if page is not None:
+            item["page_hash"] = page_content_hash(page)
+        else:
             item["fetch_error"] = True
         results.append(item)
         results_by_id[cid] = item
@@ -313,7 +406,23 @@ def main():
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY)
     parser.add_argument("--force", action="store_true", help="强制重抓已成功详情")
     parser.add_argument("--seed", default=None, help="把旧 raw 文件 seed 成频道文件（跳过重复抓取）")
+    parser.add_argument("--ids", default=None, help="逗号分隔的 content_id，或包含 id 列表的 JSON 文件路径")
     args = parser.parse_args()
+
+    if args.ids:
+        if os.path.exists(args.ids):
+            with open(args.ids, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, list):
+                args.ids = [str(x) for x in loaded]
+            elif isinstance(loaded, dict):
+                args.ids = [str(x) for x in loaded.get("ids", [])]
+            else:
+                args.ids = []
+        else:
+            args.ids = [x.strip() for x in args.ids.split(",") if x.strip()]
+        args.ids = set(args.ids)
+        log(f"--ids 共 {len(args.ids)} 个")
 
     channels = select_channels(args.channel, args.tier)
     log(f"计划处理 {len(channels)} 个频道: {[(cid, CHANNEL_NAMES.get(cid)) for cid, _ in channels]}")
