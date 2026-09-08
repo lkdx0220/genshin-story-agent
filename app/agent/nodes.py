@@ -1496,7 +1496,7 @@ def _collect_graph_map_texts(graph, task_entries):
             seen.add(source.entry_id)
             candidates.append((0, source.entry_id, source))
     for task in task_entries:
-        task_text = f"{task.title}\n{task.full_text}"
+        task_text = f"{task.title}\n{_entry_story_text(task)}"
         for entry in graph.entries.values():
             if entry.entry_type != "map_text" or entry.entry_id in seen:
                 continue
@@ -1635,6 +1635,11 @@ def _already_full_text_panoramic(messages):
             if content.strip().startswith(_FULL_TEXT_HEADER):
                 return True
     return False
+
+
+def _entry_story_text(entry):
+    """全景题证据只使用 story_text；玩法模块（推荐角色/装备展示等）不进入剧情证据。"""
+    return (getattr(entry, "story_text", "") or "").strip()
 
 
 # ====== 全景题的实体档案展开 ======
@@ -1788,11 +1793,14 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
             info["speaker"] += 1
 
     # 3) 通用相关性过滤：必须有具体名字命中，或本人就是说话人。
-    combined_text = "\n".join(task_texts + [(m.full_text or "") for m in map_entries])
+    combined_text = "\n".join(task_texts + [_entry_story_text(m) for m in map_entries])
     filtered = []
     for info in candidates.values():
         entry = info["entry"]
         title = (entry.title or "").strip()
+        if not _entry_story_text(entry):
+            # 没有剧情文本的词条不进入剧情证据（例如只有玩法模块的图鉴/成就）。
+            continue
         speaker_hit = _entity_is_speaker(entry, speaker_names)
         if any(k in title for k in _ENTITY_GENERIC_TITLE_KEYWORDS) and not speaker_hit:
             continue
@@ -1840,7 +1848,7 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
             -x["known"],
             -x.get("expand", 0),
             _ENTITY_TYPE_PRIORITY.get(x["entry"].entry_type, 99),
-            len(x["entry"].full_text or ""),
+            len(_entry_story_text(x["entry"])),
             x["entry"].title,
         ),
     )
@@ -1848,7 +1856,7 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
     total_chars = 0
     for info in ordered[:_PANORAMIC_ENTITY_MAX]:
         entry = info["entry"]
-        text_len = min(len(entry.full_text or ""), _PANORAMIC_ENTITY_TEXT_CAP)
+        text_len = min(len(_entry_story_text(entry)), _PANORAMIC_ENTITY_TEXT_CAP)
         if total_chars + text_len > _PANORAMIC_EXTRA_CHARS and out:
             break
         out.append(entry)
@@ -1873,36 +1881,37 @@ def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, re
     if len(matched_tasks) < 2:
         return None
     matched_map_texts = _collect_graph_map_texts(graph, matched_tasks)
-    task_texts = [e.full_text or "" for e in matched_tasks]
+    task_texts = [_entry_story_text(e) or (e.full_text or "") for e in matched_tasks]
     related_entities = _collect_related_entity_entries(
         graph, matched_tasks, task_texts, matched_map_texts
     )
 
     parts = [
         _FULL_TEXT_HEADER,
-        "检测到全景/综合类问题，以下为相关词条全文（由代码确定性加载，而非模型自选）：",
+        "检测到全景/综合类问题，以下为相关词条剧情文本（由代码确定性加载，不含玩法推荐模块）：",
     ]
     for i, entry in enumerate(matched_tasks, 1):
+        text = _entry_story_text(entry) or (entry.full_text or "")
         parts.append(
-            f"\n===== 任务 {i}: {entry.title} (ID {entry.entry_id}) 共 {len(entry.full_text)} 字 ====="
+            f"\n===== 任务 {i}: {entry.title} (ID {entry.entry_id}) 共 {len(text)} 字 ====="
         )
-        parts.append(entry.full_text)
+        parts.append(text)
     if matched_map_texts:
-        parts.append("\n\n===== 相关地图文本全文 =====")
+        parts.append("\n\n===== 相关地图文本剧情文本 =====")
         for entry in matched_map_texts:
+            text = _entry_story_text(entry) or (entry.full_text or "")
             parts.append(
-                f"\n----- {entry.title} (ID {entry.entry_id}) 共 {len(entry.full_text)} 字 -----\n"
-                + entry.full_text
+                f"\n----- {entry.title} (ID {entry.entry_id}) 共 {len(text)} 字 -----\n" + text
             )
     if related_entities:
-        parts.append("\n\n===== 相关角色/组织/圣遗物/地点档案全文 =====")
+        parts.append("\n\n===== 相关角色/组织/圣遗物/地点剧情档案 =====")
         for entry in related_entities:
-            text = entry.full_text or ""
+            text = _entry_story_text(entry)
             if len(text) > _PANORAMIC_ENTITY_TEXT_CAP:
                 text = text[:_PANORAMIC_ENTITY_TEXT_CAP] + "\n...[档案过长已截断]"
             parts.append(
                 f"\n----- {entry.title} ({entry.entry_type}, ID {entry.entry_id}) "
-                f"共 {len(entry.full_text)} 字 -----\n" + text
+                f"共 {len(text)} 字 -----\n" + text
             )
 
     content = "\n".join(parts)
