@@ -58,10 +58,35 @@ def log(msg):
     print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
 
 
+_ALLOWED_SCRIPTS = {
+    str(FETCH_SCRIPT.resolve()),
+    str(BUILD_SCRIPT.resolve()),
+}
+_ALLOWED_OPTIONS = {
+    str(FETCH_SCRIPT.resolve()): {"--ids", "--force", "--tier", "--delay"},
+    str(BUILD_SCRIPT.resolve()): {"--build"},
+}
+
+
 def run(cmd, cwd=None):
-    print("  $", " ".join(str(x) for x in cmd), flush=True)
+    """只允许执行本项目两个内部脚本，且只接受白名单参数。
+
+    这是安全硬化：subprocess.run 使用参数数组、shell=False，
+    并且脚本路径/选项都经过严格白名单，避免任何外部输入进入命令执行。
+    """
+    args = [str(x) for x in cmd]
+    if not args or args[0] != sys.executable:
+        raise ValueError("仅允许执行当前 Python 解释器")
+    script = Path(args[1]).resolve()
+    if str(script) not in _ALLOWED_SCRIPTS:
+        raise ValueError(f"不允许执行的脚本: {script}")
+    allowed_options = _ALLOWED_OPTIONS.get(str(script), set())
+    for arg in args[2:]:
+        if arg.startswith("-") and arg not in allowed_options:
+            raise ValueError(f"不允许的参数: {arg}")
+    print("  $", " ".join(args), flush=True)
     return subprocess.run(
-        [str(x) for x in cmd], cwd=str(cwd or BASE_DIR), shell=False
+        args, cwd=str(cwd or BASE_DIR), shell=False
     )
 
 
