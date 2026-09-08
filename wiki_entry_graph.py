@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from wiki_graph_channels import CHANNEL_TYPE_MAP
+from character_aliases import CHARACTER_ALIASES
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_OUTPUT = BASE_DIR / "kb_vectors" / "wiki_entry_graph.json"
@@ -316,6 +317,23 @@ def _extract_full_text(page: Dict[str, Any]) -> str:
     return "\n\n".join(chunks).strip()
 
 
+def _link_context(normalized: str, match_start: int, match_end: int, width: int = 140) -> str:
+    """取链接锚点的纯文本上下文，帮助 expand 展示“为什么链接到这里”。"""
+    # 优先取整段 <a>...</a> 的锚文本；窗口从半截标签开始会得到大量 HTML 碎片。
+    a_start = normalized.rfind("<a", 0, match_start)
+    if a_start >= 0:
+        a_end = normalized.find("</a>", match_end)
+        if a_end >= 0:
+            anchor_text = _strip_html(normalized[a_start:a_end + 4])
+            anchor_text = re.sub(r"\s+", " ", anchor_text).strip()
+            if anchor_text:
+                return anchor_text[:width]
+    window = normalized[max(0, match_start - width):match_end + width]
+    text = _strip_html(window)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:width]
+
+
 def _extract_links(page: Dict[str, Any]) -> List[WikiLink]:
     """从 page 的所有字符串里提取 data-entry-id / data-entry-name 链接。"""
     found: Dict[str, WikiLink] = {}
@@ -326,11 +344,19 @@ def _extract_links(page: Dict[str, Any]) -> List[WikiLink]:
         # 组件 data 是双重 JSON 编码字符串，内部引号形如 \"，
         # 先把字面反斜杠引号还原成普通引号，再按 HTML 属性提取链接。
         normalized = text.replace('\\"', '"')
-        for target_id, target_name in _LINK_RE_1.findall(normalized):
-            found.setdefault(target_id, WikiLink(target_id, target_name))
+        for match in _LINK_RE_1.finditer(normalized):
+            target_id, target_name = match.group(1), match.group(2)
+            found.setdefault(
+                target_id,
+                WikiLink(target_id, target_name, _link_context(normalized, match.start(), match.end())),
+            )
             names_by_id.setdefault(target_id, set()).add(target_name)
-        for target_name, target_id in _LINK_RE_2.findall(normalized):
-            found.setdefault(target_id, WikiLink(target_id, target_name))
+        for match in _LINK_RE_2.finditer(normalized):
+            target_name, target_id = match.group(1), match.group(2)
+            found.setdefault(
+                target_id,
+                WikiLink(target_id, target_name, _link_context(normalized, match.start(), match.end())),
+            )
             names_by_id.setdefault(target_id, set()).add(target_name)
     # 剔除自链接
     own_id = str(page.get("id") or "")
@@ -375,6 +401,9 @@ def _infer_type(filters: List[str], page: Dict[str, Any]) -> str:
 
 def _infer_region(filters: List[str]) -> str:
     for f in filters:
+        # 频道 filter 里最常见的地区前缀：角色/NPC/组织/地图文本/食物等用“地区/”。
+        if f.startswith("地区/"):
+            return f.split("/", 1)[1]
         if f.startswith("地图/"):
             return f.split("/", 1)[1]
         if f.startswith("任务区域/"):
@@ -395,17 +424,34 @@ def build_entry_from_raw(item: Dict[str, Any], default_type: str = "unknown") ->
     filters = _parse_filters(item)
     entry_type = _infer_type(filters, page) if default_type == "unknown" else default_type
     aliases: List[str] = []
-    alias = str(item.get("alias_name") or "").strip()
-    if alias and alias not in ("None", ""):
-        aliases.append(alias)
+    for alias_source in (item.get("alias_name"), page.get("alias_name")):
+        alias = str(alias_source or "").strip()
+        if alias and alias not in ("None", ""):
+            aliases.append(alias)
+    # page.alias_name 可能包含多个名称（逗号/顿号分隔），拆分入库。
+    expanded_aliases: List[str] = []
+    for alias in aliases:
+        for part in re.split(r"[,，、]", alias):
+            part = part.strip()
+            if part and part not in expanded_aliases:
+                expanded_aliases.append(part)
     title = str(page.get("name") or item.get("title") or "")
     region = _infer_region(filters) or _infer_region_from_title(title)
+
+    # 观测枢 entry_page 的 alias_name 基本都是空串，角色别名从项目自身维护的
+    # CHARACTER_ALIASES 反查补齐（规范名 -> 别名列表）。
+    if entry_type == "character" and title in CHARACTER_ALIASES:
+        for alias in CHARACTER_ALIASES[title]:
+            alias_clean = alias.strip("「」").strip()
+            if alias_clean and alias_clean != title and alias_clean not in expanded_aliases:
+                expanded_aliases.append(alias_clean)
+
     return WikiEntry(
         entry_id=str(page.get("id")),
         title=title,
         entry_type=entry_type,
         full_text=_extract_full_text(page),
-        aliases=aliases,
+        aliases=expanded_aliases,
         region=region,
         filters=filters,
         links=_extract_links(page),

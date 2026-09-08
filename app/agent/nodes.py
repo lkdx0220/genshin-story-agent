@@ -1404,7 +1404,10 @@ def _maybe_auto_relationship_search(state, messages, routed_tools, iteration, re
 # - 先保证任务词条文本已加载，再补地图文本；每张图只补一次，防死循环。
 
 _wiki_graph_cache: Any = None
-_MAP_TEXT_QUESTION_RE = re.compile(r"地图文本")
+# 地图相关问题的触发词：不再只认“地图文本”，也覆盖“地图说明/地点文本/周边文本/对应地区”等说法。
+_MAP_TEXT_QUESTION_RE = re.compile(
+    r"地图文本|地图说明|地图相关|地点文本|周边文本|地区文本|对应地区|结合.{0,6}地图|结合.{0,6}地区"
+)
 _GRAPH_MAP_MAX_ENTRIES = 8
 
 
