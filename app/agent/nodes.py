@@ -16,7 +16,7 @@ from app.config import (
 )
 from app.llm import (
     llm, plan_llm, plan_llm_l2, assess_llm, llm_invoke_with_retry, _select_answer_llm,
-    answer_llm_medium,
+    answer_llm_medium, answer_llm_l3,
 )
 from app.schema import (
     GenshinAdvisorState,
@@ -1609,12 +1609,12 @@ _ENTITY_TYPE_PRIORITY = {
     "character_anecdote": 11, "task": 12, "activity": 13, "item": 14,
 }
 _SPEAKER_RE = re.compile(r"(?:^|\n)\s*\*?\s*([\u4e00-\u9fff·]{2,10})\s*[：:]")
-_SPEAKER_STOPWORDS = {
-    "旅行者", "派蒙", "书柜", "画框", "花瓶", "字迹", "稚嫩的字迹", "模糊的字迹",
-    "凌乱的字迹", "泛黄的记录簿", "留言条", "虚弱的猫叫", "未知通讯者", "熟悉的女声",
-    "尚有理智的树妖", "高大的树妖", "理性的雪精", "迟疑的雪精", "陶醉的雪精",
-    "看守的雪精", "字迹模糊的笔记", "谁人书写的笔记",
-}
+_SPEAKER_STOPWORDS = {"旅行者", "派蒙"}
+# 说话人提取的通用噪音词：正文里的物件/笔记/怪物/匿名声音不是人物。
+_SPEAKER_NOISE_KEYWORDS = (
+    "字迹", "笔记", "记录", "留言", "日志", "报告", "告示", "配方", "画框",
+    "书柜", "花瓶", "猫叫", "通讯", "女声", "树妖", "雪精",
+)
 _PANORAMIC_ENTITY_MAX = 30
 _PANORAMIC_EXTRA_CHARS = 120000
 _PANORAMIC_ENTITY_TEXT_CAP = 6000
@@ -1642,8 +1642,13 @@ def _extract_speaker_names(texts):
     for text in texts:
         for m in _SPEAKER_RE.finditer(text or ""):
             name = m.group(1).strip("「」")
-            if 2 <= len(name) <= 8 and name not in _SPEAKER_STOPWORDS:
-                names.add(name)
+            if not (2 <= len(name) <= 8):
+                continue
+            if name in _SPEAKER_STOPWORDS:
+                continue
+            if any(k in name for k in _SPEAKER_NOISE_KEYWORDS):
+                continue
+            names.add(name)
     return names
 
 
@@ -2263,6 +2268,10 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     if _should_synthesize_answer(original_query):
         answer_llm = answer_llm_medium
         print("  -> [综合叙述] 使用 medium Answer LLM")
+    # L3 全景/超长文综合：使用更强的 qwen3.8-max。
+    if _already_full_text_panoramic(messages):
+        answer_llm = answer_llm_l3
+        print("  -> [L3全景] 使用 qwen3.8-max Answer LLM")
     print(f"  [AnswerLLM] 意图={intent_labels} → {answer_llm.model_name}, thinking={answer_llm.model_kwargs.get('reasoning_effort', 'none')}, max_tokens={answer_llm.max_tokens}")
 
     # 前置拦截：plan_agent / tool_executor 已产生中断消息，跳过 LLM 调用

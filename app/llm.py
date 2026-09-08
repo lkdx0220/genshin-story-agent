@@ -181,6 +181,19 @@ answer_llm_deep = QwenFallbackChatOpenAI(
         "reasoning_effort": "medium",
     },
 )
+# L3 全景/超长文综合：使用更强的 qwen3.8-max，回退到 qwen3.7-max。
+answer_llm_l3 = QwenFallbackChatOpenAI(
+    model="qwen3.8-max",
+    api_key=QWEN_API_KEY,
+    base_url=QWEN_BASE_URL,
+    temperature=0.2,
+    max_tokens=65536,
+    request_timeout=240,
+    fallback_model="qwen3.7-max",
+    model_kwargs={
+        "reasoning_effort": "medium",
+    },
+)
 
 # 意图 → Answer LLM 映射：取最高优先级的意图
 INTENT_LLM_MAP = {
