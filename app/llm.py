@@ -195,6 +195,20 @@ answer_llm_l3 = QwenFallbackChatOpenAI(
     },
 )
 
+# L3 分段生成专用：qwen3.8-max 关闭思考，单节输出短，避免长文生成超时。
+answer_llm_l3_fast = QwenFallbackChatOpenAI(
+    model="qwen3.8-max",
+    api_key=QWEN_API_KEY,
+    base_url=QWEN_BASE_URL,
+    temperature=0.3,
+    max_tokens=4096,
+    request_timeout=240,
+    fallback_model="qwen3.7-max",
+    extra_body={
+        "enable_thinking": False,
+    },
+)
+
 # 意图 → Answer LLM 映射：取最高优先级的意图
 INTENT_LLM_MAP = {
     "D": answer_llm_deep,     # 剧情任务
