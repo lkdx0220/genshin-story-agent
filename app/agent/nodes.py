@@ -697,6 +697,11 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     if auto_recovery is not None:
         return auto_recovery
 
+    # 全景/综合类问题：确定性全文旁路（挂载点A）。普通题目不触发，保持切块定位路径不变。
+    full_text_auto = _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration)
+    if full_text_auto is not None:
+        return full_text_auto
+
     # wiki 图：多任务 + 地图文本的确定性补全（挂载点A）。
     graph_map_auto = _maybe_auto_graph_map_texts(state, messages, routed_tools, iteration)
     if graph_map_auto is not None:
@@ -1564,6 +1569,86 @@ def _maybe_auto_graph_map_texts(state, messages, routed_tools, iteration, respon
     return {
         "messages": [AIMessage(content=content, tool_calls=tool_calls)],
         "execution_plan": content,
+        "iteration": iteration + 1,
+        "intent_labels": state.get("intent_labels", []),
+    }
+
+
+# ====== 全景/综合题的确定性全文旁路 ======
+# 设计：
+# - 普通“定点找证据”问题仍走切块/1500字定位路径，成本不变；
+# - 只有“梳理/全景/所有角色/综合评价+多任务”这类问题，代码直接加载全文，
+#   不让 Plan 在 9% 覆盖率时收口。
+# - 触发与 LLM 无关，普通题误触概率通过“全景正则 + 多任务命中”双重限制降到最低。
+
+_PANORAMIC_FULL_TEXT_RE = re.compile(
+    r"梳理|全景|综合|完整|所有角色|全部角色|角色评价|评价所有|整体|全局|"
+    r"来龙去脉|前因后果|整个.*任务|全部.*任务|所有.*任务|跨.*汇总|串联|人物档案"
+)
+_FULL_TEXT_HEADER = "[全景全文读取]"
+
+
+def _already_full_text_panoramic(messages):
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            content = msg.content if hasattr(msg, "content") else str(msg)
+            if content.strip().startswith(_FULL_TEXT_HEADER):
+                return True
+    return False
+
+
+def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, response=None):
+    """全景/综合题：代码直接加载相关任务+地图文本全文，绕过普通截断与熔断。"""
+    original_query = state.get("user_query", "") or state.get("rewritten_query", "")
+    if not _PANORAMIC_FULL_TEXT_RE.search(original_query):
+        return None
+    if _already_full_text_panoramic(messages):
+        return None
+    if iteration + 1 >= MAX_AGENT_ITERATIONS:
+        return None
+
+    graph = _load_wiki_graph_cached()
+    if not graph:
+        return None
+    matched_tasks = _match_graph_task_titles(graph, original_query)
+    if len(matched_tasks) < 2:
+        return None
+    matched_map_texts = _collect_graph_map_texts(graph, matched_tasks)
+
+    parts = [
+        _FULL_TEXT_HEADER,
+        "检测到全景/综合类问题，以下为相关词条全文（由代码确定性加载，而非模型自选）：",
+    ]
+    for i, entry in enumerate(matched_tasks, 1):
+        parts.append(
+            f"\n===== 任务 {i}: {entry.title} (ID {entry.entry_id}) 共 {len(entry.full_text)} 字 ====="
+        )
+        parts.append(entry.full_text)
+    if matched_map_texts:
+        parts.append("\n\n===== 相关地图文本全文 =====")
+        for entry in matched_map_texts:
+            parts.append(
+                f"\n----- {entry.title} (ID {entry.entry_id}) 共 {len(entry.full_text)} 字 -----\n"
+                + entry.full_text
+            )
+
+    content = "\n".join(parts)
+    print(
+        f"  -> [全景全文旁路] 任务={[e.entry_id for e in matched_tasks]} "
+        f"地图={[e.entry_id for e in matched_map_texts]} 总字={len(content)}"
+    )
+    trace_emit("plan", {
+        "iteration": iteration + 1,
+        "execution_plan": f"全景全文旁路：加载 {len(matched_tasks)} 个任务全文 + {len(matched_map_texts)} 个地图文本全文",
+        "tool_call_names": [],
+        "tool_call_source": "full_text_panoramic",
+        "full_text_task_ids": [e.entry_id for e in matched_tasks],
+        "full_text_map_ids": [e.entry_id for e in matched_map_texts],
+        "run_id": state.get("run_id"),
+    })
+    return {
+        "messages": [ToolMessage(content=content, tool_call_id=f"call_full_panoramic_{iteration + 1}")],
+        "execution_plan": f"【执行报告】\n用户问题回显：{original_query}\n用户意图：全景/综合梳理\n工具决策：代码确定性地加载相关词条全文。\n",
         "iteration": iteration + 1,
         "intent_labels": state.get("intent_labels", []),
     }
