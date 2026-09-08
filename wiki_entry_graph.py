@@ -11,9 +11,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
@@ -31,7 +33,7 @@ MAP_TEXT_RAW = BASE_DIR / "content_data" / "mihoyo_map_text_raw_full.json"
 MISSING_RAW = BASE_DIR / "content_data" / "wiki_missing_entries_raw.json"
 WIKI_RAW_DIR = BASE_DIR / "content_data" / "wiki_raw"
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # 试点范围：灰眸四线任务 ID 及其关联地区。
 PILOT_TASK_IDS = {"509533", "509538", "509592", "509591"}
@@ -77,6 +79,7 @@ class WikiLink:
     target_id: str
     target_name: str
     context: str = ""
+    link_type: str = ""
 
 
 @dataclass
@@ -89,6 +92,12 @@ class WikiEntry:
     region: str = ""
     filters: List[str] = field(default_factory=list)
     links: List[WikiLink] = field(default_factory=list)
+    # v2 元数据：来源、时间、指纹、状态
+    source_channel: int = 0
+    fetched_at: str = ""
+    content_hash: str = ""
+    status: str = "ok"
+    updated_at: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -100,9 +109,19 @@ class WikiEntry:
             "region": self.region,
             "filters": self.filters,
             "links": [
-                {"target_id": l.target_id, "target_name": l.target_name, "context": l.context}
+                {
+                    "target_id": l.target_id,
+                    "target_name": l.target_name,
+                    "context": l.context,
+                    "link_type": l.link_type,
+                }
                 for l in self.links
             ],
+            "source_channel": self.source_channel,
+            "fetched_at": self.fetched_at,
+            "content_hash": self.content_hash,
+            "status": self.status,
+            "updated_at": self.updated_at,
         }
 
     @classmethod
@@ -120,15 +139,22 @@ class WikiEntry:
                     target_id=str(l.get("target_id", "")),
                     target_name=str(l.get("target_name", "")),
                     context=str(l.get("context", "")),
+                    link_type=str(l.get("link_type", "")),
                 )
                 for l in data.get("links") or []
             ],
+            source_channel=int(data.get("source_channel", 0) or 0),
+            fetched_at=str(data.get("fetched_at", "")),
+            content_hash=str(data.get("content_hash", "")),
+            status=str(data.get("status", "ok")),
+            updated_at=str(data.get("updated_at", "")),
         )
 
 
 @dataclass
 class WikiEntryGraph:
     entries: Dict[str, WikiEntry] = field(default_factory=dict)
+    meta: Dict[str, Any] = field(default_factory=dict)
 
     def add(self, entry: WikiEntry) -> None:
         if entry.entry_id:
@@ -209,12 +235,13 @@ class WikiEntryGraph:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "schema_version": SCHEMA_VERSION,
+            "meta": dict(self.meta or {}),
             "entries": [e.to_dict() for e in sorted(self.entries.values(), key=lambda x: x.entry_id)],
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "WikiEntryGraph":
-        graph = cls()
+        graph = cls(meta=dict(data.get("meta") or {}))
         for item in data.get("entries") or []:
             entry = WikiEntry.from_dict(item)
             graph.add(entry)
@@ -261,6 +288,35 @@ def _iter_strings(obj: Any):
             yield from _iter_strings(v)
 
 
+_NOISE_TOKENS = {"None", "null", "left", "right", "center", "top", "bottom", "mid", "true", "false"}
+_URL_LINE_RE = re.compile(r"^https?://\S+$")
+_DIALOG_ID_LINE_RE = re.compile(r"^[A-Za-z0-9]{8,}T\d+$")
+
+
+def _clean_plain_text(text: str) -> str:
+    """清洗已从 HTML 提取的纯文本：去 URL/接口 ID/布局词，合并重复连续行。"""
+    if not text:
+        return ""
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    lines: List[str] = []
+    prev = None
+    for line in text.splitlines():
+        line = re.sub(r"https?://\S+", "", line).strip()
+        if not line:
+            continue
+        if _URL_LINE_RE.match(line):
+            continue
+        if _DIALOG_ID_LINE_RE.match(line):
+            continue
+        if line in _NOISE_TOKENS:
+            continue
+        if line == prev:
+            continue
+        lines.append(line)
+        prev = line
+    return "\n".join(lines)
+
+
 def _data_to_text(data: Any) -> str:
     """组件 data 可能是 HTML 字符串，也可能是 JSON 字符串/嵌套结构。"""
     texts: List[str] = []
@@ -270,6 +326,12 @@ def _data_to_text(data: Any) -> str:
             stripped = obj.strip()
             if not stripped:
                 return
+            if _URL_LINE_RE.match(stripped):
+                return
+            if _DIALOG_ID_LINE_RE.match(stripped):
+                return
+            if stripped in _NOISE_TOKENS:
+                return
             try:
                 parsed = json.loads(stripped)
             except Exception:
@@ -277,16 +339,12 @@ def _data_to_text(data: Any) -> str:
             if isinstance(parsed, (dict, list)):
                 walk(parsed)
             elif "<" in stripped and ">" in stripped:
-                texts.append(_strip_html(stripped))
+                texts.append(_clean_plain_text(_strip_html(stripped)))
             else:
-                texts.append(html.unescape(stripped))
+                texts.append(_clean_plain_text(html.unescape(stripped)))
         elif isinstance(obj, dict):
-            # key: value 结构保留 key 作为弱标注，方便 Agent 知道这是哪个字段。
             for key, value in obj.items():
-                if isinstance(value, (dict, list)):
-                    walk(value)
-                else:
-                    walk(value)
+                walk(value)
         elif isinstance(obj, list):
             for item in obj:
                 walk(item)
@@ -295,18 +353,88 @@ def _data_to_text(data: Any) -> str:
     return "\n".join(t for t in texts if t).strip()
 
 
+def _extract_dialogue_text(data: Any) -> str:
+    """对话类模块专用解析：按 root_id/child_ids 顺序遍历 contents，
+    只保留 option 和 dialogue，不把接口 ID 当作正文。"""
+    if isinstance(data, str):
+        try:
+            obj = json.loads(data)
+        except Exception:
+            return _data_to_text(data)
+    else:
+        obj = data
+    if not isinstance(obj, dict):
+        return _data_to_text(data)
+
+    out: List[str] = []
+    seen: set = set()
+
+    def emit(node: Any):
+        if not isinstance(node, dict):
+            return
+        option = str(node.get("option") or "").strip()
+        dialogue = node.get("dialogue")
+        if option and option not in _NOISE_TOKENS:
+            option_text = _strip_html(option) if "<" in option else option
+            out.append("【选项】" + _clean_plain_text(option_text))
+        if isinstance(dialogue, str) and dialogue.strip():
+            dialogue_text = _strip_html(dialogue) if "<" in dialogue else dialogue
+            dialogue_text = _clean_plain_text(dialogue_text)
+            if dialogue_text:
+                out.append(dialogue_text)
+
+    def walk_tree(tree: Dict[str, Any]):
+        contents = tree.get("contents") or obj.get("contents") or {}
+        child_ids = tree.get("child_ids") or {}
+        if not isinstance(contents, dict) or not contents:
+            return
+        root = str(tree.get("root_id") or "")
+
+        def visit(node_id: str):
+            if not node_id or node_id in seen:
+                return
+            seen.add(node_id)
+            node = contents.get(node_id)
+            if isinstance(node, dict):
+                emit(node)
+            for child in child_ids.get(node_id) or []:
+                visit(str(child))
+
+        if root:
+            visit(root)
+        else:
+            for node in contents.values():
+                if isinstance(node, dict):
+                    emit(node)
+
+    trees = obj.get("list") or []
+    if isinstance(trees, list) and trees:
+        for tree in trees:
+            if isinstance(tree, dict):
+                walk_tree(tree)
+    else:
+        contents = obj.get("contents") or {}
+        if isinstance(contents, dict):
+            for node in contents.values():
+                if isinstance(node, dict):
+                    emit(node)
+    return "\n".join(out).strip()
+
+
 def _extract_full_text(page: Dict[str, Any]) -> str:
-    """把 page.modules 重建为纯文本。"""
+    """把 page.modules 重建为纯文本。对话模块走有序遍历，其余模块走通用清洗。"""
     chunks: List[str] = []
     for module in page.get("modules") or []:
         module_name = str(module.get("name") or "").strip()
         module_texts: List[str] = []
         for comp in module.get("components") or []:
             data = comp.get("data")
-            if isinstance(data, str):
+            if "对话" in module_name:
+                text = _extract_dialogue_text(data)
+            else:
                 text = _data_to_text(data)
-                if text:
-                    module_texts.append(text)
+            if text:
+                module_texts.append(text)
         body = "\n".join(module_texts).strip()
         if not body:
             continue
@@ -417,11 +545,39 @@ def _infer_region_from_title(title: str) -> str:
     return m.group(1) if m else ""
 
 
-def build_entry_from_raw(item: Dict[str, Any], default_type: str = "unknown") -> Optional[WikiEntry]:
+def _derive_title_aliases(title: str, region: str) -> List[str]:
+    """从标题本身派生低风险别名：地区前缀、【地区】/括号后缀去掉后的简名。"""
+    out: List[str] = []
+
+    def add(candidate: str):
+        candidate = candidate.strip().strip("「」").strip()
+        if candidate and candidate != title and candidate not in out:
+            out.append(candidate)
+
+    title = (title or "").strip()
+    if not title:
+        return out
+    if region and title.startswith(region + " "):
+        add(title[len(region) + 1:])
+    m = re.match(r"^(.*?)(?:【[^】]*】|（[^（）]*）|\([^()]*\))\s*$", title)
+    if m:
+        add(m.group(1))
+    return out
+
+
+def build_entry_from_raw(
+    item: Dict[str, Any],
+    default_type: str = "unknown",
+    source_channel: int = 0,
+    fetched_at: str = "",
+) -> Optional[WikiEntry]:
     page = item.get("page")
     if not isinstance(page, dict) or not page.get("id"):
         return None
     filters = _parse_filters(item)
+    content_hash = hashlib.sha1(
+        json.dumps(page, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
     entry_type = _infer_type(filters, page) if default_type == "unknown" else default_type
     aliases: List[str] = []
     for alias_source in (item.get("alias_name"), page.get("alias_name")):
@@ -437,6 +593,11 @@ def build_entry_from_raw(item: Dict[str, Any], default_type: str = "unknown") ->
                 expanded_aliases.append(part)
     title = str(page.get("name") or item.get("title") or "")
     region = _infer_region(filters) or _infer_region_from_title(title)
+
+    # 标题派生别名：任务去掉地区前缀、地图文本/NPC 去掉【地区】后缀等。
+    for alias in _derive_title_aliases(title, region):
+        if alias not in expanded_aliases:
+            expanded_aliases.append(alias)
 
     # 观测枢 entry_page 的 alias_name 基本都是空串，角色别名从项目自身维护的
     # CHARACTER_ALIASES 反查补齐（规范名 -> 别名列表）。
@@ -455,6 +616,11 @@ def build_entry_from_raw(item: Dict[str, Any], default_type: str = "unknown") ->
         region=region,
         filters=filters,
         links=_extract_links(page),
+        source_channel=source_channel,
+        fetched_at=fetched_at,
+        content_hash=content_hash,
+        status="ok",
+        updated_at=time.strftime("%Y-%m-%d %H:%M:%S"),
     )
 
 
@@ -506,7 +672,9 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
     也一并合并，保证试点期间手工抓的词条不丢。
     """
     graph = WikiEntryGraph()
-    docs: List[Tuple[Optional[str], dict]] = []
+    # (entry_type, doc, source_channel, fetched_at)
+    docs: List[Tuple[Optional[str], dict, int, str]] = []
+    sources_meta: List[Dict[str, Any]] = []
 
     # 1) 全量频道 raw（主数据源）。
     if wiki_raw_dir.exists():
@@ -518,21 +686,46 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
                 continue
             channel_id = int(doc.get("channel_id") or 0)
             entry_type = doc.get("graph_type") or CHANNEL_TYPE_MAP.get(channel_id) or "unknown"
-            docs.append((entry_type, doc))
+            fetched_at = str(doc.get("fetched_at") or "")
+            item_count = len(doc.get("items") or [])
+            docs.append((entry_type, doc, channel_id, fetched_at))
+            sources_meta.append({
+                "channel_id": channel_id,
+                "graph_type": entry_type,
+                "item_count": item_count,
+                "fetched_at": fetched_at,
+            })
 
     # 2) 旧 raw 与手工补抓词条（graph.add 按 ID 覆盖，重复无副作用）。
-    for default_type, path in (("task", TASK_RAW), ("map_text", MAP_TEXT_RAW), ("unknown", MISSING_RAW)):
+    for default_type, path, source_channel in (
+        ("task", TASK_RAW, 0),
+        ("map_text", MAP_TEXT_RAW, 0),
+        ("unknown", MISSING_RAW, 0),
+    ):
         if path.exists():
             with open(path, "r", encoding="utf-8") as f:
-                docs.append((default_type, json.load(f)))
+                doc = json.load(f)
+            docs.append((default_type, doc, source_channel, str(doc.get("fetched_at") or "")))
 
-    for default_type, doc in docs:
+    for default_type, doc, source_channel, fetched_at in docs:
         for item in doc.get("items") or []:
-            entry = build_entry_from_raw(item, default_type=default_type or "unknown")
+            entry = build_entry_from_raw(
+                item,
+                default_type=default_type or "unknown",
+                source_channel=source_channel,
+                fetched_at=fetched_at,
+            )
             if entry is None:
                 continue
             graph.add(entry)
 
+    graph.meta = {
+        "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "entry_count": len(graph.entries),
+        "link_count": sum(len(e.links) for e in graph.entries.values()),
+        "sources": sources_meta,
+        "dirty_links": [],
+    }
     return graph
 
 
