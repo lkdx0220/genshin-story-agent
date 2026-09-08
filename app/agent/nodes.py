@@ -2376,6 +2376,29 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     else:
         response_mode = "found"
 
+    # ---- L3 全景题：分段生成 ----
+    # 全景题证据约 15 万字，单次 qwen3.8-max 生成 1.2~1.8 万字实测超过 10 分钟；
+    # 这里改为按任务线/实体/地图/跨线综合分桶，多节并行生成后拼装。
+    if _already_full_text_panoramic(messages):
+        from app.agent.l3_panorama import generate_panorama_answer
+        print("  -> [L3分段] 检测到全景全文，进入分段生成")
+        l3_content = generate_panorama_answer(messages, original_query, emit=_emit_progress)
+        if l3_content:
+            trace_emit("llm_end", {
+                "role": "answer", "run_id": state.get("run_id"),
+                "status": "success", "final_response_len": len(l3_content),
+                "answer_source": "l3_panorama_sections",
+            })
+            trace_emit("answer_end", {
+                "response_mode": "found",
+                "final_response": l3_content,
+                "short_circuit": False,
+                "answer_source": "l3_panorama_sections",
+                "run_id": state.get("run_id"),
+            })
+            return {"messages": messages, "final_response": l3_content}
+        print("  -> [L3分段] 解析失败，回退单次 L3 调用")
+
     # ---- 代码短路：纯别名身份查询直答 ----
     # F2 类问题：零工具 + 问题为"XX是谁/指谁" + 别名标注给出映射时，直接回答映射关系。
     # 必须放在 not_found 短路之前，否则会被"零工具→未收录"误伤。
