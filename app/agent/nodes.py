@@ -1664,6 +1664,50 @@ _UNKNOWN_SPEAKER_TARGET_TYPES = {
     "artifact", "organization", "map_text", "story_chapter", "book",
     "gadget", "item", "task", "activity",
 }
+# 实体相关性过滤：只在“正文里出现具体名字/具体别名，或本人就是说话人”时保留。
+# 这里的通用别名/头衔表不是主题词，而是为了防止“妹妹/父亲/偶像”这类泛称别名
+# 把无关的全局角色误判为当前任务相关角色。
+_ENTITY_GENERIC_ALIASES = frozenset({
+    "妹妹", "哥哥", "姐姐", "弟弟", "父亲", "母亲", "爷爷", "奶奶", "叔叔", "阿姨",
+    "偶像", "军师", "仆人", "内鬼", "那个女人", "这个男人", "那个人", "少女", "少年",
+    "男人", "女人", "孩子", "大人", "先生", "小姐", "老板", "店主", "商人", "村民",
+    "冒险家", "接待员", "守卫", "士兵", "记者", "编辑", "厨师", "船夫", "工人",
+    "学徒", "信使", "使者", "观众", "听众", "路人", "魔神", "大门", "山上",
+    "未来", "代价", "奇迹", "团雀", "猫粮", "秘密", "故事", "记忆", "时间",
+    "生命", "灵魂", "愿望",
+})
+_ENTITY_GENERIC_TITLE_KEYWORDS = (
+    "接待员", "冒险家协会", "商人", "村民", "守卫", "士兵", "记者", "编辑",
+    "厨师", "船夫", "工人", "学徒", "信使", "使者", "观众", "听众", "路人",
+    "老板", "店主", "店员", "摊主",
+)
+_ENTITY_ALLOWED_TYPES = {
+    "character", "npc", "organization", "monster", "artifact", "weapon",
+    "book", "story_chapter", "gadget", "item", "region_feature",
+}
+
+
+def _entity_specific_alias_hits(entry, text):
+    """返回实体在正文中的具体名字命中次数（标题 + 非泛称别名）。"""
+    title = (entry.title or "").strip()
+    hits = text.count(title) if title else 0
+    for alias in (entry.aliases or []):
+        alias = (alias or "").strip()
+        if len(alias) < 3 or alias in _ENTITY_GENERIC_ALIASES:
+            continue
+        hits += text.count(alias)
+    return hits
+
+
+def _entity_is_speaker(entry, speakers):
+    title = (entry.title or "").strip()
+    if title and title in speakers:
+        return True
+    for alias in (entry.aliases or []):
+        alias = (alias or "").strip()
+        if len(alias) >= 3 and alias not in _ENTITY_GENERIC_ALIASES and alias in speakers:
+            return True
+    return False
 
 
 def _load_entity_mention_index():
@@ -1693,42 +1737,77 @@ def _extract_speaker_names(texts):
 
 
 def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries):
-    """返回与全景题相关的角色/组织/圣遗物/地点档案词条。"""
+    """返回与全景题相关的角色/组织/圣遗物/地点档案词条。
+
+    相关性规则（通用、与主题无关）：
+    - 已知实体：来自实体提及索引，且必须在任务/地图正文里出现“具体标题/具体别名”；
+    - 说话人：只有词条标题或具体别名与说话人完全一致时才保留；
+    - 泛称别名（妹妹/父亲/偶像/接待员等）不构成相关性证据；
+    - 只允许角色/组织/造物/书籍等档案类型，任务词条和地图文本由各自通道处理。
+    """
     excluded = {e.entry_id for e in task_entries} | {e.entry_id for e in map_entries}
     candidates = {}
 
     # 1) 已知实体：实体提及索引的反向边
     mention_index = _load_entity_mention_index()
-    known_counts = {}
     if mention_index:
         inverted = mention_index.get("inverted") or {}
-        entity_meta = mention_index.get("entities") or {}
-        task_ids = {e.entry_id for e in task_entries}
         for task in task_entries:
             for eid in inverted.get(task.entry_id, []):
                 if eid in excluded:
                     continue
-                known_counts[eid] = known_counts.get(eid, 0) + 1
                 entry = graph.get(eid)
-                if entry is not None and entry.entry_type in _ENTITY_TYPE_PRIORITY:
-                    candidates[eid] = {"entry": entry, "known": known_counts[eid], "speaker": 0}
+                if entry is None or entry.entry_type not in _ENTITY_ALLOWED_TYPES:
+                    continue
+                info = candidates.setdefault(
+                    eid, {"entry": entry, "known": 0, "speaker": 0, "hits": 0}
+                )
+                info["known"] += 1
 
-    # 2) 未收录为独立词条的说话人：用全文检索找到提到该名字的词条
+    # 2) 说话人：只在标题或具体别名与说话人完全一致时保留，
+    #    不再用 graph.search 的模糊结果（避免把只共享单字的无关词条带进来）。
     speaker_names = _extract_speaker_names(task_texts)
     for name in speaker_names:
-        for entry in graph.search(name, limit=8):
+        for entry in graph.search(name, limit=20):
             if entry.entry_id in excluded:
                 continue
             if entry.entry_type not in _UNKNOWN_SPEAKER_TARGET_TYPES:
                 continue
-            info = candidates.setdefault(entry.entry_id, {"entry": entry, "known": 0, "speaker": 0})
+            title = (entry.title or "").strip()
+            if title != name and name not in (entry.aliases or []):
+                continue
+            info = candidates.setdefault(
+                entry.entry_id, {"entry": entry, "known": 0, "speaker": 0, "hits": 0}
+            )
             info["speaker"] += 1
 
+    # 3) 通用相关性过滤：必须有具体名字命中，或本人就是说话人。
+    combined_text = "\n".join(task_texts + [(m.full_text or "") for m in map_entries])
+    filtered = []
+    for info in candidates.values():
+        entry = info["entry"]
+        title = (entry.title or "").strip()
+        speaker_hit = _entity_is_speaker(entry, speaker_names)
+        if any(k in title for k in _ENTITY_GENERIC_TITLE_KEYWORDS) and not speaker_hit:
+            continue
+        if title in _ENTITY_GENERIC_ALIASES and not speaker_hit:
+            continue
+        hits = _entity_specific_alias_hits(entry, combined_text)
+        if not speaker_hit and hits == 0:
+            # 圣遗物/武器/书籍即使正文里没有再次点名，只要被任务提及索引显式关联，
+            # 仍作为“造物/文献档案”保留；角色/NPC/组织不享受这条兜底。
+            if not (entry.entry_type in ("artifact", "weapon", "book") and info["known"] > 0):
+                continue
+        info["speaker"] = 1 if speaker_hit else 0
+        info["hits"] = hits
+        filtered.append(info)
+
     ordered = sorted(
-        candidates.values(),
+        filtered,
         key=lambda x: (
-            -x["known"],
             -x["speaker"],
+            -x["hits"],
+            -x["known"],
             _ENTITY_TYPE_PRIORITY.get(x["entry"].entry_type, 99),
             len(x["entry"].full_text or ""),
             x["entry"].title,
