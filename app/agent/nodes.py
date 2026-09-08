@@ -1597,8 +1597,112 @@ def _already_full_text_panoramic(messages):
     return False
 
 
+# ====== 全景题的实体档案展开 ======
+# 实体提及索引（Aho-Corasick 构建）解决“谁在正文里被提到”；
+# 说话人提取解决“伊兹梅洛/卡谢伊/阿尔维斯”这类没有独立词条、只在正文出现的人名。
+_ENTITY_INDEX_PATH = WIKI_GRAPH_OUTPUT.parent / "wiki_entity_mention_index.json"
+_ENTITY_INDEX_CACHE = None
+_ENTITY_TYPE_PRIORITY = {
+    "character": 0, "npc": 1, "organization": 2, "artifact": 3,
+    "weapon": 4, "book": 5, "monster": 6, "region_feature": 7,
+    "story_chapter": 8, "gadget": 9, "map_text": 10,
+    "character_anecdote": 11, "task": 12, "activity": 13, "item": 14,
+}
+_SPEAKER_RE = re.compile(r"(?:^|\n)\s*\*?\s*([\u4e00-\u9fff·]{2,10})\s*[：:]")
+_SPEAKER_STOPWORDS = {
+    "旅行者", "派蒙", "书柜", "画框", "花瓶", "字迹", "稚嫩的字迹", "模糊的字迹",
+    "凌乱的字迹", "泛黄的记录簿", "留言条", "虚弱的猫叫", "未知通讯者", "熟悉的女声",
+    "尚有理智的树妖", "高大的树妖", "理性的雪精", "迟疑的雪精", "陶醉的雪精",
+    "看守的雪精", "字迹模糊的笔记", "谁人书写的笔记",
+}
+_PANORAMIC_ENTITY_MAX = 30
+_PANORAMIC_EXTRA_CHARS = 120000
+_PANORAMIC_ENTITY_TEXT_CAP = 6000
+# 说话人名字没有独立角色词条时，只在“正文提及该名字”的档案类词条里找，
+# 避免把闲云/珊瑚宫心海这类泛角色长档案误当成本任务相关角色。
+_UNKNOWN_SPEAKER_TARGET_TYPES = {
+    "artifact", "organization", "map_text", "story_chapter", "book",
+    "gadget", "item", "task", "activity",
+}
+
+
+def _load_entity_mention_index():
+    global _ENTITY_INDEX_CACHE
+    if _ENTITY_INDEX_CACHE is None:
+        try:
+            _ENTITY_INDEX_CACHE = json.loads(_ENTITY_INDEX_PATH.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"  -> [实体索引] 加载失败，跳过实体档案展开：{e}")
+            _ENTITY_INDEX_CACHE = False
+    return _ENTITY_INDEX_CACHE or None
+
+
+def _extract_speaker_names(texts):
+    names = set()
+    for text in texts:
+        for m in _SPEAKER_RE.finditer(text or ""):
+            name = m.group(1).strip("「」")
+            if 2 <= len(name) <= 8 and name not in _SPEAKER_STOPWORDS:
+                names.add(name)
+    return names
+
+
+def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries):
+    """返回与全景题相关的角色/组织/圣遗物/地点档案词条。"""
+    excluded = {e.entry_id for e in task_entries} | {e.entry_id for e in map_entries}
+    candidates = {}
+
+    # 1) 已知实体：实体提及索引的反向边
+    mention_index = _load_entity_mention_index()
+    known_counts = {}
+    if mention_index:
+        inverted = mention_index.get("inverted") or {}
+        entity_meta = mention_index.get("entities") or {}
+        task_ids = {e.entry_id for e in task_entries}
+        for task in task_entries:
+            for eid in inverted.get(task.entry_id, []):
+                if eid in excluded:
+                    continue
+                known_counts[eid] = known_counts.get(eid, 0) + 1
+                entry = graph.get(eid)
+                if entry is not None and entry.entry_type in _ENTITY_TYPE_PRIORITY:
+                    candidates[eid] = {"entry": entry, "known": known_counts[eid], "speaker": 0}
+
+    # 2) 未收录为独立词条的说话人：用全文检索找到提到该名字的词条
+    speaker_names = _extract_speaker_names(task_texts)
+    for name in speaker_names:
+        for entry in graph.search(name, limit=8):
+            if entry.entry_id in excluded:
+                continue
+            if entry.entry_type not in _UNKNOWN_SPEAKER_TARGET_TYPES:
+                continue
+            info = candidates.setdefault(entry.entry_id, {"entry": entry, "known": 0, "speaker": 0})
+            info["speaker"] += 1
+
+    ordered = sorted(
+        candidates.values(),
+        key=lambda x: (
+            -x["known"],
+            -x["speaker"],
+            _ENTITY_TYPE_PRIORITY.get(x["entry"].entry_type, 99),
+            len(x["entry"].full_text or ""),
+            x["entry"].title,
+        ),
+    )
+    out = []
+    total_chars = 0
+    for info in ordered[:_PANORAMIC_ENTITY_MAX]:
+        entry = info["entry"]
+        text_len = min(len(entry.full_text or ""), _PANORAMIC_ENTITY_TEXT_CAP)
+        if total_chars + text_len > _PANORAMIC_EXTRA_CHARS and out:
+            break
+        out.append(entry)
+        total_chars += text_len
+    return out
+
+
 def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, response=None):
-    """全景/综合题：代码直接加载相关任务+地图文本全文，绕过普通截断与熔断。"""
+    """全景/综合题：代码直接加载相关任务+地图文本+实体档案全文，绕过普通截断与熔断。"""
     original_query = state.get("user_query", "") or state.get("rewritten_query", "")
     if not _PANORAMIC_FULL_TEXT_RE.search(original_query):
         return None
@@ -1614,6 +1718,10 @@ def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, re
     if len(matched_tasks) < 2:
         return None
     matched_map_texts = _collect_graph_map_texts(graph, matched_tasks)
+    task_texts = [e.full_text or "" for e in matched_tasks]
+    related_entities = _collect_related_entity_entries(
+        graph, matched_tasks, task_texts, matched_map_texts
+    )
 
     parts = [
         _FULL_TEXT_HEADER,
@@ -1631,19 +1739,34 @@ def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, re
                 f"\n----- {entry.title} (ID {entry.entry_id}) 共 {len(entry.full_text)} 字 -----\n"
                 + entry.full_text
             )
+    if related_entities:
+        parts.append("\n\n===== 相关角色/组织/圣遗物/地点档案全文 =====")
+        for entry in related_entities:
+            text = entry.full_text or ""
+            if len(text) > _PANORAMIC_ENTITY_TEXT_CAP:
+                text = text[:_PANORAMIC_ENTITY_TEXT_CAP] + "\n...[档案过长已截断]"
+            parts.append(
+                f"\n----- {entry.title} ({entry.entry_type}, ID {entry.entry_id}) "
+                f"共 {len(entry.full_text)} 字 -----\n" + text
+            )
 
     content = "\n".join(parts)
     print(
         f"  -> [全景全文旁路] 任务={[e.entry_id for e in matched_tasks]} "
-        f"地图={[e.entry_id for e in matched_map_texts]} 总字={len(content)}"
+        f"地图={[e.entry_id for e in matched_map_texts]} "
+        f"实体档案={[e.entry_id for e in related_entities]} 总字={len(content)}"
     )
     trace_emit("plan", {
         "iteration": iteration + 1,
-        "execution_plan": f"全景全文旁路：加载 {len(matched_tasks)} 个任务全文 + {len(matched_map_texts)} 个地图文本全文",
+        "execution_plan": (
+            f"全景全文旁路：{len(matched_tasks)} 个任务全文 + {len(matched_map_texts)} 个地图文本全文 "
+            f"+ {len(related_entities)} 个实体档案"
+        ),
         "tool_call_names": [],
         "tool_call_source": "full_text_panoramic",
         "full_text_task_ids": [e.entry_id for e in matched_tasks],
         "full_text_map_ids": [e.entry_id for e in matched_map_texts],
+        "full_text_entity_ids": [e.entry_id for e in related_entities],
         "run_id": state.get("run_id"),
     })
     return {
@@ -2282,6 +2405,19 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     )
 
     system_content = execution_facts + "\n" + AGENT_SYSTEM_PROMPT_ANSWER
+
+    # 全景题：证据里包含代码加载的全文，输出规约必须明确要求“逐线逐角色逐地图文本展开”，
+    # 否则模型会再次把 15 万字证据压缩成 2~3 千字概要。
+    if _already_full_text_panoramic(messages):
+        system_content += (
+            "\n\n===== 全景题输出规约（必须遵守）=====\n"
+            "1. 先列出“证据中出现的实体清单”：所有角色、组织、造物、圣遗物/道具、地图文本名称。\n"
+            "2. 按任务线逐条完整展开：触发条件、任务流程、关键对话、结局。\n"
+            "3. 清单中的每个角色/组织/造物单独成节，写明“直接证据”与“评价”，不得合并成一段。\n"
+            "4. 每张相关地图文本单独引用原文，并解释它与剧情的关系。\n"
+            "5. 输出目标 12000~18000 字；禁止用“总之/三种永恒”等概要压缩掉细节。\n"
+            "6. 只写证据支持的内容；证据未覆盖的写“原文未覆盖”，不要用推测填空。\n"
+        )
 
     # not_found 代码短路：response_mode=not_found 时直接返回固定字符串，不调用 LLM
     # 这从根本上消除了 Answer LLM 忽略 not_found 标记、强行编造内容的可能性
