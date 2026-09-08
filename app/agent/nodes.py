@@ -1428,16 +1428,56 @@ def _load_wiki_graph_cached():
     return _wiki_graph_cache or None
 
 
+def _task_title_aliases(entry):
+    """生成任务标题的通用别名：完整标题、去地区前缀、去章节幕号、去书名号后缀。
+
+    注意：只做字符串结构处理，不引入任何地区/主题关键词；
+    地区前缀从 entry.region 读取，避免把“至冬”这种地区名本身当成任务名匹配。
+    """
+    title = (entry.title or "").strip()
+    region = (entry.region or "").strip()
+    aliases = {title}
+
+    # 去掉“地区 + 空格”前缀，例如“至冬 在生命的寓所” -> “在生命的寓所”。
+    if region and title.startswith(region + " "):
+        aliases.add(title[len(region) + 1:].strip())
+    # 去掉首段地区/系列前缀，但不要把地区名本身当成任务别名。
+    first = title.split(" ", 1)[0].strip()
+    if len(first) >= 2 and first != region:
+        aliases.add(first)
+    # 去掉“第X幕「...」”后缀，例如“水仙的追迹 第一幕「藻海的寻踪」” -> “水仙的追迹”。
+    m = re.match(r"^(.*?)\s*第[一二三四五六七八九十百0-9]+幕", title)
+    if m:
+        base = m.group(1).strip()
+        if len(base) >= 2:
+            aliases.add(base)
+    # 去掉末尾的「...」/【...】说明后缀。
+    m2 = re.match(r"^(.*?)\s*[「【].*?[」】]\s*$", title)
+    if m2:
+        base = m2.group(1).strip()
+        if len(base) >= 2:
+            aliases.add(base)
+
+    return [a for a in aliases if len(a) >= 2]
+
+
 def _match_graph_task_titles(graph, query):
-    """找出标题（或其去掉地区前缀的部分）出现在用户问题里的任务词条。"""
+    """找出标题（或其通用别名）出现在用户问题里的任务词条。
+
+    通用化点：不再假设任务标题一定以“至冬 ”开头；
+    任何“地区 任务名”结构都会去掉地区前缀，任何“系列名 第X幕”结构都会去掉幕号。
+    """
     matched = []
+    seen = set()
     for entry in graph.entries.values():
         if entry.entry_type != "task":
             continue
-        title = entry.title or ""
-        base_title = title.split(" ", 1)[1] if title.startswith("至冬 ") else title
-        if base_title and (title in query or base_title in query):
-            matched.append(entry)
+        for alias in _task_title_aliases(entry):
+            if alias in query:
+                if entry.entry_id not in seen:
+                    seen.add(entry.entry_id)
+                    matched.append(entry)
+                break
     return matched
 
 
