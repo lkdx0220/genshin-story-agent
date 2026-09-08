@@ -48,6 +48,32 @@ _SECTION_WORKERS = 4
 _ENTITY_PER_SECTION = 15
 _MAX_ENTITY_CHARS = 3000
 _MAX_TASK_RELATED_ENTITY_CHARS = 24000
+_COVERAGE_MAX_NAMES = 12
+_COVERAGE_CONTEXT_CHARS = 260
+_SPEAKER_RE = re.compile(r"(?:^|\n)\s*\*?\s*([\u4e00-\u9fff·]{2,10})\s*[：:]")
+_SPEAKER_STOPWORDS = {
+    "旅行者", "派蒙", "她说", "他说", "世界任务", "传说任务", "魔神任务",
+    "活动剧情", "旁白", "画外音", "选项", "游逸旅闻",
+}
+_SPEAKER_NOISE_EXACT = {
+    "生之花", "死之羽", "时之沙", "空之杯", "理之冠", "其之二",
+    "下属学科", "趣闻", "悬赏", "描述", "编者注", "备注",
+}
+_SPEAKER_NOISE_KEYWORDS = (
+    "字迹", "笔记", "记录", "留言", "日志", "报告", "告示", "配方", "画框",
+    "书柜", "花瓶", "猫叫", "通讯", "女声", "树妖", "雪精",
+    # 任务/系统文本里的非人物标签，防止把 UI 提示当成说话人。
+    "提示", "编者注", "备注", "道具", "任务", "获得", "提交", "属性",
+    "循环", "生命", "单人", "四人", "双拳", "终末", "智勇",
+)
+_COVERAGE_INSTRUCTION = """以下人物/条目在任务正文或档案中出现，但前文没有展开。
+请为每一个单独写一小节：
+### 名称
+- 直接证据：引用或概括证据原文中的行为/台词
+- 动机：人物为什么这样做
+- 内在矛盾：人物身上的悖论或张力
+- 评价：一句不超过 50 字、有洞察力的评价
+通常 300~800 字，以证据量为准；证据不足就写“证据未覆盖”，不得引入外部知识，不得把不同人物合并。"""
 
 
 @dataclass
@@ -299,22 +325,75 @@ def _assemble(sections: List[PanoramaSection], results: List[str], original_quer
     return "".join(parts).strip()
 
 
-def _log_coverage(sections, final_answer: str) -> None:
-    entity_titles = []
+def _entity_titles(sections) -> List[str]:
+    titles = []
     for section in sections:
         if section.kind != "entity":
             continue
         for line in section.text.splitlines():
             m = re.match(r"----- (.+?) \((.+?), ID (\d+)\) -----", line.strip())
             if m:
-                entity_titles.append(m.group(1).strip())
-    if not entity_titles:
-        return
-    missing = [t for t in entity_titles if t not in final_answer]
-    if missing:
-        print(f"  -> [L3覆盖检查] 未在答案中出现（v1 仅记录，不重生成）：{missing}")
-    else:
-        print(f"  -> [L3覆盖检查] {len(entity_titles)} 个实体全部出现")
+                titles.append(m.group(1).strip())
+    return titles
+
+
+def _extract_task_speaker_names(sections) -> List[str]:
+    names = []
+    for section in sections:
+        if section.kind != "task":
+            continue
+        for m in _SPEAKER_RE.finditer(section.text or ""):
+            name = m.group(1).strip("「」")
+            if not (2 <= len(name) <= 6):
+                continue
+            if name.endswith("说"):
+                continue
+            if name in _SPEAKER_STOPWORDS or name in _SPEAKER_NOISE_EXACT:
+                continue
+            if any(k in name for k in _SPEAKER_NOISE_KEYWORDS):
+                continue
+            # “某某和某某”“某某的某某”是正文短语，不是独立人物名。
+            if "和" in name or "的" in name:
+                continue
+            if name not in names:
+                names.append(name)
+    return names
+
+
+def _find_missing_names(sections, final_answer: str) -> List[str]:
+    """找出证据中出现、但最终答案里完全没有提到的人物/实体名。"""
+    candidates = _extract_task_speaker_names(sections) + _entity_titles(sections)
+    missing = []
+    for name in candidates:
+        if name and name not in final_answer and name not in missing:
+            missing.append(name)
+    return missing[:_COVERAGE_MAX_NAMES]
+
+
+def _build_coverage_section(missing_names: List[str], sections) -> PanoramaSection:
+    """为缺失名字从已有证据里截取上下文窗口，生成一个补充 section。"""
+    all_text = "\n\n".join(section.text for section in sections)
+    parts = []
+    for name in missing_names:
+        windows = []
+        start = 0
+        while len(windows) < 2:
+            idx = all_text.find(name, start)
+            if idx < 0:
+                break
+            left = max(0, idx - _COVERAGE_CONTEXT_CHARS)
+            right = min(len(all_text), idx + len(name) + _COVERAGE_CONTEXT_CHARS)
+            windows.append(all_text[left:right])
+            start = idx + len(name)
+        evidence = "\n---\n".join(windows) if windows else "证据未覆盖"
+        parts.append(f"----- {name} -----\n{evidence}")
+    return PanoramaSection(
+        key="coverage",
+        title="补充：正文中出现但前文未展开的人物/条目",
+        kind="coverage",
+        text="\n\n".join(parts),
+        instruction=_COVERAGE_INSTRUCTION,
+    )
 
 
 def generate_panorama_answer(messages, original_query: str, emit: Optional[Callable[[str, dict], None]] = None) -> str:
@@ -332,6 +411,29 @@ def generate_panorama_answer(messages, original_query: str, emit: Optional[Calla
     _emit_progress("answer_delta", {"delta": f"# {original_query}\n"})
     results = _ordered_parallel(sections)
     final_answer = _assemble(sections, results, original_query)
-    _log_coverage(sections, final_answer)
+
+    # v1.2 覆盖补充：任务正文里出现过的说话人、实体档案里列出的实体，
+    # 如果前文完全没提到，就单独生成一个补充 section，不重写已有正文。
+    missing = _find_missing_names(sections, final_answer)
+    if missing:
+        print(f"  -> [L3覆盖补充] 前文未展开：{missing}")
+        coverage = _build_coverage_section(missing, sections)
+        coverage_text = _generate_one(coverage)
+        sections.append(coverage)
+        results.append(coverage_text)
+        _emit_progress("answer_delta", {
+            "delta": f"\n\n## {coverage.title}\n\n{coverage_text.strip()}"
+        })
+        final_answer = _assemble(sections, results, original_query)
+    else:
+        print("  -> [L3覆盖补充] 任务正文说话人与实体档案均已出现")
+
+    entity_titles = _entity_titles(sections)
+    if entity_titles:
+        still_missing = [t for t in entity_titles if t not in final_answer]
+        if still_missing:
+            print(f"  -> [L3覆盖检查] 仍有实体未出现：{still_missing}")
+        else:
+            print(f"  -> [L3覆盖检查] {len(entity_titles)} 个实体全部出现")
     print(f"  -> [L3分段] 拼装完成，总长 {len(final_answer)} 字")
     return final_answer

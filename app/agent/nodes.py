@@ -1685,6 +1685,12 @@ _ENTITY_ALLOWED_TYPES = {
     "character", "npc", "organization", "monster", "artifact", "weapon",
     "book", "story_chapter", "gadget", "item", "region_feature",
 }
+# 图谱一跳扩展：只从任务/地图词条向这些“造物/文献/组织/地点”类型扩展，
+# 不扩展角色/NPC，避免把全局角色噪声带回来。
+_LORE_EXPAND_TYPES = {
+    "artifact", "weapon", "book", "story_chapter", "organization", "region_feature",
+}
+_LORE_EXPAND_MAX = 20
 
 
 def _entity_specific_alias_hits(entry, text):
@@ -1800,7 +1806,31 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
                 continue
         info["speaker"] = 1 if speaker_hit else 0
         info["hits"] = hits
+        info["expand"] = 0
         filtered.append(info)
+
+    # 4) 图谱一跳扩展：从任务/地图词条出发，补回与其显式链接的造物/文献/组织/地点。
+    #    只做一跳、只允许上面 _LORE_EXPAND_TYPES 的类型，避免噪声扩散。
+    existing_ids = {info["entry"].entry_id for info in filtered}
+    expanded = []
+    for seed in list(task_entries) + list(map_entries):
+        neighbors = [t for t, _ in graph.expand(seed.entry_id, limit=100) if t is not None]
+        neighbors += [s for s, _ in graph.backlinks(seed.entry_id) if s is not None]
+        for neighbor in neighbors:
+            if neighbor.entry_id in excluded or neighbor.entry_id in existing_ids:
+                continue
+            if neighbor.entry_type not in _LORE_EXPAND_TYPES:
+                continue
+            if any(info["entry"].entry_id == neighbor.entry_id for info in expanded):
+                continue
+            expanded.append({
+                "entry": neighbor, "known": 0, "speaker": 0, "hits": 0, "expand": 1,
+            })
+            if len(expanded) >= _LORE_EXPAND_MAX:
+                break
+        if len(expanded) >= _LORE_EXPAND_MAX:
+            break
+    filtered.extend(expanded)
 
     ordered = sorted(
         filtered,
@@ -1808,6 +1838,7 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
             -x["speaker"],
             -x["hits"],
             -x["known"],
+            -x.get("expand", 0),
             _ENTITY_TYPE_PRIORITY.get(x["entry"].entry_type, 99),
             len(x["entry"].full_text or ""),
             x["entry"].title,
