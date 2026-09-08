@@ -27,8 +27,8 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from app.llm import answer_llm_l3_fast
 
 _FULL_TEXT_HEADER = "[全景全文读取]"
-_MAP_SECTION_MARKER = "\n\n===== 相关地图文本全文 ====="
-_ENTITY_SECTION_MARKER = "\n\n===== 相关角色/组织/圣遗物/地点档案全文 ====="
+_MAP_SECTION_MARKER = "\n\n===== 相关地图文本"
+_ENTITY_SECTION_MARKER = "\n\n===== 相关角色/组织/圣遗物/地点"
 
 _TASK_BLOCK_RE = re.compile(
     r"===== 任务 \d+: (.+?) \(ID (\d+)\) 共 \d+ 字 =====\n(.*?)(?=\n===== 任务 |\n\n===== 相关地图文本全文|\Z)",
