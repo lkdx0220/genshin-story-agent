@@ -46,6 +46,13 @@ python scripts/kb_build_index.py --force
 
 # 预处理长任务切片（生成 quests_processed.json）
 python scripts/quest_preprocessor.py
+
+# 全量 wiki 链接图：首次全量抓取 + 构建
+python wiki_data_tools/_fetch_mihoyo_channel.py --tier 1 --delay 0.6
+python wiki_entry_graph.py --build
+
+# 全量 wiki 链接图：后续增量更新（断点续传 + 自动重建）
+python scripts/update_wiki_graph.py
 ```
 
 抓取后的数据存于 `content_data/` 目录，运行时自动加载。
