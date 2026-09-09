@@ -3,7 +3,7 @@
 
 设计目标：
 - 不靠 LLM 抽三元组，直接复用米游社观测枢词条内部自带的 data-entry-id 超链接；
-- 每个词条保存：全文、类型、地区、别名、它链接到的其它词条；
+- 每个词条保存：全文（展示用）、剧情文本 story_text（链接/提及索引用）、类型、地区、别名、它链接到的其它词条；
 - Agent 可以像 WorkBuddy 那样顺着链接做多跳检索。
 
 本模块只处理数据结构、构建与查询，不负责网络抓取。
@@ -33,7 +33,7 @@ MAP_TEXT_RAW = BASE_DIR / "content_data" / "mihoyo_map_text_raw_full.json"
 MISSING_RAW = BASE_DIR / "content_data" / "wiki_missing_entries_raw.json"
 WIKI_RAW_DIR = BASE_DIR / "content_data" / "wiki_raw"
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # 试点范围：灰眸四线任务 ID 及其关联地区。
 PILOT_TASK_IDS = {"509533", "509538", "509592", "509591"}
@@ -88,6 +88,7 @@ class WikiEntry:
     title: str
     entry_type: str
     full_text: str
+    story_text: str = ""
     aliases: List[str] = field(default_factory=list)
     region: str = ""
     filters: List[str] = field(default_factory=list)
@@ -105,6 +106,7 @@ class WikiEntry:
             "title": self.title,
             "entry_type": self.entry_type,
             "full_text": self.full_text,
+            "story_text": self.story_text,
             "aliases": self.aliases,
             "region": self.region,
             "filters": self.filters,
@@ -131,6 +133,7 @@ class WikiEntry:
             title=str(data.get("title", "")),
             entry_type=str(data.get("entry_type", "")),
             full_text=str(data.get("full_text", "")),
+            story_text=str(data.get("story_text", "")),
             aliases=list(data.get("aliases") or []),
             region=str(data.get("region", "")),
             filters=list(data.get("filters") or []),
@@ -164,7 +167,11 @@ class WikiEntryGraph:
         return self.entries.get(str(entry_id))
 
     def search(self, keyword: str, limit: int = 20) -> List[WikiEntry]:
-        """本地词条搜索：标题精确优先，其次标题/别名/全文子串，再退化为字符交集。"""
+        """本地词条搜索：标题精确优先，其次标题/别名/剧情文本子串，再退化为字符交集。
+
+        只搜索 story_text，不搜索 full_text：full_text 仍包含玩法推荐/装备展示等模块，
+        如果参与搜索会把“推荐角色”当成剧情相关词条返回。
+        """
         kw = (keyword or "").strip()
         if not kw:
             return []
@@ -174,18 +181,19 @@ class WikiEntryGraph:
             if e.entry_id in seen:
                 continue
             score = 0
+            story = e.story_text or ""
             if e.title == kw:
                 score = 100
             elif kw in e.title:
                 score = 80
             elif any(kw in a for a in e.aliases):
                 score = 70
-            elif kw in e.full_text:
+            elif kw in story:
                 score = 40
             else:
                 # 中文空格分词粗匹配：全部字符都出现时给低分。
                 terms = [t for t in re.split(r"[\s,，、]+", kw) if t]
-                if terms and all(t in e.title + e.full_text for t in terms):
+                if terms and all(t in e.title + story for t in terms):
                     score = 20
             if score > 0:
                 seen.add(e.entry_id)
@@ -421,6 +429,98 @@ def _extract_dialogue_text(data: Any) -> str:
     return "\n".join(out).strip()
 
 
+# ====== 剧情文本提取规则 ======
+# story_text 只保留叙事类模块；玩法/数值/推荐类模块必须排除，避免玩法推荐边污染剧情图。
+# 规则顺序：先黑名单，再白名单；部分叙事型词条允许未命中黑白名单的模块名（如书籍卷名、地图告示标题）。
+_STORY_MODULE_BLACKLIST = (
+    "推荐", "装备描述", "装备展示", "成长", "数值", "属性", "基础", "突破",
+    "天赋", "命之座", "配队", "强化", "获取", "材料", "商品", "商店", "数据",
+    "图鉴", "攻略", "玩法", "奖励", "纪行", "位置", "地点", "分布", "关卡",
+    "挑战", "成就", "地图", "图片", "展示", "配音", "CV", "名片", "料理",
+    "食材", "食物", "合成", "锻造", "价格", "出售", "兑换", "来源", "获得",
+    "使用", "效果", "消耗", "冷却", "时间轴", "宣发", "媒体", "语音", "词条",
+    "导航", "战斗单位", "补充说明", "文字说明", "图片说明", "详细说明",
+    "关卡说明", "挑战说明", "纪行说明", "秘境信息", "秘境位置", "更多信息",
+    "详细信息", "活动说明", "游戏内活动说明", "玩法说明", "活动攻略",
+    "玩家攻略", "活动商店", "活动公告", "活动详情", "活动奖励", "活动玩法",
+    "活动流程", "任务奖励", "任务条件", "任务流程", "任务目标", "任务与奖励",
+    "委托奖励", "挑战目标", "挑战阵容", "挑战特殊效果", "地图说明", "地图展示",
+    "地图位置", "地图点位", "角色展示", "NPC展示", "衣装展示", "实机展示",
+    "动作展示", "立绘展示", "洞天预览", "外观", "图标", "海报", "入口",
+)
+_STORY_MODULE_WHITELIST = (
+    "相关故事", "背景故事", "角色故事", "衣装故事", "故事",
+    "剧情对话", "剧情彩蛋", "剧情说明", "剧情",
+    "任务概述", "任务过程", "任务对话", "任务剧情",
+    "NPC对话", "对话", "交互文本",
+    "物品描述", "更多描述", "角色详细",
+    "神之眼", "月之轮", "神之心", "星之楔",
+    "角色关系网",
+    "简介", "重要事件", "成员", "部族成员", "主要人物", "逸闻", "趣闻",
+    "重大事迹", "逸闻与事迹",
+    "生之花", "死之羽", "时之沙", "空之杯", "理之冠",
+    "阅读", "书籍内容", "从石碑上抄下来的文字", "鼓谱",
+    "旅行者的笔记", "解读",
+    "逸闻纪事", "彩蛋", "生日", "角色洞天对话", "角色赠礼",
+    "好感套装对话", "赠礼对话", "特殊对话", "纪念留影",
+    "相关任务", "相关角色及任务",
+    "公告板内容", "告示板内容", "留言板内容", "告示", "留言", "通知",
+    "日志", "手记", "笔记", "秘闻",
+    "月下纪闻", "聚所纪事", "世界任务", "纪闻",
+    "行迹", "见闻", "影域",
+    "秘境详情", "简述", "臻冰造物", "活动简述",
+)
+# 这些类型的词条以叙事为主：未命中黑白名单的模块名也纳入 story_text。
+# book 需要卷名/自定义书名模块，map_text 需要告示/广告板自定义标题，
+# organization 需要各分会/部门小节；其余类型只认白名单，避免把玩法模块带进来。
+_UNKNOWN_MODULE_STORY_TYPES = {"book", "map_text", "organization"}
+
+
+def _is_story_module(module_name: str, entry_type: str) -> bool:
+    """判断一个模块是否属于剧情类；玩法模块优先排除。"""
+    name = (module_name or "").strip()
+    if not name:
+        return False
+    if any(bad in name for bad in _STORY_MODULE_BLACKLIST):
+        return False
+    if any(good in name for good in _STORY_MODULE_WHITELIST):
+        return True
+    return entry_type in _UNKNOWN_MODULE_STORY_TYPES
+
+
+def _iter_story_modules(page: Dict[str, Any], entry_type: str):
+    """按顺序产出剧情模块的 (模块名, 模块对象)。"""
+    for module in page.get("modules") or []:
+        module_name = str(module.get("name") or "").strip()
+        if _is_story_module(module_name, entry_type):
+            yield module_name, module
+
+
+def _iter_story_strings(page: Dict[str, Any], entry_type: str):
+    """递归产出剧情模块组件里的所有字符串，供链接提取使用。"""
+    for _module_name, module in _iter_story_modules(page, entry_type):
+        yield from _iter_strings(module.get("components") or [])
+
+
+def _extract_story_text(page: Dict[str, Any], entry_type: str) -> str:
+    """把 page.modules 中剧情类模块重建为纯文本，供实体提及索引和链接提取使用。"""
+    chunks: List[str] = []
+    for module_name, module in _iter_story_modules(page, entry_type):
+        module_texts: List[str] = []
+        for comp in module.get("components") or []:
+            data = comp.get("data")
+            if "对话" in module_name:
+                text = _extract_dialogue_text(data)
+            else:
+                text = _data_to_text(data)
+            if text:
+                module_texts.append(text)
+        body = "\n".join(module_texts).strip()
+        if body:
+            chunks.append(f"[{module_name}]\n{body}")
+    return "\n\n".join(chunks).strip()
+
+
 def _extract_full_text(page: Dict[str, Any]) -> str:
     """把 page.modules 重建为纯文本。对话模块走有序遍历，其余模块走通用清洗。"""
     chunks: List[str] = []
@@ -462,11 +562,11 @@ def _link_context(normalized: str, match_start: int, match_end: int, width: int 
     return text[:width]
 
 
-def _extract_links(page: Dict[str, Any]) -> List[WikiLink]:
-    """从 page 的所有字符串里提取 data-entry-id / data-entry-name 链接。"""
+def _extract_links(page: Dict[str, Any], entry_type: str) -> List[WikiLink]:
+    """只从剧情模块组件里提取 data-entry-id / data-entry-name 链接，跳过玩法模块。"""
     found: Dict[str, WikiLink] = {}
     names_by_id: Dict[str, set] = {}
-    for text in _iter_strings(page):
+    for text in _iter_story_strings(page, entry_type):
         if not isinstance(text, str):
             continue
         # 组件 data 是双重 JSON 编码字符串，内部引号形如 \"，
@@ -612,10 +712,11 @@ def build_entry_from_raw(
         title=title,
         entry_type=entry_type,
         full_text=_extract_full_text(page),
+        story_text=_extract_story_text(page, entry_type),
         aliases=expanded_aliases,
         region=region,
         filters=filters,
-        links=_extract_links(page),
+        links=_extract_links(page, entry_type),
         source_channel=source_channel,
         fetched_at=fetched_at,
         content_hash=content_hash,
