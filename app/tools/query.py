@@ -390,6 +390,10 @@ def query_artifact(name: str) -> str:
         names = [a["圣遗物名称"] for a in 圣遗物知识库[:20]]
         return f"未找到「{name}」。部分圣遗物: {', '.join(names)}"
     results = []
+    # 部位故事是圣遗物剧情的主要载体；不能再按 200 字硬截，
+    # 否则结尾段落的关键词（例如“愿景”）根本进不了工具返回。
+    # 这里改为返回完整部位故事，只在整个工具返回层面设 12000 字上限。
+    story_total = 0
     for a in matches[:5]:
         info = f"\n【{a.get('圣遗物名称', '?')}】({a.get('稀有度', '?')}星)"
         info += f"\n  两件套: {a.get('两件套效果', '?')}"
@@ -398,7 +402,17 @@ def query_artifact(name: str) -> str:
         if stories:
             info += f"\n  部位故事 ({len(stories)}篇):"
             for k, v in stories.items():
-                info += f"\n    [{k}]: {v[:200]}..."
+                text = str(v or "").strip()
+                if not text:
+                    continue
+                if story_total >= 12000:
+                    info += "\n    ...[其余部位故事因长度限制省略]"
+                    break
+                remaining = 12000 - story_total
+                if len(text) > remaining:
+                    text = text[:remaining] + "...[本段截断]"
+                info += f"\n    [{k}]: {text}"
+                story_total += len(text)
         results.append(info)
     return "\n".join(results)
 

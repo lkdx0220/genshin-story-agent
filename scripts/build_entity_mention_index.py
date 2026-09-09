@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""构建实体提及索引：谁在哪些词条全文里被提到。
+"""构建实体提及索引：谁在哪些词条剧情文本里被提到。
 
-输入：kb_vectors/wiki_entry_graph.json（Schema v2）
+输入：kb_vectors/wiki_entry_graph.json（Schema v3）
 输出：kb_vectors/wiki_entity_mention_index.json
 
 原理：Aho-Corasick 多模式匹配，纯 Python 实现，不新增外部依赖。
-用途：全景题旁路中，从任务/地图文本全文抽取人名/组织/圣遗物等实体，
+用途：全景题旁路中，从任务/地图文本的剧情文本抽取人名/组织/圣遗物等实体，
       再按实体反向加载对应词条档案，逼近 WorkBuddy 的“抽人名→全文检索”效果。
 
 用法：
@@ -137,7 +137,7 @@ def main():
     total = len(entries)
     for idx, e in enumerate(entries, 1):
         eid = str(e.get("entry_id"))
-        text = f"{e.get('title', '')}\n{e.get('full_text', '')}"
+        text = f"{e.get('title', '')}\n{e.get('story_text', '')}"
         if text:
             scan(text, trie, fail, out, eid, mentions, inverted)
         if idx % 2000 == 0:
@@ -172,11 +172,14 @@ def main():
     }
 
     result = {
-        "version": 1,
+        "version": 2,
         "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "graph_path": str(graph_path),
         "stats": {
             "entries_scanned": total,
+            "entries_with_story_text": sum(
+                1 for e in entries if (e.get("story_text") or "").strip()
+            ),
             "entities": len(entity_meta),
             "entities_with_mentions": len(entities_out),
             "source_entries_with_mentions": len(inverted_out),

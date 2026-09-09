@@ -2643,21 +2643,42 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             answer_messages.append(msg)
 
     trace_emit("llm_start", {"role": "answer", "run_id": state.get("run_id"), "model": getattr(answer_llm, "model_name", None)})
-    # 流式生成：逐 chunk 推送给前端；失败则回退非流式。
+    # 流式生成：逐 chunk 推送给前端；失败或疑似截断则回退非流式。
     content_parts = []
     stream_error = None
+    stream_finish_reason = ""
     try:
         for chunk in answer_llm.stream(answer_messages):
             if isinstance(chunk, str):
                 delta = chunk
             else:
                 delta = getattr(chunk, "content", "") or ""
+                metadata = getattr(chunk, "response_metadata", None) or {}
+                finish_reason = metadata.get("finish_reason") or metadata.get("finishReason")
+                if finish_reason:
+                    stream_finish_reason = str(finish_reason)
             if delta:
                 content_parts.append(delta)
                 _emit_progress("answer_delta", {"delta": delta})
     except Exception as e:
         print(f"  -> [流式] 流式生成失败，回退非流式: {e}")
         stream_error = e
+
+    # 流式截断守卫：finish_reason=length，或短回答结尾没有句末标点时，
+    # 认为流式没有正常收尾，回退非流式重试一次，避免把半句话当最终答案。
+    if stream_error is None and content_parts:
+        stream_content = "".join(content_parts).rstrip()
+        looks_incomplete = False
+        if stream_finish_reason == "length":
+            looks_incomplete = True
+        elif len(stream_content) < 800 and stream_content and not re.search(r"[。！？!?…」』】）\)\"'”’]$", stream_content):
+            looks_incomplete = True
+        if looks_incomplete:
+            print(
+                f"  -> [流式] 疑似截断（finish_reason={stream_finish_reason or 'unknown'}，"
+                f"长度={len(stream_content)}），回退非流式重试"
+            )
+            stream_error = "stream_incomplete"
 
     if stream_error is not None or not content_parts:
         try:
@@ -2672,7 +2693,14 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     else:
         content = "".join(content_parts)
 
-    trace_emit("llm_end", {"role": "answer", "run_id": state.get("run_id"), "status": "success", "final_response_len": len(content)})
+    trace_emit("llm_end", {
+        "role": "answer",
+        "run_id": state.get("run_id"),
+        "status": "success",
+        "final_response_len": len(content),
+        "stream_finish_reason": stream_finish_reason,
+        "stream_fallback": stream_error is not None,
+    })
 
     trace_emit("answer_end", {
         "response_mode": response_mode,

@@ -53,7 +53,7 @@ def _snippets_around(text: str, focus: str, max_snippets: int = 5, width: int = 
 @tool
 def wiki_graph_search(keyword: str) -> str:
     """在本地 wiki 词条链接图里搜索词条。适合用户提到的专名/任务/地点/组织/物品找不到时，先定位词条ID。
-    keyword: 要搜索的关键词（标题、别名、正文子串均可）"""
+    keyword: 要搜索的关键词（标题、别名、剧情文本子串均可）"""
     graph = _load_graph()
     entries = graph.search(keyword, limit=15)
     if not entries:
@@ -102,22 +102,31 @@ def wiki_graph_get(entry_id: str, focus: str = "") -> str:
     if entry is None:
         return f"本地 wiki 链接图里没有词条ID {entry_id}。"
     header = _format_header(entry)
-
-    if focus:
-        snippets = _snippets_around(entry.full_text, focus, max_snippets=5, width=300)
-        if snippets:
-            parts = [header, f"与「{focus}」相关的片段："]
-            for i, s in enumerate(snippets, 1):
-                parts.append(f"[片段{i}]\n{s}")
-            return "\n\n".join(parts)
-        # focus 命中不了时退化为开头 + 链接，便于模型换词再试。
-        return f"{header}\n未在正文中找到「{focus}」，以下为词条开头：\n{entry.full_text[:1200]}"
+    story = entry.story_text or ""
 
     link_lines = [f"{l.target_name}({l.target_id})" for l in entry.links[:15]]
     link_text = "；".join(link_lines) if link_lines else "无"
+
+    if not story:
+        return (
+            f"{header}\n"
+            f"该词条没有剧情文本（可能为玩法/图鉴类词条）。\n"
+            f"内部链接({len(entry.links)}): {link_text}"
+        )
+
+    if focus:
+        snippets = _snippets_around(story, focus, max_snippets=5, width=300)
+        if snippets:
+            parts = [header, f"与「{focus}」相关的剧情片段："]
+            for i, s in enumerate(snippets, 1):
+                parts.append(f"[片段{i}]\n{s}")
+            return "\n\n".join(parts)
+        # focus 命中不了时退化为剧情开头 + 链接，便于模型换词再试。
+        return f"{header}\n未在剧情文本中找到「{focus}」，以下为剧情开头：\n{story[:1200]}"
+
     return (
         f"{header}\n"
         f"别名: {'/'.join(entry.aliases) if entry.aliases else '无'}\n"
-        f"正文开头:\n{entry.full_text[:1500]}\n"
+        f"剧情开头:\n{story[:1500]}\n"
         f"内部链接({len(entry.links)}): {link_text}"
     )
