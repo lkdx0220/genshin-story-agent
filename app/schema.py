@@ -28,6 +28,15 @@ AGENT_SYSTEM_PROMPT_ANSWER = _load_prompt("system/agent_system_v4_answer.txt")
 AGENT_SYSTEM_PROMPT_FAST = _load_prompt("system/agent_fast_answer.txt")
 HELP_TEXT = _load_prompt("help.txt")
 
+# ====== L3 全景题专用提示词 ======
+AGENT_SYSTEM_PROMPT_L3_ANSWER = _load_prompt("system/agent_system_v4_l3_answer.txt")
+L3_SECTION_COMMON = _load_prompt("system/agent_system_v4_l3_section_common.txt")
+L3_SECTION_TASK = _load_prompt("system/agent_system_v4_l3_section_task.txt")
+L3_SECTION_ENTITY = _load_prompt("system/agent_system_v4_l3_section_entity.txt")
+L3_SECTION_MAP = _load_prompt("system/agent_system_v4_l3_section_map.txt")
+L3_SECTION_SYNTHESIS = _load_prompt("system/agent_system_v4_l3_section_synthesis.txt")
+L3_SECTION_COVERAGE = _load_prompt("system/agent_system_v4_l3_section_coverage.txt")
+
 
 # ====== Agent 状态 ======
 class GenshinAdvisorState(TypedDict):
