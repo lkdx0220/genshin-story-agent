@@ -2597,6 +2597,19 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     system_content = execution_facts + "\n" + AGENT_SYSTEM_PROMPT_ANSWER
 
+    # 概念本质题范围硬规则：只回答概念本身，不展开组织/阵营/教团的成立史。
+    # 这是通用范围控制，不针对任何具体题目；由既有的概念本质判定函数触发。
+    conversation_summary = state.get("conversation_summary", "") or ""
+    turn_number = len(state.get("conversation_history") or [])
+    if _is_concept_essence_question(original_query, conversation_summary, turn_number):
+        system_content += (
+            "\n\n===== 概念本质题范围硬规则（必须遵守）=====\n"
+            "本题只回答概念本身：定义/本质、力量或能量体系、历史来源与影响。\n"
+            "禁止展开任何组织、阵营、教团、人物团体的成立史、成员名单或政治目标；\n"
+            "证据中出现的组织名不得单独成句、成段或作为小标题；\n"
+            "只有不提组织名就无法解释概念机制时，才允许用一句话带过。\n"
+        )
+
     # 全景题：证据里包含代码加载的全文，输出规约必须明确要求“逐线逐角色逐地图文本展开”，
     # 否则模型会再次把 15 万字证据压缩成 2~3 千字概要。
     if _already_full_text_panoramic(messages):
