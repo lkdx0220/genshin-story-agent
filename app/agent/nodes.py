@@ -2646,6 +2646,141 @@ def _retry_answer_as_found(answer_messages, messages, original_query, current_ll
     return _build_fallback_answer(messages, original_query)
 
 
+_ORG_NAMES_CACHE = None
+_ORG_NAME_SUFFIXES = (
+    "教团", "骑士团", "协会", "旅团", "教令院", "组织", "商会", "公会",
+    "委员会", "军团", "军", "团", "会", "院",
+)
+_COMPARISON_MARKERS = ("异同", "区别", "对比", "比较", "不同", "相同", "差异")
+# 过程性/侵蚀类词：对比分析题里这些词常常来自原文比喻，被模型升格成分析维度。
+# 只用于触发范围修复，不针对具体题目；题目本身出现的词不会触发。
+_PROCESS_WORD_LEXICON = (
+    "磨损", "冲刷", "侵蚀", "消磨", "吞噬", "瓦解", "消逝",
+    "凋零", "腐化", "腐蚀", "污染", "毁灭", "崩解", "撕裂",
+)
+
+
+def _is_comparison_question(user_query: str) -> bool:
+    """判断是否为对比分析类问题。"""
+    query = user_query or ""
+    return any(marker in query for marker in _COMPARISON_MARKERS)
+
+
+def _get_known_org_names() -> set:
+    """懒加载知识库中的组织名，用于概念本质题的组织范围检查。
+
+    只取 concepts.json 中类型含“组织”且名称符合组织后缀（教团/骑士团/
+    协会/旅团/教令院等）的条目；像“神之眼/元素/地脉”这种误标成
+    “概念/组织”的非组织条目会被后缀规则挡掉。
+    """
+    global _ORG_NAMES_CACHE
+    if _ORG_NAMES_CACHE is not None:
+        return _ORG_NAMES_CACHE
+    names = set()
+    try:
+        concepts = _load_content_json("concepts") or []
+        for item in concepts:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("名称") or "").strip()
+            type_ = str(item.get("类型") or "")
+            if not name or "组织" not in type_:
+                continue
+            if name.endswith(_ORG_NAME_SUFFIXES) or name in {"愚人众", "魔女会"}:
+                names.add(name)
+    except Exception as e:
+        print(f"  -> [范围守卫] 组织名加载失败: {e}")
+    _ORG_NAMES_CACHE = names
+    return names
+
+
+def _remove_sentences_with_terms(text: str, terms: List[str]) -> str:
+    """兜底删除包含越界词的句子；仅在 LLM 改写后仍残留越界词时使用。"""
+    if not text or not terms:
+        return text
+    pieces = re.split(r"(?<=[。！？!?\n])", text)
+    kept = [p for p in pieces if not any(term in p for term in terms)]
+    result = "".join(kept).strip()
+    return result or text
+
+
+def _rewrite_answer_with_scope(user_query: str, answer: str, drift_terms: List[str], mode_label: str) -> str:
+    """只针对越界内容做最小改写，保留其余答案。"""
+    if not drift_terms:
+        return answer
+    drift_text = "、".join(f"「{term}」" for term in drift_terms)
+    if mode_label == "概念本质题":
+        rules = (
+            "1. 删除或改写包含这些组织名的句子/段落；其余内容尽量逐字保留；\n"
+            "2. 不得新增任何事实、例子、结论或小标题；\n"
+            "3. 如果删除后影响连贯，只做最小连接修改；\n"
+        )
+    else:
+        rules = (
+            "1. 只处理越界词本身：能替换成中性表述就替换，不能替换才删除该词；\n"
+            "2. 严禁删除整句或整段；包含越界词的句子只做最小改写；\n"
+            "3. 必须保留原答案里所有人物名、作品名、核心概念和事实；\n"
+            "4. 不得新增任何事实、例子、结论或小标题；\n"
+        )
+    prompt = (
+        "你在做回答范围修复。\n"
+        f"题目类型：{mode_label}\n"
+        f"用户问题：{user_query}\n\n"
+        f"原答案：\n{answer}\n\n"
+        f"需要收紧的越界内容：{drift_text}\n\n"
+        "修复规则：\n"
+        + rules
+        + "输出修正后的完整答案，不要解释修复过程。\n"
+    )
+    try:
+        response = llm_invoke_with_retry(
+            [SystemMessage(content=prompt)],
+            llm_instance=answer_llm_medium,
+        )
+        rewritten = (getattr(response, "content", "") or "").strip()
+    except Exception as e:
+        print(f"  -> [范围守卫] 改写调用失败，使用兜底删除: {e}")
+        return _remove_sentences_with_terms(answer, drift_terms)
+    if not rewritten:
+        return _remove_sentences_with_terms(answer, drift_terms)
+    # 二次校验：改写后仍有越界词，则做确定性删除。
+    if any(term in rewritten for term in drift_terms):
+        print(f"  -> [范围守卫] 改写后仍残留越界词，兜底删除: {drift_terms}")
+        rewritten = _remove_sentences_with_terms(rewritten, drift_terms)
+    return rewritten
+
+
+def _apply_answer_scope_guard(original_query: str, content: str, messages, state) -> str:
+    """R1/C1 类范围守卫：概念本质题剔组织名，对比题剔无关分析维度。"""
+    if not content or _already_full_text_panoramic(messages):
+        return content
+    if _looks_like_not_found_answer(content):
+        return content
+    conversation_summary = state.get("conversation_summary", "") or ""
+    turn_number = len(state.get("conversation_history") or [])
+    try:
+        if _is_concept_essence_question(original_query, conversation_summary, turn_number):
+            org_names = _get_known_org_names()
+            drift = [name for name in org_names if name in content and name not in (original_query or "")]
+            if drift:
+                print(f"  -> [范围守卫] 概念本质题越界组织名: {drift}")
+                return _rewrite_answer_with_scope(original_query, content, drift, "概念本质题")
+            return content
+        if _is_comparison_question(original_query):
+            # 对比分析题的漂移大多来自原文里的过程性/侵蚀类比喻词。
+            # 这里用确定性词表触发范围修复，不再依赖小模型裁判是否“看见”。
+            drift = [
+                word for word in _PROCESS_WORD_LEXICON
+                if word in content and word not in (original_query or "")
+            ]
+            if drift:
+                print(f"  -> [范围守卫] 对比分析题过程词越界: {drift}")
+                return _rewrite_answer_with_scope(original_query, content, drift, "对比分析题")
+    except Exception as e:
+        print(f"  -> [范围守卫] 检查失败，跳过: {e}")
+    return content
+
+
 def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     """回答阶段：基于规划阶段的【执行报告】和工具返回结果，生成最终回答。不调用任何工具。"""
     messages = list(state.get("messages", []))
@@ -2959,6 +3094,10 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     if response_mode == "found" and _looks_like_not_found_answer(content):
         print(f"  -> [P0-2] found 但输出未收录（{content[:40]!r}），重试 medium/deep")
         content = _retry_answer_as_found(answer_messages, messages, original_query, answer_llm)
+
+    # 范围守卫：概念本质题剔除组织名，对比分析题剔除题目未要求的分析维度。
+    # 这是生成后校验，不依赖模型自觉；只对 R1/C1 这类结构性范围问题触发。
+    content = _apply_answer_scope_guard(original_query, content, messages, state)
 
     trace_emit("llm_end", {
         "role": "answer",
