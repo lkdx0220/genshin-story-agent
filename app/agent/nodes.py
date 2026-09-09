@@ -263,6 +263,52 @@ def _is_concept_essence_question(user_query: str, conversation_summary: str = ""
     return "C2" in labels or "ALL" in labels
 
 
+_MECHANISM_NAME_BOUNDARY = (
+    r"(?=揭|开|是|的|会|将|把|让|使|在|与|和|成|为|被|给|从|向|对|能|可|"
+    r"不|没|有|无|这|那|其|并|也|都|就|才|只|便|即|如|若|因|所|以|而|却|则|"
+    r"，|。|！|？|；|：|、|\s|$)"
+)
+_MECHANISM_NAME_PATTERNS = (
+    re.compile(r"口中的([\u4e00-\u9fff]{2,6}?)" + _MECHANISM_NAME_BOUNDARY),
+    re.compile(r"所谓的([\u4e00-\u9fff]{2,6}?)" + _MECHANISM_NAME_BOUNDARY),
+    re.compile(r"被称为([\u4e00-\u9fff]{2,6}?)" + _MECHANISM_NAME_BOUNDARY),
+    re.compile(r"称之为([\u4e00-\u9fff]{2,6}?)" + _MECHANISM_NAME_BOUNDARY),
+    re.compile(r"叫做([\u4e00-\u9fff]{2,6}?)" + _MECHANISM_NAME_BOUNDARY),
+    re.compile(r"称为([\u4e00-\u9fff]{2,6}?)" + _MECHANISM_NAME_BOUNDARY),
+)
+_MECHANISM_NAME_STOPWORDS = {
+    "故事", "梦境", "记忆", "力量", "东西", "事情", "方法", "方式",
+    "世界", "时间", "生命", "存在", "原因", "结果", "问题", "答案",
+}
+
+
+def _extract_mechanism_terms(messages) -> List[str]:
+    """从工具原文里提取被明确命名的机制/手段名，例如“纳西妲口中的童话”。
+
+    只做通用句式提取，不针对具体题目；用于回答阶段提醒模型保留机制原词。
+    """
+    text_parts = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            content = msg.content if hasattr(msg, "content") else str(msg)
+            if content:
+                text_parts.append(str(content))
+    text = "\n".join(text_parts)
+    if not text:
+        return []
+    terms: List[str] = []
+    for pattern in _MECHANISM_NAME_PATTERNS:
+        for match in pattern.finditer(text):
+            term = match.group(1).strip("「」『』")
+            if not (2 <= len(term) <= 8):
+                continue
+            if term in _MECHANISM_NAME_STOPWORDS:
+                continue
+            if term not in terms:
+                terms.append(term)
+    return terms[:5]
+
+
 def assess_query(state: GenshinAdvisorState) -> Dict[str, Any]:
     """分类节点：判断用户问题走 L1（快速）还是 L2（完整）路径。"""
     user_query = state.get("user_query", "")
@@ -2609,6 +2655,19 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             "证据中出现的组织名不得单独成句、成段或作为小标题；\n"
             "只有不提组织名就无法解释概念机制时，才允许用一句话带过。\n"
         )
+
+    # 机制名保真：为什么/原因/机制类问题，工具原文明确命名的机制/手段必须保留原词。
+    # 例如原文说“纳西妲口中的童话”，回答不能只写“小猫/梦境/故事”而漏掉“童话”。
+    if any(k in original_query for k in ("为什么", "为何", "原因", "机制", "原理", "怎么", "如何")):
+        mechanism_terms = _extract_mechanism_terms(messages)
+        if mechanism_terms:
+            system_content += (
+                "\n\n===== 机制名保真（硬规则）=====\n"
+                "工具原文明确给出了以下机制/手段名称，回答必须保留原词，"
+                "不得只用意象、比喻或近义词替代：\n"
+                + "、".join(f"「{term}」" for term in mechanism_terms)
+                + "\n"
+            )
 
     # 全景题：证据里包含代码加载的全文，输出规约必须明确要求“逐线逐角色逐地图文本展开”，
     # 否则模型会再次把 15 万字证据压缩成 2~3 千字概要。
