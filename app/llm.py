@@ -209,6 +209,19 @@ answer_llm_l3_fast = QwenFallbackChatOpenAI(
     },
 )
 
+# 机制名相关性裁判：只输出“是/否”，qwen3.6-flash 关闭思考；
+# 非法输出由调用方按“否”处理，避免无关机制名被注入 Answer 提示词。
+mechanism_judge_llm = QwenFallbackChatOpenAI(
+    model="qwen3.6-flash",
+    api_key=QWEN_API_KEY,
+    base_url=QWEN_BASE_URL,
+    temperature=0,
+    max_tokens=8,
+    request_timeout=30,
+    fallback_model="qwen-plus",
+    extra_body={"enable_thinking": False},
+)
+
 # 意图 → Answer LLM 映射：取最高优先级的意图
 INTENT_LLM_MAP = {
     "D": answer_llm_deep,     # 剧情任务

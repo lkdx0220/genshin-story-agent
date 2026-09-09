@@ -16,7 +16,7 @@ from app.config import (
 )
 from app.llm import (
     llm, plan_llm, plan_llm_l2, assess_llm, llm_invoke_with_retry, _select_answer_llm,
-    answer_llm_medium, answer_llm_l3,
+    answer_llm_medium, answer_llm_deep, answer_llm_l3, mechanism_judge_llm,
 )
 from app.schema import (
     GenshinAdvisorState,
@@ -308,6 +308,145 @@ def _extract_mechanism_terms(messages) -> List[str]:
             if term not in terms:
                 terms.append(term)
     return terms[:5]
+
+
+_MECHANISM_CONTEXT_WINDOW = 300
+_MECHANISM_FOCUS_STOPWORDS = {
+    "为什么", "为何", "原因", "机制", "原理", "怎么", "如何", "什么", "为何",
+    "是谁", "谁", "哪些", "哪个", "多少", "几点", "哪里",
+    "的", "了", "是", "在", "有", "和", "与", "把", "被", "让", "使",
+    "会", "能", "可", "要", "还", "就", "都", "也", "不", "没", "很",
+    "之后", "以后", "因为", "所以", "如果", "但是", "而是", "不是",
+    "彻底", "完全", "没有", "是不是", "为什么说", "什么叫做",
+}
+
+
+def _extract_query_focus_terms(user_query: str, exclude_terms=None) -> List[str]:
+    """从用户问题中提取可能承载问题焦点的中文 2~4 字片段。
+
+    用途：机制名相关性预筛。先去掉问题中的问句/功能词，再把问题里
+    连续中文 2~4 字片段当作“关注词”；主实体（别名标注里的名字）通过
+    exclude_terms 排除，避免“纳西妲”这类实体名和机制名在同一段证据里
+    出现就误判相关。
+    """
+    exclude = set(exclude_terms or [])
+    # 只保留中文和数字/字母，去掉标点与空白。
+    cleaned = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", user_query or "")
+    if not cleaned:
+        return []
+    terms: List[str] = []
+    for length in (4, 3, 2):
+        for i in range(0, len(cleaned) - length + 1):
+            piece = cleaned[i:i + length]
+            if piece in _MECHANISM_FOCUS_STOPWORDS or piece in exclude:
+                continue
+            # 片段里如果带英文/数字，单独保留；纯中文片段若完全由
+            # 单字功能词组成也跳过。
+            if re.fullmatch(r"[\u4e00-\u9fff]+", piece):
+                if all(ch in "的是在有何把被让使会能可要还就都也不没很因为所以而却" for ch in piece):
+                    continue
+            if piece not in terms:
+                terms.append(piece)
+    return terms[:40]
+
+
+def _mechanism_context_windows(messages, term: str, width: int = _MECHANISM_CONTEXT_WINDOW) -> List[str]:
+    """返回机制名在工具原文中的前后文窗口（用于相关性预筛与裁判）。"""
+    windows: List[str] = []
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        content = str(getattr(msg, "content", "") or "")
+        if not content:
+            continue
+        start = 0
+        while True:
+            idx = content.find(term, start)
+            if idx < 0:
+                break
+            lo = max(0, idx - width)
+            hi = min(len(content), idx + len(term) + width)
+            windows.append(content[lo:hi])
+            start = idx + len(term)
+    return windows[:5]
+
+
+def _mechanism_judge_relevant(term: str, user_query: str, windows: List[str]) -> bool:
+    """小模型兜底裁判：判断机制名是否与当前问题相关。只允许回答是/否。
+
+    只有在正则预筛拿不准时才调用；模型输出不合法按 False 处理，宁可
+    少注入一个机制名，也不把无关机制名塞进 Answer 提示词。
+    """
+    if not windows:
+        return False
+    context = "\n".join(windows)
+    if len(context) > 1500:
+        context = context[:1500]
+    prompt = (
+        "你是机制相关性裁判。判断下面这个“机制名”是否是回答用户问题所必需的关键机制。\n"
+        "只输出一个词：是 或 否。不要输出任何解释。\n\n"
+        f"用户问题：{user_query}\n"
+        f"机制名：{term}\n"
+        f"机制名出现处的证据上下文：\n{context}\n"
+    )
+    try:
+        response = mechanism_judge_llm.invoke([HumanMessage(content=prompt)])
+        answer = (getattr(response, "content", "") or "").strip().lower()
+    except Exception as e:
+        print(f"  -> [机制裁判] 调用失败，默认判定为否: {e}")
+        return False
+    if answer.startswith("是") or answer.startswith("yes"):
+        return True
+    if answer.startswith("否") or answer.startswith("no"):
+        return False
+    return False
+
+
+def _filter_mechanism_terms(messages, terms: List[str], user_query: str, alias_pairs=None) -> List[str]:
+    """机制名相关性过滤：先正则/共现预筛，再交给小模型兜底。
+
+    P0-1 目标：避免把工具原文里出现但和当前问题无关的机制名注入
+    Answer 提示词（典型：H3 问纳西妲年龄，工具里出现“童话”被误注入）。
+    """
+    if not terms:
+        return []
+    # 别名标注里的实体名不参与“共现=相关”预筛，防止主实体出现在证据里
+    # 就误判相关。
+    exclude = set()
+    for pair in (alias_pairs or []):
+        if isinstance(pair, (list, tuple)):
+            for item in pair:
+                if isinstance(item, str):
+                    exclude.add(item)
+    # 问题里直接出现的角色名同样排除；否则“纳西妲”在证据里出现一次
+    # 就会让无关机制名通过预筛。
+    for entry in 角色知识库:
+        if not isinstance(entry, dict):
+            continue
+        for key in ("角色名称", "名称", "title"):
+            name = entry.get(key)
+            if isinstance(name, str) and len(name) >= 2 and name in (user_query or ""):
+                exclude.add(name)
+    focus_terms = _extract_query_focus_terms(user_query, exclude)
+    kept: List[str] = []
+    for term in terms:
+        if term in (user_query or ""):
+            kept.append(term)
+            continue
+        windows = _mechanism_context_windows(messages, term)
+        # 预筛：机制名上下文和问题关注词有共现，说明大概率相关。
+        prescreen_hit = any(
+            ft in window
+            for ft in focus_terms
+            for window in windows
+        )
+        if prescreen_hit:
+            kept.append(term)
+            continue
+        # 预筛没把握时交给小模型裁判；小模型只输出是/否。
+        if _mechanism_judge_relevant(term, user_query, windows):
+            kept.append(term)
+    return kept
 
 
 def assess_query(state: GenshinAdvisorState) -> Dict[str, Any]:
@@ -2462,6 +2601,51 @@ def _build_fallback_answer(messages: list, original_query: str) -> str:
     return f"关于「{original_query}」，以下是知识库中检索到的相关内容：\n\n{combined}\n\n（注：以上为机器提取的原始数据，未经过 AI 整理。）"
 
 
+_NOT_FOUND_ANSWER_SNIPPETS = (
+    "当前知识库未收录", "知识库未收录", "未找到相关信息",
+    "没有找到相关信息", "未收录", "无法回答",
+)
+
+
+def _looks_like_not_found_answer(content: str) -> bool:
+    """判断 LLM 输出是否为“未收录”类短路答复（只对短文判定）。"""
+    stripped = (content or "").strip()
+    if not stripped or len(stripped) > 60:
+        return False
+    return any(snippet in stripped for snippet in _NOT_FOUND_ANSWER_SNIPPETS)
+
+
+def _retry_answer_as_found(answer_messages, messages, original_query, current_llm):
+    """P0-2：response_mode=found 但模型输出“未收录”时的重试。
+
+    先追加硬规则提醒重试 medium，仍失败换 deep；全部失败则退回
+    工具原文拼装，绝不把与 response_mode 矛盾的“未收录”当最终答案。
+    """
+    retry_messages = list(answer_messages)
+    retry_messages.append(SystemMessage(content=(
+        "注意：response_mode=found，工具返回中已经有证据。"
+        "禁止输出“当前知识库未收录/未找到相关信息/无法回答”这类答复，"
+        "必须基于工具返回原文回答用户问题。"
+    )))
+    candidates = []
+    if current_llm is not answer_llm_medium:
+        candidates.append(answer_llm_medium)
+    if current_llm is not answer_llm_deep:
+        candidates.append(answer_llm_deep)
+    for retry_llm in candidates:
+        try:
+            response = llm_invoke_with_retry(retry_messages, llm_instance=retry_llm)
+            cand = getattr(response, "content", "") or ""
+        except Exception as e:
+            print(f"  -> [未收录重试] {getattr(retry_llm, 'model_name', '?')} 调用失败: {e}")
+            continue
+        if cand.strip() and not _looks_like_not_found_answer(cand):
+            print(f"  -> [未收录重试] 换 {getattr(retry_llm, 'model_name', '?')} 后得到正常回答")
+            return cand
+    print("  -> [未收录重试] medium/deep 均失败，退回工具原文兜底")
+    return _build_fallback_answer(messages, original_query)
+
+
 def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     """回答阶段：基于规划阶段的【执行报告】和工具返回结果，生成最终回答。不调用任何工具。"""
     messages = list(state.get("messages", []))
@@ -2478,6 +2662,11 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     if _already_full_text_panoramic(messages):
         answer_llm = answer_llm_l3
         print("  -> [L3全景] 使用 qwen3.8-max Answer LLM")
+    # P0-3：为什么/原因/机制/原理/怎么/如何类问题强制 medium，避免
+    # 意图路由到 B 时用 qwen3.6-flash 生成机制解释导致不稳定。
+    elif any(keyword in original_query for keyword in ("为什么", "为何", "原因", "机制", "原理", "怎么", "如何")):
+        answer_llm = answer_llm_medium
+        print("  -> [机制/原因类] 强制 medium Answer LLM")
     print(f"  [AnswerLLM] 意图={intent_labels} → {answer_llm.model_name}, thinking={answer_llm.model_kwargs.get('reasoning_effort', 'none')}, max_tokens={answer_llm.max_tokens}")
 
     # 前置拦截：plan_agent / tool_executor 已产生中断消息，跳过 LLM 调用
@@ -2658,9 +2847,15 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         )
 
     # 机制名保真：为什么/原因/机制类问题，工具原文明确命名的机制/手段必须保留原词。
-    # 例如原文说“纳西妲口中的童话”，回答不能只写“小猫/梦境/故事”而漏掉“童话”。
+    # P0-1：注入前先做相关性过滤，正则预筛拿不准时交给 qwen3.6-flash 小裁判，
+    # 避免把无关机制名（如问纳西妲年龄时工具里出现的“童话”）塞进提示词。
     if any(k in original_query for k in ("为什么", "为何", "原因", "机制", "原理", "怎么", "如何")):
-        mechanism_terms = _extract_mechanism_terms(messages)
+        mechanism_terms = _filter_mechanism_terms(
+            messages,
+            _extract_mechanism_terms(messages),
+            original_query,
+            state.get("alias_pairs"),
+        )
         if mechanism_terms:
             system_content += (
                 "\n\n===== 机制名保真（硬规则）=====\n"
@@ -2757,6 +2952,13 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             print("  -> [空回复兜底] LLM 返回空，使用兜底方案")
     else:
         content = "".join(content_parts)
+
+    # P0-2：response_mode=found 时不允许输出“未收录”。
+    # 轻量模型偶发在流式里只输出一句“当前知识库未收录。”，与代码判定矛盾；
+    # 这里重试 medium/deep，仍失败才退回工具原文。
+    if response_mode == "found" and _looks_like_not_found_answer(content):
+        print(f"  -> [P0-2] found 但输出未收录（{content[:40]!r}），重试 medium/deep")
+        content = _retry_answer_as_found(answer_messages, messages, original_query, answer_llm)
 
     trace_emit("llm_end", {
         "role": "answer",
