@@ -21,6 +21,7 @@ from app.llm import (
 from app.schema import (
     GenshinAdvisorState,
     AGENT_SYSTEM_PROMPT_PLAN, AGENT_SYSTEM_PROMPT_ANSWER, AGENT_SYSTEM_PROMPT_FAST,
+    AGENT_SYSTEM_PROMPT_L3_ANSWER,
 )
 from app.progress import _emit_progress, _cancel_events
 from app.trace_recorder import emit as trace_emit
@@ -2672,15 +2673,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 全景题：证据里包含代码加载的全文，输出规约必须明确要求“逐线逐角色逐地图文本展开”，
     # 否则模型会再次把 15 万字证据压缩成 2~3 千字概要。
     if _already_full_text_panoramic(messages):
-        system_content += (
-            "\n\n===== 全景题输出规约（必须遵守）=====\n"
-            "1. 先列出“证据中出现的实体清单”：所有角色、组织、造物、圣遗物/道具、地图文本名称。\n"
-            "2. 按任务线逐条完整展开：触发条件、任务流程、关键对话、结局。\n"
-            "3. 清单中的每个角色/组织/造物单独成节，写明“直接证据”与“评价”，不得合并成一段。\n"
-            "4. 每张相关地图文本单独引用原文，并解释它与剧情的关系。\n"
-            "5. 输出目标 12000~18000 字；禁止用概括性分类、小标题或总结段替代逐条任务线和逐个人物细节。\n"
-            "6. 只写证据支持的内容；证据未覆盖的写“原文未覆盖”，不要用推测填空。\n"
-        )
+        system_content += AGENT_SYSTEM_PROMPT_L3_ANSWER
 
     # not_found 代码短路：response_mode=not_found 时直接返回固定字符串，不调用 LLM
     # 这从根本上消除了 Answer LLM 忽略 not_found 标记、强行编造内容的可能性

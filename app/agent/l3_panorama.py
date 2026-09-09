@@ -25,6 +25,14 @@ from typing import Callable, List, Optional
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from app.llm import answer_llm_l3_fast
+from app.schema import (
+    L3_SECTION_COMMON as _COMMON_SYSTEM,
+    L3_SECTION_TASK as _TASK_INSTRUCTION,
+    L3_SECTION_ENTITY as _ENTITY_INSTRUCTION,
+    L3_SECTION_MAP as _MAP_INSTRUCTION,
+    L3_SECTION_SYNTHESIS as _SYNTHESIS_INSTRUCTION,
+    L3_SECTION_COVERAGE as _COVERAGE_INSTRUCTION,
+)
 
 _FULL_TEXT_HEADER = "[全景全文读取]"
 _MAP_SECTION_MARKER = "\n\n===== 相关地图文本"
@@ -66,14 +74,6 @@ _SPEAKER_NOISE_KEYWORDS = (
     "提示", "编者注", "备注", "道具", "任务", "获得", "提交", "属性",
     "循环", "生命", "单人", "四人", "双拳", "终末", "智勇",
 )
-_COVERAGE_INSTRUCTION = """以下人物/条目在任务正文或档案中出现，但前文没有展开。
-请为每一个单独写一小节：
-### 名称
-- 直接证据：引用或概括证据原文中的行为/台词
-- 动机：人物为什么这样做
-- 内在矛盾：人物身上的悖论或张力
-- 评价：一句不超过 50 字、有洞察力的评价
-通常 300~800 字，以证据量为准；证据不足就写“证据未覆盖”，不得引入外部知识，不得把不同人物合并。"""
 
 
 @dataclass
@@ -84,43 +84,6 @@ class PanoramaSection:
     text: str
     instruction: str
 
-
-_COMMON_SYSTEM = """你是原神剧情取证分析师。你只能使用下面提供的证据，不得使用任何外部知识。
-
-铁律：
-1. 每一条事实性陈述都必须能在证据原文中找到依据；证据没有写的，写“证据未覆盖”，不要推测。
-2. 禁止用“总之/综上所述”式空泛总结替代具体剧情。
-3. 禁止用“黑暗/邪恶/外来力量/外部敌人”这类概括词替代具体的组织、角色、机制或事件。
-4. 角色评价必须包含四段：直接证据、动机、内在矛盾、一句不超过 50 字的评价；不能只复述剧情。
-5. 不得预设主题或套用固定主题；所有主题判断必须由证据归纳得出，禁止因为地区、角色或任务名称而套用其它题目的结论。
-6. 只输出正文，不输出“根据证据/综上所述”等元话语，不写“本节”之类的标题。"""
-
-_TASK_INSTRUCTION = """请按以下结构撰写本节：
-一、任务线概述（触发条件、地区、核心冲突）
-二、关键事件与流程（按时间顺序）
-三、关键角色与关系（谁做了什么，为什么）
-四、与其它任务线的交叉线索
-通常 1200~2000 字，但以证据量为准：证据不足时允许更短，不得为凑字数扩写或编造。"""
-
-_ENTITY_INSTRUCTION = """请对证据中出现的每一个角色/组织/造物分别成节：
-### 名称
-- 直接证据：引用或概括证据原文中的行为/台词
-- 动机：角色为什么这样做
-- 内在矛盾：角色身上的悖论或张力
-- 评价：一句不超过 50 字、有洞察力的评价
-通常 1500~2500 字，但以证据量为准：证据不足时允许更短，不得为凑字数扩写或编造；禁止把多个角色合并成一段。"""
-
-_MAP_INSTRUCTION = """请逐张地图文本说明：
-- 地图文本名称
-- 原文要点（地点、人物、事件）
-- 它与剧情的关系
-通常 1000~1800 字，但以证据量为准：证据不足时允许更短，不得为凑字数扩写或编造；不要漏掉证据中给出的地图文本。"""
-
-_SYNTHESIS_INSTRUCTION = """请撰写跨线综合：
-一、各条任务线之间的关系（共 {task_count} 条；谁连接了谁，伏笔如何收束）
-二、核心角色的跨线对照（同一角色在不同任务线中的选择与变化）
-三、主题与结局（主题必须由证据归纳，用证据说明，不要空泛抒情）
-通常 2000~3000 字，但以证据量为准：证据不足时允许更短，不得为凑字数扩写或编造。"""
 
 
 def _emit_progress(event: str, data: dict) -> None:
