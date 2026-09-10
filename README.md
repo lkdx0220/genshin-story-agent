@@ -69,8 +69,8 @@ python scripts/update_wiki_graph.py
 | Plan Agent（L1 快速） | qwen3.7-plus | token-plan / 阿里云百炼（回退） | 简单事实类快速规划（兼顾工具调用稳定性） |
 | Answer Agent（轻量） | qwen3.6-flash（主）/ qwen-plus（DashScope 回退） | token-plan / 阿里云百炼（回退） | 角色查询类快速回答 |
 | 意图路由 | qwen3.7-plus（主）/ qwen-plus（DashScope 回退） | token-plan / 阿里云百炼（回退） | 实体锚定后的意图分类 |
-| 别名消歧 | deepseek-v4-flash-vision-exp | DeepSeek | "水神→芙宁娜/芙卡洛斯"歧义判断 |
-| L1/L2 路径分类 | deepseek-v4-flash-vision-exp | DeepSeek | 简单题/复杂题分流 |
+| 别名消歧 | deepseek-flash | DeepSeek | "水神→芙宁娜/芙卡洛斯"歧义判断 |
+| L1/L2 路径分类 | deepseek-flash | DeepSeek | 简单题/复杂题分流 |
 | 向量 Embedding | text-embedding-v4 | 阿里云百炼 | 知识库语义检索 |
 | 记忆 Embedding | paraphrase-multilingual-MiniLM-L12-v2 | 本地 | RAG 对话记忆（sentence-transformers） |
 
