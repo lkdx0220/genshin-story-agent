@@ -26,6 +26,7 @@ L2: Plan Agent → 工具调用（33 tools，常规暴露 32）→ 熔断截断 
 - **端口自愈**：Web 服务启动时自动关闭旧实例、绑定 `127.0.0.1`，5000 被非本项目占用时自动换 5001~5050
 - **隐藏搜索工具**：注册 33 个工具，常规初始暴露 32 个；`search_world` 仅在常规搜索碰壁后动态追加
 - **Wiki 链接图**：`wiki_graph_search` / `wiki_graph_expand` / `wiki_graph_get` 三工具基于观测枢 `data-entry-id` 链接图，支持跨任务/地图文本/角色/物品多跳检索；全量图构建脚本见 `wiki_entry_graph.py` + `wiki_data_tools/_fetch_mihoyo_channel.py`
+- **L3 全景连锁**：全景正则 + ≥2 个任务标题命中后，代码确定性加载任务全文、地图文本、实体提及索引反向边、说话人与图谱一跳扩展，拼成 `[全景全文读取]`，再交给 qwen3.8-max 按 task/entity/map/synthesis 分段并行生成
 
 ## Wiki 数据同步
 
@@ -72,6 +73,7 @@ python scripts/update_wiki_graph.py
 | 别名消歧 | deepseek-flash | DeepSeek | "水神→芙宁娜/芙卡洛斯"歧义判断 |
 | L1/L2 路径分类 | deepseek-flash | DeepSeek | 简单题/复杂题分流 |
 | 向量 Embedding | text-embedding-v4 | 阿里云百炼 | 知识库语义检索 |
+| L3 全景 Answer | qwen3.8-max | token-plan / 阿里云百炼（回退） | 全景题分段生成主模型，关闭 thinking |
 | 记忆 Embedding | paraphrase-multilingual-MiniLM-L12-v2 | 本地 | RAG 对话记忆（sentence-transformers） |
 
 > **注意**：当前 Qwen 主接口为 token-plan（OpenAI 兼容），失败自动回退原 DashScope；token-plan 不支持 qwen-plus，因此回退时轻量/路由模型才使用 qwen-plus。未开通的模型会报 `model not found` 错误。
