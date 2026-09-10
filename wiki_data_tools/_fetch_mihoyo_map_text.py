@@ -187,12 +187,39 @@ def fetch_entry_page(content_id):
 def main():
     parser = argparse.ArgumentParser(description="米游社观测枢地图文本抓取脚本")
     parser.add_argument("--list-only", action="store_true", help="只拉地图文本列表，不拉详情")
+    parser.add_argument("--entry-ids", default="", help="只抓指定 content_id，逗号分隔（用于历史/补充页面）")
     parser.add_argument("--region", default=DEFAULT_REGION, help="按地区过滤，默认 至冬")
     parser.add_argument("--all-regions", action="store_true", help="不按地区过滤")
     parser.add_argument("--limit", type=int, default=0, help="最多抓取条数，0 表示全部")
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY, help="详情请求间隔秒数")
     parser.add_argument("--output", default=DEFAULT_OUTPUT_FILE, help="输出 JSON 路径")
     args = parser.parse_args()
+
+    if args.entry_ids:
+        entry_ids = [value.strip() for value in args.entry_ids.split(",") if value.strip()]
+        results = []
+        for index, content_id in enumerate(entry_ids, 1):
+            log(f"[补充 {index}/{len(entry_ids)}] content_id={content_id}")
+            page = fetch_entry_page(content_id)
+            results.append({
+                "content_id": content_id,
+                "title": (page or {}).get("name", ""),
+                "filters": {},
+                "page": page,
+            })
+            if index < len(entry_ids):
+                time.sleep(args.delay)
+        safe_write(args.output, {
+            "source": "米游社观测枢地图文本频道（历史/补充页面）",
+            "channel_id": TASK_CHANNEL_ID,
+            "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "total": len(results),
+            "success": sum(1 for row in results if row.get("page")),
+            "items": results,
+        })
+        log(f"补充页面抓取完成，成功 {sum(1 for row in results if row.get('page'))}/{len(results)}")
+        log(f"已写入: {args.output}")
+        return
 
     log(f"拉取地图文本频道列表 channel_id={TASK_CHANNEL_ID} ...")
     items = fetch_task_list()

@@ -58,6 +58,17 @@ python scripts/update_wiki_graph.py
 
 抓取后的数据存于 `content_data/` 目录，运行时自动加载。
 
+## 最近知识库更新（2026-09-10）
+
+- 新增 `content_data/source_scope/`：BWiki 与米游社观测枢口径对齐结果（`official_catalog.json`、`classification.jsonl`、`bwiki_only.jsonl`、`review.jsonl`、`shared_for_replacement.jsonl`、`_summary.json`）。
+- 对齐统计：本地 15618 条 → `shared_exact 11007`、`bwiki_only 2158`、`shared_cross_module 135`、`shared_base 1500`、`review 818`。
+- 官方目录数量（节选）：task 1056、map_text 706、npc 2326、character 136、weapon 246、artifact 63、enemy 415、food 321、item 2037、book 93、organization 37、domain 76。
+- 更新 `content_data/lore.json`、`content_data/npcs_*.json`、`content_data/quests_世界任务|其他任务|地图事件|彩蛋剧情|活动剧情.json`。
+- 新增维护脚本：`scripts/preprocess_source_scope.py`、`scripts/apply_source_scope.py`、`scripts/import_crawler_corpus.py`、`scripts/merge_crawler_corpus.py`。
+- 运行时向量库：合计 **18080** 条（kb_quests_vec 7416 / kb_lore 7515 / kb_books 353 / kb_characters 131 / kb_npcs 2657 / kb_regions 8）。
+- Wiki 图 schema v3：**13511 节点 / 9435 链接**；实体提及索引 **4678 实体 / 39651 提及关系**。
+
+
 ## 模型清单
 
 本项目使用多个模型协同工作，请确认以下模型可用（Qwen 主接口为 token-plan，失败自动回退阿里云百炼/DashScope）：
