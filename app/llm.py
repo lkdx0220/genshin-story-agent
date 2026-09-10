@@ -6,8 +6,8 @@
 - plan_llm: L1 快速规划（qwen3.7-plus, 无 reasoning，省时，兼顾工具调用）
 - plan_llm_l2: L2 复杂规划（qwen3.7-max, low reasoning）
 - answer_llm_light/medium/deep: 按意图分级回答
-- alias_judge_llm: 别名判断沙箱（deepseek-v4-flash-vision-exp, 20 token 输出）
-- assess_llm: L1/L2 路径分类器（deepseek-v4-flash-vision-exp, 50 token 输出）
+- alias_judge_llm: 别名判断沙箱（deepseek-flash, 20 token 输出）
+- assess_llm: L1/L2 路径分类器（deepseek-flash, 50 token 输出）
 
 Qwen 实例统一使用 QwenFallbackChatOpenAI：
 - 默认走 token-plan 新接口 + 新 Key；
@@ -247,7 +247,7 @@ def _select_answer_llm(intent_labels: list) -> ChatOpenAI:
 
 # ====== DeepSeek 别名判断（安全沙箱，不计入 agent 轮次）======
 alias_judge_llm = ChatOpenAI(
-    model="deepseek-v4-flash-vision-exp",
+    model="deepseek-flash",
     api_key=DEEPSEEK_API_KEY,
     base_url=DEEPSEEK_BASE_URL,
     temperature=0,
@@ -257,7 +257,7 @@ alias_judge_llm = ChatOpenAI(
 
 # ====== 查询分类器（L1/L2 判断，轻量模型）======
 assess_llm = ChatOpenAI(
-    model="deepseek-v4-flash-vision-exp",
+    model="deepseek-flash",
     api_key=DEEPSEEK_API_KEY,
     base_url=DEEPSEEK_BASE_URL,
     temperature=0,

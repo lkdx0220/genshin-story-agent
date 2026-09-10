@@ -50,7 +50,7 @@ def _is_compound_hit(query: str, alias: str, pos: int) -> bool:
 
 
 def _judge_alias_sandbox(alias: str, canonical: str, context: str) -> bool:
-    """安全沙箱：用 deepseek-v4-flash-vision-exp 判断别名是否应替换。
+    """安全沙箱：用 deepseek-flash 判断别名是否应替换。
     固定 prompt 模板，模型只能输出 KEEP 或 REPLACE，无法被注入。
     返回 True 表示替换，False 表示保留原样。"""
     prompt = (

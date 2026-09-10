@@ -59,7 +59,7 @@ VEC_CHUNK_OVERLAP = 150     # 切片重叠字数
 
 # ====== LLM ======
 llm = ChatOpenAI(
-    model="deepseek-v4-flash-vision-exp",
+    model="deepseek-flash",
     api_key=DEEPSEEK_API_KEY,
     base_url=DEEPSEEK_BASE_URL,
     temperature=0.3,
