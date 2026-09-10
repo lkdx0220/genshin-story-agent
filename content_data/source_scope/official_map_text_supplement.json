@@ -1,0 +1,279 @@
+{
+  "source": "米游社观测枢地图文本频道（历史/补充页面）",
+  "channel_id": 251,
+  "fetched_at": "2026-09-10 18:38:17",
+  "total": 1,
+  "success": 1,
+  "items": [
+    {
+      "content_id": "7491",
+      "title": "商家的海报",
+      "filters": {},
+      "page": {
+        "id": "7491",
+        "name": "商家的海报",
+        "desc": "商家的海报",
+        "icon_url": "https://uploadstatic.mihoyo.com/ys-obc/2022/09/30/105506159/c3f896bef7ea3f3645a2fb7c4f281acb_7462851246066472168.png",
+        "header_img_url": "",
+        "modules": [
+          {
+            "name": "",
+            "is_poped": false,
+            "components": [
+              {
+                "component_id": "material_base_info",
+                "layout": "",
+                "data": "{\"name\":\"商家的海报\",\"img\":\"https://act-upload.mihoyo.com/ys-obc/2023/10/31/184753361/c3f896bef7ea3f3645a2fb7c4f281acb_4518861574532954081.png\",\"materials\":{\"key\":\"获得方式\",\"value\":\"<div><div><p style=\\\"white-space: pre-wrap;\\\">蒙德世界任务「<a href=\\\"/ys/obc/content/1160/detail?bbs_presentation_style=no_header\\\" data-type=\\\"obc-content\\\" target=\\\"_blank\\\">风暴后遗症</a>」中拾取</p></div></div>\"},\"attr\":[{\"key\":\"描述\",\"value\":[\"<p style=\\\"white-space: pre-wrap;\\\">「冒险家协会诚招新人，有意者请与蒙德城冒险家协会会长塞琉斯先生联系。」</p>\"]}]}\n",
+                "style": ""
+              }
+            ],
+            "id": "1349",
+            "is_customize_name": true,
+            "is_abstract": false,
+            "is_show_switch": false,
+            "switch": false,
+            "desc": "",
+            "repeated": false,
+            "is_submodule": false,
+            "origin_module_id": "0",
+            "without_border": false,
+            "can_delete": false,
+            "is_hidden": false,
+            "rich_text_editing": false
+          },
+          {
+            "name": "",
+            "is_poped": false,
+            "components": [
+              {
+                "component_id": "collapse_panel",
+                "layout": "",
+                "data": "{\"rich_text\":\"<p></p>\",\"switch\":false,\"is_show_switch\":true}\n",
+                "style": ""
+              }
+            ],
+            "id": "1350",
+            "is_customize_name": true,
+            "is_abstract": false,
+            "is_show_switch": true,
+            "switch": false,
+            "desc": "",
+            "repeated": false,
+            "is_submodule": false,
+            "origin_module_id": "0",
+            "without_border": false,
+            "can_delete": false,
+            "is_hidden": false,
+            "rich_text_editing": false
+          },
+          {
+            "name": "",
+            "is_poped": false,
+            "components": [
+              {
+                "component_id": "collapse_panel",
+                "layout": "",
+                "data": "{\"rich_text\":\"\",\"switch\":false,\"is_show_switch\":false}\n",
+                "style": ""
+              }
+            ],
+            "id": "1556",
+            "is_customize_name": true,
+            "is_abstract": false,
+            "is_show_switch": true,
+            "switch": false,
+            "desc": "",
+            "repeated": false,
+            "is_submodule": false,
+            "origin_module_id": "1350",
+            "without_border": false,
+            "can_delete": false,
+            "is_hidden": false,
+            "rich_text_editing": false
+          },
+          {
+            "name": "",
+            "is_poped": false,
+            "components": [
+              {
+                "component_id": "material_base_info",
+                "layout": "",
+                "data": "{\"name\":\"商家的海报\",\"img\":\"https://uploadstatic.mihoyo.com/ys-obc/2022/09/30/105506159/c3f896bef7ea3f3645a2fb7c4f281acb_6161010256858965204.png\",\"materials\":{\"key\":\"获得方式\",\"value\":\"<div><div><p style=\\\"white-space: pre-wrap;\\\">蒙德世界任务「<a href=\\\"/ys/obc/content/1160/detail?bbs_presentation_style=no_header\\\" data-type=\\\"obc-content\\\" target=\\\"_blank\\\">风暴后遗症</a>」中拾取</p></div></div>\"},\"attr\":[{\"key\":\"描述\",\"value\":[\"<p style=\\\"white-space: pre-wrap;\\\">「猎鹿人餐馆推出套餐服务，同时购买满足沙拉与蜜酱胡萝卜煎肉时，总价可享九折优惠。」</p>\"]}]}\n",
+                "style": ""
+              }
+            ],
+            "id": "1553",
+            "is_customize_name": true,
+            "is_abstract": false,
+            "is_show_switch": false,
+            "switch": false,
+            "desc": "",
+            "repeated": false,
+            "is_submodule": false,
+            "origin_module_id": "1349",
+            "without_border": false,
+            "can_delete": false,
+            "is_hidden": false,
+            "rich_text_editing": false
+          },
+          {
+            "name": "",
+            "is_poped": false,
+            "components": [
+              {
+                "component_id": "collapse_panel",
+                "layout": "",
+                "data": "{\"rich_text\":\"\",\"switch\":false,\"is_show_switch\":false}\n",
+                "style": ""
+              }
+            ],
+            "id": "1554",
+            "is_customize_name": true,
+            "is_abstract": false,
+            "is_show_switch": true,
+            "switch": false,
+            "desc": "",
+            "repeated": false,
+            "is_submodule": false,
+            "origin_module_id": "1350",
+            "without_border": false,
+            "can_delete": false,
+            "is_hidden": false,
+            "rich_text_editing": false
+          },
+          {
+            "name": "",
+            "is_poped": false,
+            "components": [
+              {
+                "component_id": "material_base_info",
+                "layout": "",
+                "data": "{\"name\":\"商家的海报\",\"img\":\"https://act-upload.mihoyo.com/ys-obc/2023/10/31/184753361/c3f896bef7ea3f3645a2fb7c4f281acb_3344053059908761224.png\",\"materials\":{\"key\":\"获得方式\",\"value\":\"<div><div><p style=\\\"white-space: pre-wrap;\\\">蒙德世界任务「<a href=\\\"/ys/obc/content/1160/detail?bbs_presentation_style=no_header\\\" data-type=\\\"obc-content\\\" target=\\\"_blank\\\">风暴后遗症</a>」中拾取</p></div></div>\"},\"attr\":[{\"key\":\"描述\",\"value\":[\"<p style=\\\"white-space: pre-wrap;\\\">「猫尾酒馆酒品上新，迪奥娜本日当班。」</p>\"]}]}\n",
+                "style": ""
+              }
+            ],
+            "id": "1555",
+            "is_customize_name": true,
+            "is_abstract": false,
+            "is_show_switch": false,
+            "switch": false,
+            "desc": "",
+            "repeated": false,
+            "is_submodule": false,
+            "origin_module_id": "1349",
+            "without_border": false,
+            "can_delete": false,
+            "is_hidden": false,
+            "rich_text_editing": false
+          }
+        ],
+        "filter_values": {},
+        "menu_id": "0",
+        "menu_name": "",
+        "version": "1702545073",
+        "langs": [],
+        "template_layout": {
+          "tab": [
+            {
+              "tab_id": "90",
+              "tab_name": "页签1",
+              "module_group": [
+                {
+                  "module_group_id": "764",
+                  "layout": "l1r1",
+                  "module": [
+                    {
+                      "id": "1349",
+                      "pos": "banner"
+                    },
+                    {
+                      "id": "1350",
+                      "pos": "banner"
+                    }
+                  ],
+                  "name": "",
+                  "repeated": true,
+                  "parent_group_id": "0"
+                },
+                {
+                  "module_group_id": "824",
+                  "layout": "l1r1",
+                  "module": [
+                    {
+                      "id": "1555",
+                      "pos": "banner"
+                    },
+                    {
+                      "id": "1556",
+                      "pos": "banner"
+                    }
+                  ],
+                  "name": "",
+                  "repeated": true,
+                  "parent_group_id": "764"
+                },
+                {
+                  "module_group_id": "823",
+                  "layout": "l1r1",
+                  "module": [
+                    {
+                      "id": "1553",
+                      "pos": "banner"
+                    },
+                    {
+                      "id": "1554",
+                      "pos": "banner"
+                    }
+                  ],
+                  "name": "",
+                  "repeated": true,
+                  "parent_group_id": "764"
+                }
+              ]
+            }
+          ]
+        },
+        "edit_lock_status": "Unlock",
+        "correct_lock_status": "Unlock",
+        "menus": [
+          {
+            "id": "13",
+            "name": "背包",
+            "has_page": false,
+            "style": "",
+            "sub_menus": [],
+            "icon": "",
+            "mi18n_key": "背包",
+            "is_hidden": false,
+            "parent_id": "189",
+            "template_id": "",
+            "bg_img": "",
+            "ch_ext": "[{\"type\":\"text\",\"attribute_name\":\"每行个数\",\"attribute_key\":\"col_per_row\",\"value\":\"2\"},{\"type\":\"text\",\"attribute_name\":\"展示样式\",\"attribute_key\":\"display_type\",\"value\":\"default\"},{\"type\":\"text\",\"attribute_name\":\"频道icon\",\"attribute_key\":\"icon_url\",\"value\":\"\"},{\"type\":\"text\",\"attribute_name\":\"跳转链接\",\"attribute_key\":\"jump_url\",\"value\":\"\"},{\"type\":\"text\",\"attribute_name\":\"频道icon-pc\",\"attribute_key\":\"icon_url_pc\",\"value\":\"\"},{\"type\":\"text\",\"attribute_name\":\"频道icon-pc-hover\",\"attribute_key\":\"icon_url_pc_hover\",\"value\":\"\"},{\"type\":\"text\",\"attribute_name\":\"筛选器\",\"attribute_key\":\"filter\",\"value\":\"[{\\\"label\\\":\\\"道具类型\\\",\\\"children\\\":[{\\\"label\\\":\\\"角色经验素材\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"角色与武器培养素材\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"角色培养素材\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"角色突破素材\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"角色天赋素材\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"武器突破素材\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"武器强化材料\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"武器精炼材料\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"圣遗物强化素材\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"蒙德地区特产\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"璃月地区特产\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"稻妻地区特产\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"须弥地区特产\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"枫丹地区特产\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"纳塔地区特产\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"挪德卡莱地区特产\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"至冬地区特产\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"食材\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"素材\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"炼金素材\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"武器制作素材\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"道具锻造素材\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"家园摆设制作素材\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"锻造用矿石\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"鱼饵\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"小道具\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"消耗品\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"任务道具\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"贵重道具\\\",\\\"children\\\":[]}]},{\\\"label\\\":\\\"获取方式\\\",\\\"children\\\":[{\\\"label\\\":\\\"普通敌人掉落\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"精英敌人掉落\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"首领敌人掉落\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"征讨领域掉落\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"秘境掉落\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"合成台合成\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"合成台转化\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"铁匠处制作获取\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"食材加工\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"地图探索\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"杂货店/NPC购买或兑换\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"纪念商店购买或兑换\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"地区供奉奖励获取\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"活动获取\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"游戏商城获取\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"游戏祈愿获取\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"系统邮件获取\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"任务获取\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"声望奖励获取\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"角色好感度获取\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"聚所共建奖励\\\",\\\"children\\\":[]}]},{\\\"label\\\":\\\"星级\\\",\\\"children\\\":[{\\\"label\\\":\\\"无\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"一星\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"二星\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"三星\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"四星\\\",\\\"children\\\":[]},{\\\"label\\\":\\\"五星\\\",\\\"children\\\":[]}]}]\"},{\"type\":\"text\",\"attribute_name\":\"首页更多\",\"attribute_key\":\"home_more\",\"value\":\"https://baike.mihoyo.com/ys/obc/channel/map/189/13?bbs_presentation_style=no_header\"},{\"type\":\"text\",\"attribute_name\":\"在目录中展示\",\"attribute_key\":\"show_in_catalog\",\"value\":\"\"},{\"type\":\"text\",\"attribute_name\":\"最新词条\",\"attribute_key\":\"is_latest\",\"value\":\"0\"},{\"type\":\"text\",\"attribute_name\":\"更多入口icon\",\"attribute_key\":\"king_kong_icon\",\"value\":\"\"},{\"type\":\"text\",\"attribute_name\":\"首页更多文案\",\"attribute_key\":\"home_more_text\",\"value\":\"\"},{\"type\":\"text\",\"attribute_name\":\"开放全量C端玩家可新建词条\",\"attribute_key\":\"open_for_create\",\"value\":\"0\"}]",
+            "updated_at": "-62135596800"
+          }
+        ],
+        "template_id": "6579a9d166d84d942840e5b4",
+        "ext": {
+          "fe_ext": "{\"c_13\":{\"filter\":{\"text\":\"[\\\"获取方式/任务获取\\\",\\\"星级/无\\\",\\\"道具类型/任务道具\\\"]\"}}}",
+          "post_ext": {
+            "post_id": "",
+            "post_user_name": "",
+            "post_time": "0",
+            "post_avatar_url": "",
+            "url": ""
+          },
+          "server_ext": "",
+          "personalized_color": "",
+          "scrolling_text": "",
+          "corner_mark": "None"
+        },
+        "alias_name": "",
+        "lang": "",
+        "beta": false,
+        "page_type": "Default",
+        "menu_style": "",
+        "status": "Online"
+      }
+    }
+  ]
+}

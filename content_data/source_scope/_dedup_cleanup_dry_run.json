@@ -1,0 +1,203 @@
+{
+  "generated_at": "2026-09-10T18:56:52",
+  "mode": "dry-run",
+  "actions": [
+    {
+      "doc_id": "map_text:505672:block:0",
+      "mode": "split_location_keep_both",
+      "target": "lore:6407",
+      "annotated": [
+        "lore:2910"
+      ]
+    },
+    {
+      "doc_id": "map_text:503101:block:0",
+      "mode": "split_location_keep_both",
+      "target": "lore:6670",
+      "annotated": [
+        "lore:4970"
+      ]
+    },
+    {
+      "doc_id": "map_text:504761:block:0",
+      "mode": "same_location_merge",
+      "keeper": "lore:6463",
+      "deleted": [
+        "lore:5435"
+      ]
+    },
+    {
+      "doc_id": "map_text:504759:block:0",
+      "mode": "same_location_merge",
+      "keeper": "lore:6462",
+      "deleted": [
+        "lore:5437"
+      ]
+    },
+    {
+      "doc_id": "map_text:504826:block:0",
+      "mode": "same_location_merge",
+      "keeper": "lore:6449",
+      "deleted": [
+        "lore:5451"
+      ]
+    },
+    {
+      "doc_id": "map_text:507006:block:1",
+      "mode": "split_location_keep_both",
+      "target": "lore:6289",
+      "annotated": [
+        "lore:5673"
+      ]
+    },
+    {
+      "doc_id": "map_text:507006:block:2",
+      "mode": "split_location_keep_both",
+      "target": "lore:6290",
+      "annotated": [
+        "lore:5674"
+      ]
+    },
+    {
+      "doc_id": "map_text:507006:block:12",
+      "mode": "split_location_keep_both",
+      "target": "lore:6298",
+      "annotated": [
+        "lore:5691"
+      ]
+    },
+    {
+      "doc_id": "map_text:507018:block:0",
+      "mode": "split_location_keep_both",
+      "target": "lore:6278",
+      "annotated": [
+        "lore:5694"
+      ]
+    },
+    {
+      "doc_id": "map_text:507018:block:8",
+      "mode": "split_location_keep_both",
+      "target": "lore:6284",
+      "annotated": [
+        "lore:5698"
+      ]
+    },
+    {
+      "doc_id": "map_text:507018:block:9",
+      "mode": "split_location_keep_both",
+      "target": "lore:6285",
+      "annotated": [
+        "lore:5700"
+      ]
+    },
+    {
+      "doc_id": "map_text:506563:block:0",
+      "mode": "same_location_merge",
+      "keeper": "lore:6322",
+      "deleted": [
+        "lore:5701"
+      ]
+    },
+    {
+      "doc_id": "map_text:507853:block:5",
+      "mode": "split_location_keep_both",
+      "target": "lore:6242",
+      "annotated": [
+        "lore:5751"
+      ]
+    },
+    {
+      "doc_id": "map_text:507853:block:4",
+      "mode": "split_location_keep_both",
+      "target": "lore:6241",
+      "annotated": [
+        "lore:5752"
+      ]
+    },
+    {
+      "doc_id": "map_text:507852:block:4",
+      "mode": "split_location_keep_both",
+      "target": "lore:6227",
+      "annotated": [
+        "lore:5767"
+      ]
+    },
+    {
+      "doc_id": "map_text:507852:block:0",
+      "mode": "split_location_keep_both",
+      "target": "lore:6223",
+      "annotated": [
+        "lore:5768"
+      ]
+    },
+    {
+      "doc_id": "map_text:507854:block:0",
+      "mode": "split_location_keep_both",
+      "target": "lore:6235",
+      "annotated": [
+        "lore:5782"
+      ]
+    },
+    {
+      "doc_id": "map_text:507849:block:0",
+      "mode": "split_location_keep_both",
+      "target": "lore:6255",
+      "annotated": [
+        "lore:5799"
+      ]
+    },
+    {
+      "doc_id": "map_text:506517:block:0",
+      "mode": "split_location_keep_both",
+      "target": "lore:6348",
+      "annotated": [
+        "lore:5856"
+      ]
+    },
+    {
+      "doc_id": "map_text:509006:block:4",
+      "mode": "frost_moon_merge",
+      "keeper": "lore:6182",
+      "deleted": [
+        "lore:5968",
+        "lore:6069"
+      ]
+    },
+    {
+      "doc_id": "map_text:505662:block:0",
+      "mode": "same_location_merge",
+      "keeper": "lore:6391",
+      "deleted": [
+        "lore:6394",
+        "lore:6395"
+      ]
+    },
+    {
+      "doc_id": "map_text:502007:block:0",
+      "mode": "same_location_merge",
+      "keeper": "lore:6840",
+      "deleted": [
+        "lore:6841"
+      ]
+    },
+    {
+      "doc_id": "map_text:501802:block:0",
+      "mode": "same_location_merge",
+      "keeper": "lore:6953",
+      "deleted": [
+        "lore:6954"
+      ]
+    },
+    {
+      "doc_id": "map_text:5802:block:6",
+      "mode": "same_location_merge",
+      "keeper": "lore:7387",
+      "deleted": [
+        "lore:7402"
+      ]
+    }
+  ],
+  "deleted_total": 11,
+  "replaced_total": 24,
+  "annotated_total": 15
+}

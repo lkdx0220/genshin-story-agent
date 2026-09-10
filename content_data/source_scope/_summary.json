@@ -1,0 +1,102 @@
+{
+  "generated_at": "2026-09-10T11:06:31.313302+00:00",
+  "official_catalog": {
+    "task": 1056,
+    "map_text": 706,
+    "npc": 2326,
+    "character": 136,
+    "weapon": 246,
+    "artifact": 63,
+    "enemy": 415,
+    "food": 321,
+    "item": 2037,
+    "book": 93,
+    "organization": 37,
+    "domain": 76,
+    "character_anecdote": 63,
+    "animal": 227,
+    "outfit": 53,
+    "gray_eye": 19,
+    "phantom_theater": 27,
+    "commission": 292
+  },
+  "local_total": 15618,
+  "scope_counts": {
+    "bwiki_only": 2158,
+    "shared_cross_module": 135,
+    "shared_exact": 11007,
+    "review": 818,
+    "shared_base": 1500
+  },
+  "by_module": {
+    "artifacts": {
+      "shared_exact": 63,
+      "bwiki_only": 2
+    },
+    "books": {
+      "shared_exact": 87,
+      "review": 14,
+      "bwiki_only": 4
+    },
+    "collectibles": {
+      "shared_exact": 61
+    },
+    "concepts": {
+      "bwiki_only": 44,
+      "shared_exact": 11,
+      "review": 6,
+      "shared_cross_module": 3
+    },
+    "foods": {
+      "shared_exact": 472,
+      "bwiki_only": 241,
+      "shared_base": 1
+    },
+    "lore": {
+      "bwiki_only": 198,
+      "shared_cross_module": 132,
+      "shared_exact": 6941,
+      "review": 111
+    },
+    "materials": {
+      "shared_exact": 756,
+      "bwiki_only": 51,
+      "review": 5
+    },
+    "monsters": {
+      "shared_exact": 332,
+      "bwiki_only": 216,
+      "shared_base": 1,
+      "review": 1
+    },
+    "npcs": {
+      "bwiki_only": 807,
+      "shared_base": 1067,
+      "shared_exact": 783
+    },
+    "quests": {
+      "review": 681,
+      "shared_exact": 839,
+      "shared_base": 428,
+      "bwiki_only": 428
+    },
+    "recipes": {
+      "shared_exact": 298,
+      "bwiki_only": 154,
+      "shared_base": 1
+    },
+    "roles": {
+      "shared_exact": 118,
+      "bwiki_only": 11,
+      "shared_base": 2
+    },
+    "weapons": {
+      "shared_exact": 246,
+      "bwiki_only": 2
+    }
+  },
+  "crawler_corpus_available": false,
+  "review_total": 818,
+  "bwiki_only_total": 2158,
+  "shared_total": 12642
+}

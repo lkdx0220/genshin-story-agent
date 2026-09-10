@@ -1,0 +1,110 @@
+{
+  "generated_at": "2026-09-10T18:42:04",
+  "mode": "dry-run",
+  "classification": "C:\\Users\\24701\\Desktop\\原神剧情\\CASE-原神剧情助手-修改用\\content_data\\source_scope\\classification.jsonl",
+  "ready_total": 1372,
+  "selected_total": 1322,
+  "skipped_duplicate_total": 50,
+  "missing_pages": [],
+  "errors": [],
+  "duplicate_groups": {
+    "map_text:505672:block:0": [
+      "lore:2910",
+      "lore:6407"
+    ],
+    "map_text:503101:block:0": [
+      "lore:4970",
+      "lore:6670"
+    ],
+    "map_text:504761:block:0": [
+      "lore:5435",
+      "lore:6463"
+    ],
+    "map_text:504759:block:0": [
+      "lore:5437",
+      "lore:6462"
+    ],
+    "map_text:504826:block:0": [
+      "lore:5451",
+      "lore:6449"
+    ],
+    "map_text:507006:block:1": [
+      "lore:5673",
+      "lore:6289"
+    ],
+    "map_text:507006:block:2": [
+      "lore:5674",
+      "lore:6290"
+    ],
+    "map_text:507006:block:12": [
+      "lore:5691",
+      "lore:6298"
+    ],
+    "map_text:507018:block:0": [
+      "lore:5694",
+      "lore:6278"
+    ],
+    "map_text:507018:block:8": [
+      "lore:5698",
+      "lore:6284"
+    ],
+    "map_text:507018:block:9": [
+      "lore:5700",
+      "lore:6285"
+    ],
+    "map_text:506563:block:0": [
+      "lore:5701",
+      "lore:6322"
+    ],
+    "map_text:507853:block:5": [
+      "lore:5751",
+      "lore:6242"
+    ],
+    "map_text:507853:block:4": [
+      "lore:5752",
+      "lore:6241"
+    ],
+    "map_text:507852:block:4": [
+      "lore:5767",
+      "lore:6227"
+    ],
+    "map_text:507852:block:0": [
+      "lore:5768",
+      "lore:6223"
+    ],
+    "map_text:507854:block:0": [
+      "lore:5782",
+      "lore:6235"
+    ],
+    "map_text:507849:block:0": [
+      "lore:5799",
+      "lore:6255"
+    ],
+    "map_text:506517:block:0": [
+      "lore:5856",
+      "lore:6348"
+    ],
+    "map_text:509006:block:4": [
+      "lore:5968",
+      "lore:6069",
+      "lore:6182"
+    ],
+    "map_text:505662:block:0": [
+      "lore:6391",
+      "lore:6394",
+      "lore:6395"
+    ],
+    "map_text:502007:block:0": [
+      "lore:6840",
+      "lore:6841"
+    ],
+    "map_text:501802:block:0": [
+      "lore:6953",
+      "lore:6954"
+    ],
+    "map_text:5802:block:6": [
+      "lore:7387",
+      "lore:7402"
+    ]
+  }
+}

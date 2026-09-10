@@ -1,0 +1,515 @@
+{
+  "generated_at": "2026-09-10T19:05:50",
+  "mode": "dry-run",
+  "counts": {
+    "kept_with_note": 14,
+    "replaced": 84,
+    "not_shared": 2
+  },
+  "changes": [
+    {
+      "record_id": "lore:5902",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5903",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5904",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5905",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5906",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5907",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5908",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5909",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5910",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5911",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5912",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5913",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5914",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5915",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5916",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5917",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5918",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5919",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5920",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5921",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5922",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5923",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5924",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5925",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5926",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5928",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5929",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5930",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5931",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5932",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5933",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5934",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5935",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5936",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5937",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5938",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5939",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5940",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5941",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5942",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5943",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5944",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5945",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5946",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5947",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5948",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5949",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5950",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5951",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5952",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5953",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5954",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5955",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5956",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5957",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5958",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5959",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5960",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5961",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5962",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5963",
+      "title": "地图文本/挪德卡莱 / 月之高地",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5964",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5965",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5966",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5967",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5968",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5969",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5970",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5971",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5972",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5973",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5974",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5975",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5976",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5977",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5978",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5979",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5980",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5981",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5982",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5983",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5984",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5985",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5986",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5987",
+      "title": "地图文本/挪德卡莱 / 月荡海",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5988",
+      "title": "地图文本/挪德卡莱 / 月之暗面",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5989",
+      "title": "地图文本/挪德卡莱 / 月之暗面",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5990",
+      "title": "地图文本/挪德卡莱 / 月之暗面",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5991",
+      "title": "地图文本/挪德卡莱 / 月之暗面",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5992",
+      "title": "地图文本/挪德卡莱 / 月之暗面",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5993",
+      "title": "地图文本/挪德卡莱 / 月之暗面",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5994",
+      "title": "地图文本/挪德卡莱 / 月之暗面",
+      "action": "keep",
+      "reason": "no_unique_official_line"
+    },
+    {
+      "record_id": "lore:5995",
+      "title": "地图文本/挪德卡莱 / 月之暗面",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5996",
+      "title": "地图文本/挪德卡莱 / 月之暗面",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5997",
+      "title": "地图文本/挪德卡莱 / 月之暗面",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:5999",
+      "title": "地图文本/挪德卡莱 / 月之暗面",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:6000",
+      "title": "地图文本/挪德卡莱 / 月之暗面",
+      "action": "replace"
+    },
+    {
+      "record_id": "lore:6001",
+      "title": "地图文本/挪德卡莱 / 月之暗面",
+      "action": "replace"
+    }
+  ]
+}

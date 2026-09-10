@@ -291,6 +291,7 @@ def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
             version = metadata_raw.get("所属版本", "") or metadata_raw.get("版本", "") or ""
             chapter_name = metadata_raw.get("chapter_name", "")
             act_name = metadata_raw.get("act_name", "")
+            series = metadata_raw.get("系列任务", "")
 
             parent = parent_map.get(title, "")
 
@@ -303,6 +304,8 @@ def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
                 hierarchy_prefix += "】\n"
             elif chapter_name == "开场动画":
                 hierarchy_prefix = "【开场动画】\n"
+            if not hierarchy_prefix and series:
+                hierarchy_prefix = f"【{series}】\n"
             quest_prefix = hierarchy_prefix + f"任务：{title}\n"
 
             def _base_meta(chunk_idx, total, preview, source_tag):
@@ -314,6 +317,7 @@ def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
                     "version": version,
                     "chapter_name": chapter_name,
                     "act_name": act_name,
+                    "series": series,
                     "chunk_index": chunk_idx,
                     "total_chunks": total,
                     "text_preview": preview,
