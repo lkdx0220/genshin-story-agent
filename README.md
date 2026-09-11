@@ -61,6 +61,68 @@ python scripts/update_wiki_graph.py
 
 抓取后的数据存于 `content_data/` 目录，运行时自动加载。
 
+## 本地 M3 向量库（运行时默认）构建方法
+
+Agent 运行时默认使用本地 Ollama **bge-m3** 编码的 `kb_vectors_m3/`，与远程 `text-embedding-v4` 库（`kb_vectors/`）使用同一批 chunk ID 和正文切片，只是编码器不同。这样做是为了消除远程 embedding 的网络延迟与调用费用；全量 A/B 测试表明两者端到端质量基本等价。
+
+### 前置条件
+
+1. 安装 [Ollama](https://ollama.com/) 并保持服务运行。
+2. 拉取模型：
+
+```bash
+ollama pull bge-m3:latest
+ollama list   # 确认 bge-m3:latest 存在
+```
+
+3. 先准备好基准切片快照 `kb_vectors/`：
+   - `scripts/build_m3_vectors.py` 会读取 `kb_vectors/` 中各集合的 `*_docs.json` / `*_meta.json`，复用其中的 chunk ID、顺序与正文；
+   - 因此需要先保证 `kb_vectors/` 与当前 `content_data/` 同步。内容更新后按顺序执行：
+
+```bash
+# 1) 用远程 text-embedding-v4 重建基准库（同时刷新 docs/meta 切片快照）
+python scripts/kb_build_index.py --force
+
+# 2) 用本地 bge-m3 重新编码，生成运行时库
+python scripts/build_m3_vectors.py --force
+```
+
+### M3 建库脚本参数
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--model` | `bge-m3:latest` | Ollama 模型名 |
+| `--ollama-url` | `http://127.0.0.1:11434/api/embed` | Ollama API 地址 |
+| `--batch-size` | `32` | 每批编码文本数 |
+| `--num-ctx` | `4096` | Ollama 上下文长度 |
+| `--from-dump` | 关闭 | 跳过切片捕获，直接读取 `kb_vectors_m3/chunk_dump.jsonl` 编码 |
+| `--dump-only` | 关闭 | 只导出切片 dump，不编码 |
+| `--force` | 关闭 | 覆盖已有 `kb_vectors_m3/` 产物 |
+
+### 产物与校验
+
+- 输出目录：`kb_vectors_m3/`
+- 集合：`kb_quests_vec`、`kb_lore`、`kb_books`、`kb_characters`、`kb_npcs`、`kb_regions`
+- 每个集合包含 `*_vectors.npy`、`*_meta.json`；另有 `chunk_dump.jsonl`、`build_summary.json` 等构建信息。
+- 构建完成后启动 Agent，正常情况下会打印：
+
+```text
+mode=runtime dir=kb_vectors_m3 backend=bge-m3
+```
+
+### 切回远程 text-embedding-v4
+
+```powershell
+$env:KB_VECTOR_DIR="<项目根>\kb_vectors"
+$env:KB_EMBEDDING_BACKEND="text-embedding-v4"
+```
+
+### 注意事项
+
+- `kb_vectors/` 与 `kb_vectors_m3/` 都已加入 `.gitignore`，不会推送到 GitHub；
+- 不要直接提交向量库（`kb_vectors_m3/` 约 166MB，`kb_vectors/` 约 545MB），需要分发时使用 Release 附件、网盘或让对方自行重建；
+- `--from-dump` 只跳过“重新捕获切片”，仍需要 `chunk_dump.jsonl` 存在且与当前代码切片逻辑一致。
+
 ## 最近知识库更新（2026-09-10）
 
 - 新增 `content_data/source_scope/`：BWiki 与米游社观测枢口径对齐结果（`official_catalog.json`、`classification.jsonl`、`bwiki_only.jsonl`、`review.jsonl`、`shared_for_replacement.jsonl`、`_summary.json`）。
