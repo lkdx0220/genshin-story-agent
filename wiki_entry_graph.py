@@ -158,10 +158,17 @@ class WikiEntry:
 class WikiEntryGraph:
     entries: Dict[str, WikiEntry] = field(default_factory=dict)
     meta: Dict[str, Any] = field(default_factory=dict)
+    # 反向链接内存索引：target_id -> [(来源词条, 该来源的第一条指向链接), ...]。
+    # 延迟构建，add() 时置脏；图规模只有一万多词条，构建一次即可复用。
+    _backlinks: Dict[str, List[Tuple[WikiEntry, WikiLink]]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _backlinks_dirty: bool = field(default=True, init=False, repr=False)
 
     def add(self, entry: WikiEntry) -> None:
         if entry.entry_id:
             self.entries[entry.entry_id] = entry
+            self._backlinks_dirty = True
 
     def get(self, entry_id: str) -> Optional[WikiEntry]:
         return self.entries.get(str(entry_id))
@@ -212,6 +219,29 @@ class WikiEntryGraph:
             out.append((target, link))
         return out
 
+    def _ensure_backlinks(self) -> None:
+        """构建反向链接索引，语义与旧的全图扫描完全一致。
+
+        规则：
+        - 跳过自链接（来源词条 == 目标词条）；
+        - 同一个来源词条指向同一目标多次时，只保留第一条链接；
+        - 来源顺序沿用 entries 的插入顺序。
+        """
+        if not self._backlinks_dirty:
+            return
+        index: Dict[str, List[Tuple[WikiEntry, WikiLink]]] = {}
+        for entry in self.entries.values():
+            seen_targets = set()
+            for link in entry.links:
+                if entry.entry_id == link.target_id:
+                    continue
+                if link.target_id in seen_targets:
+                    continue
+                seen_targets.add(link.target_id)
+                index.setdefault(link.target_id, []).append((entry, link))
+        self._backlinks = index
+        self._backlinks_dirty = False
+
     def backlinks(self, entry_id: str) -> List[Tuple[WikiEntry, WikiLink]]:
         """返回哪些本地词条链接到了 entry_id（反向引用）。
 
@@ -219,15 +249,8 @@ class WikiEntryGraph:
         数据里常见的是 map_text -> task 的显式链接，任务词条自己的出边
         往往只有任务互链和奖励道具，反向引用能补全“任务 ← 地图文本”这一跳。
         """
-        out: List[Tuple[WikiEntry, WikiLink]] = []
-        for e in self.entries.values():
-            if e.entry_id == str(entry_id):
-                continue
-            for link in e.links:
-                if link.target_id == str(entry_id):
-                    out.append((e, link))
-                    break
-        return out
+        self._ensure_backlinks()
+        return list(self._backlinks.get(str(entry_id), []))
 
     def missing_targets(self, limit: int = 100) -> Dict[str, str]:
         """统计所有链接中、本地索引缺失的目标词条 ID。"""
