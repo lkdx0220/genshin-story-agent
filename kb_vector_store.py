@@ -40,8 +40,25 @@ EMBEDDING_MODEL = "text-embedding-v4"
 EMBEDDING_DIM = 1024
 EMBEDDING_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
 
-# 向量存储目录
+# 构建/维护用向量目录：建库脚本默认继续读写 kb_vectors
 VECTOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kb_vectors")
+
+# 运行时向量目录与查询后端：默认使用本地 M3 向量库
+# 可用 KB_VECTOR_DIR / KB_EMBEDDING_BACKEND 覆盖（例如切回 text-embedding-v4）
+RUNTIME_VECTOR_DIR = os.getenv("KB_VECTOR_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "kb_vectors_m3"
+)
+RUNTIME_EMBEDDING_BACKEND = os.getenv(
+    "KB_EMBEDDING_BACKEND", "bge-m3"
+).strip().lower()
+
+# 兼容旧变量名：运行时查询后端
+EMBEDDING_BACKEND = RUNTIME_EMBEDDING_BACKEND
+
+# 本地 Ollama 编码配置
+OLLAMA_EMBED_URL = os.getenv("OLLAMA_EMBED_URL", "http://127.0.0.1:11434/api/embed")
+OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3:latest")
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "4096"))
 
 # 集合名称
 # kb_quests_bm25 已剔除：实际BM25/关键词检索不读取该向量集合
@@ -105,11 +122,94 @@ class GenshinEmbedder:
         return None
 
 
-class KBVectorStore:
-    """知识库向量存储（NumPy 文件版）"""
+class OllamaEmbedder:
+    """本地 Ollama BGE-M3 嵌入器，参数与 M3 建库脚本保持一致。"""
 
-    def __init__(self):
-        os.makedirs(VECTOR_DIR, exist_ok=True)
+    @staticmethod
+    def embed(texts: List[str], max_retries: int = 3) -> Optional[List[List[float]]]:
+        """批量嵌入文本列表。失败时重试（递增退避+抖动），返回向量列表或 None。"""
+        import random
+        if not texts:
+            return []
+        for attempt in range(max_retries):
+            try:
+                resp = requests.post(
+                    OLLAMA_EMBED_URL,
+                    json={
+                        "model": OLLAMA_EMBED_MODEL,
+                        "input": texts,
+                        "truncate": False,
+                        "options": {"num_ctx": OLLAMA_NUM_CTX},
+                    },
+                    timeout=600,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    embeddings = data.get("embeddings")
+                    if isinstance(embeddings, list) and len(embeddings) == len(texts):
+                        return embeddings
+                    print(
+                        f"  [OllamaEmbedding] 返回数量异常: "
+                        f"{type(embeddings).__name__} != {len(texts)}"
+                    )
+                    return None
+                wait = (attempt + 1) * 5 + random.uniform(0, 2)
+                print(
+                    f"  [OllamaEmbedding] API 错误 {resp.status_code}，"
+                    f"等待 {wait:.1f}s 后重试 ({attempt+1}/{max_retries})..."
+                )
+                time.sleep(wait)
+            except Exception as e:
+                wait = (attempt + 1) * 3 + random.uniform(0, 1)
+                print(
+                    f"  [OllamaEmbedding] 网络错误: {e}，"
+                    f"等待 {wait:.1f}s 后重试 ({attempt+1}/{max_retries})..."
+                )
+                time.sleep(wait)
+        return None
+
+    @staticmethod
+    def embed_single(text: str) -> Optional[np.ndarray]:
+        """嵌入单条文本，返回归一化向量"""
+        result = OllamaEmbedder.embed([text])
+        if result:
+            vec = np.array(result[0], dtype=np.float32)
+            norm = float(np.linalg.norm(vec))
+            if norm <= 0:
+                return None
+            return vec / norm
+        return None
+
+
+def get_embedder(backend: Optional[str] = None):
+    """返回指定查询编码后端；不传则用运行时默认值。"""
+    name = (backend or EMBEDDING_BACKEND).strip().lower()
+    if name in ("bge-m3", "m3", "ollama"):
+        return OllamaEmbedder
+    return GenshinEmbedder
+
+
+class KBVectorStore:
+    """知识库向量存储（NumPy 文件版）。
+
+    runtime=False（默认）：构建/维护模式，使用 kb_vectors + text-embedding-v4；
+    runtime=True：Agent 运行时模式，默认使用 kb_vectors_m3 + bge-m3。
+    """
+
+    def __init__(self, runtime: bool = False):
+        self.runtime = runtime
+        if runtime:
+            self.vector_dir = RUNTIME_VECTOR_DIR
+            self.embedding_backend = RUNTIME_EMBEDDING_BACKEND
+        else:
+            self.vector_dir = VECTOR_DIR
+            self.embedding_backend = "text-embedding-v4"
+        os.makedirs(self.vector_dir, exist_ok=True)
+        mode = "runtime" if runtime else "build"
+        print(
+            f"[向量库] mode={mode} dir={self.vector_dir} "
+            f"backend={self.embedding_backend}"
+        )
 
     # ====== 内部文件路径 ======
 
@@ -119,15 +219,15 @@ class KBVectorStore:
 
     def _vec_path(self, collection: str) -> str:
         self._validate_collection(collection)
-        return os.path.join(VECTOR_DIR, f"{collection}_vectors.npy")
+        return os.path.join(self.vector_dir, f"{collection}_vectors.npy")
 
     def _meta_path(self, collection: str) -> str:
         self._validate_collection(collection)
-        return os.path.join(VECTOR_DIR, f"{collection}_meta.json")
+        return os.path.join(self.vector_dir, f"{collection}_meta.json")
 
     def _doc_path(self, collection: str) -> str:
         self._validate_collection(collection)
-        return os.path.join(VECTOR_DIR, f"{collection}_docs.json")
+        return os.path.join(self.vector_dir, f"{collection}_docs.json")
 
     # ====== 加载/保存 ======
 
@@ -227,7 +327,7 @@ class KBVectorStore:
         collection: 指定集合名，为空则搜全部集合，每个集合各取 top_k。
         exclude: 排除的集合名列表。
         """
-        query_vec = GenshinEmbedder.embed_single(query)
+        query_vec = get_embedder(self.embedding_backend).embed_single(query)
         if query_vec is None:
             return []
 

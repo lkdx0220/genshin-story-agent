@@ -36,7 +36,7 @@ if os.path.exists(_npcs_path):
 # ====== 向量知识库 ======
 try:
     from kb_vector_store import KBVectorStore
-    _vector_store = KBVectorStore()
+    _vector_store = KBVectorStore(runtime=True)
     _vector_stats = _vector_store.get_stats()
     _vector_total = sum(_vector_stats.values())
     print(f"[初始化] 向量知识库已加载: {_vector_stats}, 总计 {_vector_total} 条")
