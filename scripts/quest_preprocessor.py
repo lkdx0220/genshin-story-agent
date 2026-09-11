@@ -95,6 +95,37 @@ def chunk_text(text):
     return chunk_natural(text, max_size=BM25_CHUNK_SIZE, overlap=BM25_CHUNK_OVERLAP)
 
 
+def _hard_split_oversized(text, limit):
+    """把超过 limit 的文本切成不超过 limit 的块，优先句末标点/换行。"""
+    if limit <= 0:
+        limit = 1
+    if len(text) <= limit:
+        return [text]
+    pieces = []
+    start = 0
+    total = len(text)
+    while start < total:
+        end = min(start + limit, total)
+        if end < total:
+            window_start = max(start, end - 200)
+            split_at = -1
+            for index in range(end - 1, window_start - 1, -1):
+                if text[index] in "。！？；…":
+                    split_at = index + 1
+                    break
+            if split_at <= start:
+                newline = text.rfind(chr(10), window_start, end)
+                if newline > start:
+                    split_at = newline + 1
+            if split_at > start:
+                end = split_at
+        piece = text[start:end].strip()
+        if piece:
+            pieces.append(piece)
+        start = end
+    return pieces
+
+
 def chunk_natural(text, max_size=None, overlap=None):
     """按对话场景自然切分。
 
@@ -106,7 +137,7 @@ def chunk_natural(text, max_size=None, overlap=None):
     2. 空行 + 下一行【标题】→ 场景切换
     3. 空行 + 角色切换（说话者不同）→ 对话轮次边界
     4. 达到上限时：往前 200 字内找最近空行或角色切换点切；
-       找不到则把当前角色长发言整体推到下一片
+       找不到则按句末标点/换行/硬切兜底，保证不超长
     5. 每片尾部带 overlap 字重叠
     """
     if max_size is None:
@@ -231,6 +262,13 @@ def chunk_natural(text, max_size=None, overlap=None):
 
     if buffer_lines:
         chunks.append(chr(10).join(buffer_lines).strip())
+
+    # 无自然边界兜底：先保证基础块不超过“上限 - 重叠 - 换行”，再拼重叠。
+    base_limit = max(1, max_size - overlap - 1)
+    expanded = []
+    for chunk in chunks:
+        expanded.extend(_hard_split_oversized(chunk, base_limit))
+    chunks = expanded
 
     # 单片段无需重叠
     if len(chunks) <= 1:
