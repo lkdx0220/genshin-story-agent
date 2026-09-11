@@ -8,6 +8,66 @@
 >
 > 如果你只是想找一个能回答原神问题的工具，而不想折腾命令行和 API 配置，本项目不适合你。
 
+## 预构建知识库 Release
+
+如果你不想自己逐条抓取 Wiki、重建向量库，可以直接使用已经打包好的知识库快照：
+
+- **Release 页面**：https://github.com/lkdx0220/genshin-story-agent/releases/tag/kb-2026.09.10
+- **tag**：`kb-2026.09.10`
+- **对应 commit**：`9d5bfd5`
+
+三个资产分别对应不同部分：
+
+| 资产 | 解压位置 | 内容 | 前置条件 |
+|---|---|---|---|
+| [`genshin-story-agent-kb-2026.09.10.zip`](https://github.com/lkdx0220/genshin-story-agent/releases/download/kb-2026.09.10/genshin-story-agent-kb-2026.09.10.zip) | 项目根目录 | 项目代码 + 核心知识库 JSON | Python 环境、API Key |
+| [`kb-vectors-text-embedding-v4-2026.09.10.zip`](https://github.com/lkdx0220/genshin-story-agent/releases/download/kb-2026.09.10/kb-vectors-text-embedding-v4-2026.09.10.zip) | 项目根目录，解压为 `kb_vectors/` | 阿里云百炼 `text-embedding-v4` 向量库 | DashScope API Key |
+| [`kb-vectors-bge-m3-2026.09.10.zip`](https://github.com/lkdx0220/genshin-story-agent/releases/download/kb-2026.09.10/kb-vectors-bge-m3-2026.09.10.zip) | 项目根目录，解压为 `kb_vectors_m3/` | 本地 Ollama BGE-M3 向量库（运行时默认） | 本地 Ollama + `bge-m3:latest` |
+
+### 从 Release 开始使用
+
+1. **下载并解压核心包**
+   - 下载 `genshin-story-agent-kb-2026.09.10.zip`，解压到任意目录，得到完整的项目根目录。
+
+2. **安装依赖并配置密钥**
+   ```bash
+   pip install -r requirements.txt
+   copy .env.example .env
+   ```
+   编辑 `.env`，至少填入 `DASHSCOPE_API_KEY`；别名消歧/路径分类如需 DeepSeek，再填 `DEEPSEEK_API_KEY`。
+
+3. **选择一个向量库（二选一）**
+   - **本地 BGE-M3（推荐，运行时默认）**：
+     ```bash
+     ollama pull bge-m3:latest
+     ```
+     把 `kb-vectors-bge-m3-2026.09.10.zip` 解压到项目根，确认得到 `kb_vectors_m3/` 目录。
+   - **远程 text-embedding-v4**：
+     把 `kb-vectors-text-embedding-v4-2026.09.10.zip` 解压到项目根，确认得到 `kb_vectors/` 目录；然后在启动前切换后端：
+     ```powershell
+     $env:KB_VECTOR_DIR="<项目根>\kb_vectors"
+     $env:KB_EMBEDDING_BACKEND="text-embedding-v4"
+     ```
+
+4. **启动 Agent**
+   ```bash
+   python genshin_story_agent.py
+   # 或 Web 模式
+   python genshin_story_web_api.py
+   ```
+   Web 模式浏览器打开 `http://localhost:5000/chat`。
+
+5. **校验下载文件（可选）**
+   ```powershell
+   Get-FileHash .\genshin-story-agent-kb-2026.09.10.zip -Algorithm SHA256
+   ```
+   与 Release 里的 `SHA256SUMS.txt` 比对即可。
+
+> 说明：
+> - 两个向量包不要解压到同一个目录；目录名分别是 `kb_vectors/` 和 `kb_vectors_m3/`。
+> - 两个向量库使用同一套 chunk ID 与切片，只是编码器不同，通常二选一即可。
+> - Release 不包含 `.env`、`content_data/wiki_raw/` 原始抓取缓存、备份文件和日志；真实密钥请自行配置，不要提交到仓库。
+
 ## 架构
 
 ```
@@ -370,13 +430,14 @@ wiki_data_tools/        # Wiki 数据爬取与重建工具
 - Flask Web API
 - PyInstaller 打包为 exe
 
-## 数据规模（2026-09）
+## 数据规模（kb-2026.09.10）
 
-- NPC：`npcs_processed.json` 2640 条
-- 世界观/地图文本：`lore.json` 7493 条（其中地图文本 7260 条）
-- 任务：世界任务 762、活动剧情 657、传说任务 238、魔神任务 224，长任务预处理 268 条
-- 其他内容：材料 812、食物 714、怪物 550、食谱 453、书籍 105、采集物 61
-- 向量库：`kb_quests_vec` 7200、`kb_lore` 7625、`kb_books` 353、`kb_characters` 131、`kb_regions` 8，合计 15317；`kb_quests_bm25` 已移除
+- NPC：`npcs_processed.json` 2657 条
+- 世界观/地图文本：`lore.json` 7382 条（其中地图文本 7149 条）
+- 任务：世界任务 762、活动剧情 692、传说任务 238、魔神任务 224，长任务预处理 268 条
+- 其他内容：材料 812、食物 714、怪物 550、食谱 453、书籍 105、采集物 61、概念 64
+- 向量库：`kb_quests_vec` 11483、`kb_lore` 7971、`kb_books` 402、`kb_characters` 131、`kb_npcs` 2657、`kb_regions` 8，合计 22652；`kb_quests_bm25` 已移除
+- `kb_vectors/`（text-embedding-v4）与 `kb_vectors_m3/`（本地 BGE-M3）块数相同，仅编码器不同
 
 ## 评估
 
