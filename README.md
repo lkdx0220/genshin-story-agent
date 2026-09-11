@@ -123,6 +123,89 @@ $env:KB_EMBEDDING_BACKEND="text-embedding-v4"
 - 不要直接提交向量库（`kb_vectors_m3/` 约 166MB，`kb_vectors/` 约 545MB），需要分发时使用 Release 附件、网盘或让对方自行重建；
 - `--from-dump` 只跳过“重新捕获切片”，仍需要 `chunk_dump.jsonl` 存在且与当前代码切片逻辑一致。
 
+## L3 全景展开知识库构建方法
+
+L3 全景连锁不依赖额外向量库，而是依赖两张本地索引：
+
+| 索引 | 路径 | 作用 |
+|---|---|---|
+| 观测枢词条链接图 | `kb_vectors/wiki_entry_graph.json` | 保存每个词条的正文、剧情文本、类型、地区、别名，以及它通过 `data-entry-id` 链接到的其它词条 |
+| 实体提及索引 | `kb_vectors/wiki_entity_mention_index.json` | Aho-Corasick 反向索引，记录“谁在哪些词条的剧情文本里被提到” |
+
+L3 触发后，代码会先加载任务全文和地图文本，再用实体提及索引反向找出相关实体档案，最后沿词条链接图做一跳扩展，拼成 `[全景全文读取]` 证据包，交给 qwen3.8-max 分段生成。
+
+### 1. 抓取全量频道词条（主数据源）
+
+```bash
+# 全量 Tier1 频道；必须保留 --delay 控制请求频率
+python wiki_data_tools/_fetch_mihoyo_channel.py --tier 1 --delay 0.6
+
+# 调试时可只抓单个频道 / 限制数量 / 只看列表
+python wiki_data_tools/_fetch_mihoyo_channel.py --channel 25 --limit 10
+python wiki_data_tools/_fetch_mihoyo_channel.py --list-only --tier 1
+```
+
+产物目录：`content_data/wiki_raw/channel_*.json`。
+
+### 2. 同步任务/地图文本原始数据（可选，用于补齐旧数据源）
+
+```bash
+python wiki_data_tools/_fetch_mihoyo_tasks.py --list-only --all-versions
+python wiki_data_tools/_fetch_mihoyo_map_text.py --all-regions
+python wiki_data_tools/_parse_mihoyo_tasks.py --raw content_data/mihoyo_tasks_raw.json
+python wiki_data_tools/_parse_mihoyo_map_text.py --raw content_data/mihoyo_map_text_raw_full.json
+```
+
+### 3. 构建链接图
+
+```bash
+# 全量图（默认 scope=full，输出 kb_vectors/wiki_entry_graph.json）
+python wiki_entry_graph.py --build
+
+# 至冬灰眸四线试点图（仅调试，输出 kb_vectors/wiki_entry_graph_pilot.json）
+python wiki_entry_graph.py --build --scope pilot
+
+# 查看统计与缺失目标
+python wiki_entry_graph.py --stats
+
+# 单点查询 / 关键词搜索 / 展开链接
+python wiki_entry_graph.py --get 509591
+python wiki_entry_graph.py --search 阿克西妮娅
+python wiki_entry_graph.py --expand 509591
+```
+
+### 4. 构建实体提及索引
+
+依赖上一步的 `wiki_entry_graph.json`：
+
+```bash
+python scripts/build_entity_mention_index.py
+
+# 可选参数
+python scripts/build_entity_mention_index.py --graph <graph.json> --out <index.json> --min-count 1
+```
+
+产物：`kb_vectors/wiki_entity_mention_index.json`。
+
+### 5. 增量维护
+
+```bash
+# 只检测变更，不抓取不重建
+python scripts/update_wiki_graph.py --check
+
+# 抓取 new/updated 详情并重建链接图
+python scripts/update_wiki_graph.py --apply
+
+# 注意：--apply 只重建链接图，实体提及索引需要再手动重建一次
+python scripts/build_entity_mention_index.py
+```
+
+### 注意事项
+
+- `kb_vectors/` 已被 `.gitignore` 忽略，链接图和提及索引都不会推送到 GitHub；
+- 图 v3 只从“剧情模块”提取链接，避免首页推荐位/玩法模块混入；正文展示与提及扫描使用 `story_text`；
+- 全量重建时间较长，增量维护优先用 `scripts/update_wiki_graph.py`。
+
 ## 最近知识库更新（2026-09-10）
 
 - 新增 `content_data/source_scope/`：BWiki 与米游社观测枢口径对齐结果（`official_catalog.json`、`classification.jsonl`、`bwiki_only.jsonl`、`review.jsonl`、`shared_for_replacement.jsonl`、`_summary.json`）。
