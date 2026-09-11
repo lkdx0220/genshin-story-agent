@@ -45,6 +45,9 @@ python wiki_data_tools/_parse_mihoyo_map_text.py --raw content_data/mihoyo_map_t
 # 重建全部向量索引（内容目录已修正为项目根 content_data）
 python scripts/kb_build_index.py --force
 
+# 重建本地 M3 向量库（运行时默认使用；需要本地 Ollama 已加载 bge-m3:latest）
+python scripts/build_m3_vectors.py --force
+
 # 预处理长任务切片（生成 quests_processed.json）
 python scripts/quest_preprocessor.py
 
@@ -65,7 +68,7 @@ python scripts/update_wiki_graph.py
 - 官方目录数量（节选）：task 1056、map_text 706、npc 2326、character 136、weapon 246、artifact 63、enemy 415、food 321、item 2037、book 93、organization 37、domain 76。
 - 更新 `content_data/lore.json`、`content_data/npcs_*.json`、`content_data/quests_世界任务|其他任务|地图事件|彩蛋剧情|活动剧情.json`。
 - 新增维护脚本：`scripts/preprocess_source_scope.py`、`scripts/apply_source_scope.py`、`scripts/import_crawler_corpus.py`、`scripts/merge_crawler_corpus.py`。
-- 运行时向量库：合计 **18080** 条（kb_quests_vec 7416 / kb_lore 7515 / kb_books 353 / kb_characters 131 / kb_npcs 2657 / kb_regions 8）。
+- 运行时向量库：合计 **22652** 条（kb_quests_vec 11483 / kb_lore 7971 / kb_books 402 / kb_characters 131 / kb_npcs 2657 / kb_regions 8）。
 - Wiki 图 schema v3：**13511 节点 / 9435 链接**；实体提及索引 **4678 实体 / 39651 提及关系**。
 
 
@@ -83,11 +86,21 @@ python scripts/update_wiki_graph.py
 | 意图路由 | qwen3.7-plus（主）/ qwen-plus（DashScope 回退） | token-plan / 阿里云百炼（回退） | 实体锚定后的意图分类 |
 | 别名消歧 | deepseek-flash | DeepSeek | "水神→芙宁娜/芙卡洛斯"歧义判断 |
 | L1/L2 路径分类 | deepseek-flash | DeepSeek | 简单题/复杂题分流 |
-| 向量 Embedding | text-embedding-v4 | 阿里云百炼 | 知识库语义检索 |
+| 向量 Embedding（运行时默认） | bge-m3:latest（本地 Ollama GGUF F16） | 本地 Ollama | Agent 运行时语义检索；可用环境变量切回 text-embedding-v4 |
+| 向量 Embedding（对照/构建） | text-embedding-v4 | 阿里云百炼 | 建库脚本默认编码器与 A/B 对照 |
 | L3 全景 Answer | qwen3.8-max | token-plan / 阿里云百炼（回退） | 全景题分段生成主模型，关闭 thinking |
 | 记忆 Embedding | paraphrase-multilingual-MiniLM-L12-v2 | 本地 | RAG 对话记忆（sentence-transformers） |
 
 > **注意**：当前 Qwen 主接口为 token-plan（OpenAI 兼容），失败自动回退原 DashScope；token-plan 不支持 qwen-plus，因此回退时轻量/路由模型才使用 qwen-plus。未开通的模型会报 `model not found` 错误。
+
+> **运行时向量后端**：默认使用本地 `kb_vectors_m3/` + `ollama/bge-m3:latest`，启动前需确保 Ollama 正在运行并已拉取该模型。如需切回远程 `text-embedding-v4`：
+>
+> ```powershell
+> $env:KB_VECTOR_DIR="<项目根>\kb_vectors"
+> $env:KB_EMBEDDING_BACKEND="text-embedding-v4"
+> ```
+>
+> 建库脚本 `scripts/kb_build_index.py` 默认仍写入 `kb_vectors/`；`scripts/build_m3_vectors.py` 写入 `kb_vectors_m3/`。
 
 ## 快速开始
 
