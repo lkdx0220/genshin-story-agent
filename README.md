@@ -117,10 +117,8 @@ $env:KB_VECTOR_DIR="<项目根>\kb_vectors"
 $env:KB_EMBEDDING_BACKEND="text-embedding-v4"
 ```
 
-### 注意事项
+### 说明
 
-- `kb_vectors/` 与 `kb_vectors_m3/` 都已加入 `.gitignore`，不会推送到 GitHub；
-- 不要直接提交向量库（`kb_vectors_m3/` 约 166MB，`kb_vectors/` 约 545MB），需要分发时使用 Release 附件、网盘或让对方自行重建；
 - `--from-dump` 只跳过“重新捕获切片”，仍需要 `chunk_dump.jsonl` 存在且与当前代码切片逻辑一致。
 
 ## L3 全景展开知识库构建方法
@@ -200,9 +198,8 @@ python scripts/update_wiki_graph.py --apply
 python scripts/build_entity_mention_index.py
 ```
 
-### 注意事项
+### 说明
 
-- `kb_vectors/` 已被 `.gitignore` 忽略，链接图和提及索引都不会推送到 GitHub；
 - 图 v3 只从“剧情模块”提取链接，避免首页推荐位/玩法模块混入；正文展示与提及扫描使用 `story_text`；
 - 全量重建时间较长，增量维护优先用 `scripts/update_wiki_graph.py`。
 
