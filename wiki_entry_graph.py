@@ -35,6 +35,11 @@ WIKI_RAW_DIR = BASE_DIR / "content_data" / "wiki_raw"
 
 SCHEMA_VERSION = 4
 
+# 观测枢转录误字 → 正确写法（人工核对：B站同页为正确写法）
+_TEXT_FIXES = {
+    "八奇现瘴病隐": "八奇现瘴疠隐",   # 春曦画桃符 第一回
+}
+
 # 试点范围：灰眸四线任务 ID 及其关联地区。
 PILOT_TASK_IDS = {"509533", "509538", "509592", "509591"}
 # 试点图缺失、已单独补抓的高价值词条（见 scripts/fetch_wiki_missing_entries.py）。
@@ -101,6 +106,24 @@ class WikiEntry:
     updated_at: str = ""
     # v4：来源标记。mihoyo=米游社观测枢；bwiki=B站 wiki 等补充源
     source: str = "mihoyo"
+
+    def __post_init__(self):
+        """观测枢 OCR 误字修正。
+
+        观测枢正文是扫描/转录产物，个别字形会错；B站同页为正确写法时以 B站为准
+        （人工核对确认，不是自动择优）。放在这里而不是只改 JSON，
+        是为了重新抓取/重建词条图之后修正依然生效。
+        """
+        if "<!--" in (self.title or ""):
+            # 编辑器残留（如「曼科的忠告<!-- 初见大木$HIDDEN -->」），不是题名的一部分。
+            self.title = re.sub(r"<!--.*?-->", "", self.title, flags=re.S).strip()
+        for wrong, right in _TEXT_FIXES.items():
+            if wrong in (self.title or ""):
+                self.title = self.title.replace(wrong, right)
+            if wrong in (self.full_text or ""):
+                self.full_text = self.full_text.replace(wrong, right)
+            if wrong in (self.story_text or ""):
+                self.story_text = self.story_text.replace(wrong, right)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -820,6 +843,37 @@ def _parse_title_meta(title: str):
     return _norm_meta_key(chapter), _norm_meta_key(act), _norm_meta_key(task or t)
 
 
+def _bwiki_meta_header(md: Dict[str, Any]) -> str:
+    """把 B 站词条 metadata 里的任务字段拼成头部块，写入 full_text。
+
+    story_text 保持纯正文；这些字段只在 full_text（触发条件/前置任务/后续任务 等
+    顺序元数据的唯一来源）里，缺了它们任务链就断在字段上。
+    """
+    lines: List[str] = ["【B站词条元数据】"]
+    for key in (
+        "任务名称", "系列任务", "chapter_name", "act_name",
+        "前置任务", "后续任务", "任务条件", "触发条件",
+        "任务描述", "出场人物", "任务地区", "任务区域", "所属版本", "任务编号",
+    ):
+        value = md.get(key)
+        if isinstance(value, str) and value.strip():
+            lines.append(f"{key}：{_clean_bwiki_field(value)}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _clean_bwiki_title(title: str) -> str:
+    """去掉标题里的 HTML 注释等编辑器残留（如「曼科的忠告<!-- 初见大木$HIDDEN -->」）。"""
+    return re.sub(r"<!--.*?-->", "", title, flags=re.S).strip()
+
+
+def _clean_bwiki_field(value: str) -> str:
+    """去掉字段里的 wikitext 噪声（换行、制表、隐藏注释），保留可读文本。"""
+    text = re.sub(r"<!--.*?-->", "", value, flags=re.S)
+    text = text.replace("\\n", " ").replace("\r", " ").replace("\n", " ")
+    text = re.sub(r"[ \t\u3000]+", " ", text)
+    return text.strip(" |")
+
+
 def _load_bwiki_entries() -> List[Dict[str, Any]]:
     """读取全部 content_data/quests_*.json，整理为可合并的 B 站任务条目。
 
@@ -867,7 +921,7 @@ def _load_bwiki_entries() -> List[Dict[str, Any]]:
             if not isinstance(item, dict):
                 continue
             md = item.get("metadata") or {}
-            title = str(item.get("title") or md.get("任务名称") or "").strip()
+            title = _clean_bwiki_title(str(item.get("title") or md.get("任务名称") or ""))
             task = str(md.get("任务名称") or title).strip()
             entry_type = str(md.get("任务类型") or item.get("category") or "").strip()
             if not title or not task:
@@ -892,8 +946,10 @@ def _load_bwiki_entries() -> List[Dict[str, Any]]:
                 "entry_type": entry_type,
                 "chapter": chapter,
                 "act": act,
-                "region": str(md.get("任务区域") or md.get("地区") or "").strip(),
+                # B站 metadata 用的是「任务地区」（值为纳塔/远古圣山等），不是「任务区域」。
+                "region": str(md.get("任务地区") or md.get("任务区域") or md.get("地区") or "").strip(),
                 "text": text,
+                "meta_text": _bwiki_meta_header(md),
                 "file": path.name,
             }
             old = entries.get(key)
@@ -924,6 +980,7 @@ def _load_bwiki_entries() -> List[Dict[str, Any]]:
             "act": "",
             "region": "",
             "text": text,
+            "meta_text": _bwiki_meta_header(item.get("metadata") or {}),
             "file": "quests_processed.json",
         }
     # 同一任务若已有带 chapter/act 的条目，丢弃无元数据的重复条目，避免建出重复节点。
@@ -978,6 +1035,8 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
     }
     for row in entries:
         text = row["text"]
+        meta_text = str(row.get("meta_text") or "")
+        full = f"{meta_text}\n{text}" if meta_text else text
         chapter, act, task = row["chapter"], row["act"], row["task"]
         keys = [
             (_norm_meta_key(chapter), _norm_meta_key(act), _norm_meta_key(task)),
@@ -999,7 +1058,7 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
                 old_text = entry.story_text or entry.full_text or ""
                 if len(text) > len(old_text):
                     entry.story_text = text
-                    entry.full_text = text
+                    entry.full_text = full
                     entry.source = "bwiki"
                     stats["replaced"] += 1
                 for alias in (chapter, act, task, row["title"]):
@@ -1031,7 +1090,7 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
                 entry_id=entry_id,
                 title=row["title"] if entry_type == "activity" else task,
                 entry_type=entry_type,
-                full_text=text,
+                full_text=full,
                 story_text=text,
                 aliases=aliases,
                 region=row["region"],
