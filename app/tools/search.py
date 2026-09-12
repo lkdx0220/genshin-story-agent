@@ -348,7 +348,9 @@ def search_lore(keyword: str) -> str:
     seen_ids = set()
     for term in search_terms:
         for entry in lore:
-            if term in entry["text"]:
+            # 标题也是命中源：地图文本类条目的地区/子区域名只写在标题里
+            # （如"地图文本/稻妻 / 清籁岛"），正文只有碎片内容。
+            if term in entry["title"] or term in entry["text"]:
                 eid = entry["title"] + entry["text"][:40]
                 if eid not in seen_ids:
                     seen_ids.add(eid)
@@ -401,7 +403,8 @@ def _search_lore_snippets(keyword: str, max_candidates: int = 5, snippet_chars: 
     seen = set()
     for term in search_terms:
         for entry in lore:
-            if term in entry["text"]:
+            # 标题也是命中源（命中在标题时下面 idx<0 会退化为从头截片段）。
+            if term in entry["title"] or term in entry["text"]:
                 key = entry["title"] + entry["text"][:40]
                 if key not in seen:
                     seen.add(key)

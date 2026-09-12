@@ -534,27 +534,51 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
         if lore:
             lore_candidates = []
             seen_lore = set()
+            # 标题末段与检索词完全相等的条目（用户问的就是这个条目名），
+            # 单独标记并在融合前提到关键词路最前面。
+            lore_exact_titles = set()
             lore_terms = [query]
             if len(query) >= 3:
                 lore_terms.append(query[:-1])
             if len(query) >= 4:
                 lore_terms.append(query[:-2])
-            for term in lore_terms:
-                for entry in lore:
-                    if term in entry["text"]:
-                        eid = entry["title"] + entry["text"][:40]
-                        if eid not in seen_lore:
-                            seen_lore.add(eid)
-                            lore_candidates.append(entry)
+            for entry in lore:
+                title = entry["title"]
+                text = entry["text"]
+                # 标题也算命中源：地图文本类条目的地区/子区域名只写在标题里
+                # （如"地图文本/稻妻 / 清籁岛"），正文只有碎片内容，
+                # 只比正文会导致按名检索不到。
+                if not any(term in title or term in text for term in lore_terms):
+                    # 反向匹配：条目名本身出现在查询里。中文查询无空格，
+                    # "地图文本中稻妻的清籁岛"这类整句靠正向子串永远比不上。
+                    leaf = title.rsplit("/", 1)[-1].strip()
+                    if len(leaf) < 2 or leaf not in query:
+                        continue
+                    lore_exact_titles.add(title)
+                eid = title + text[:40]
+                if eid in seen_lore:
+                    continue
+                seen_lore.add(eid)
+                lore_candidates.append(entry)
+                if any(term == title or term == title.rsplit("/", 1)[-1].strip()
+                       for term in lore_terms):
+                    lore_exact_titles.add(title)
             if lore_candidates:
-                rerank_docs = [f"【{c['title']}】{c['text']}" for c in lore_candidates]
-                reranked = _rerank(query, rerank_docs, top_n=min(5, len(lore_candidates)))
+                # 精确命中条目名的先锁定名额，不参与 rerank 竞争：
+                # 否则地名/名词查询里它们会被“正文顺带提到”的长条目挤掉。
+                exact = [c for c in lore_candidates if c["title"] in lore_exact_titles][:5]
+                rest = [c for c in lore_candidates if c["title"] not in lore_exact_titles]
+                budget = 5 - len(exact)
+                reranked = None
+                if budget > 0 and rest:
+                    rerank_docs = [f"【{c['title']}】{c['text']}" for c in rest]
+                    reranked = _rerank(query, rerank_docs, top_n=min(budget, len(rest)))
                 if reranked is None:
-                    ordered = lore_candidates[:5]
+                    ordered = exact + rest[:budget]
                 elif reranked:
-                    ordered = [lore_candidates[i] for i in reranked]
+                    ordered = exact + [rest[i] for i in reranked]
                 else:
-                    ordered = []
+                    ordered = exact
                 for c in ordered:
                     text = c["text"]
                     # 长文档 snippet 定位：找到搜索词出现位置，从该位置截取窗口
@@ -576,6 +600,14 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
                         "collection": "kb_lore",
                         "document": snippet,
                     })
+
+                # 精确标题命中前置：这些条目的名字就是用户问的对象，
+                # 优先级高于“正文顺带提到”的任务片段。
+                if lore_exact_titles:
+                    head = [r for r in results if r["id"][len("lore:"):] in lore_exact_titles]
+                    if head:
+                        head_ids = {r["id"] for r in head}
+                        results = head + [r for r in results if r["id"] not in head_ids]
 
     # --- 书籍正文搜索 ---
     books = _load_content_json("books")
