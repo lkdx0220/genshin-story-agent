@@ -33,7 +33,7 @@ MAP_TEXT_RAW = BASE_DIR / "content_data" / "mihoyo_map_text_raw_full.json"
 MISSING_RAW = BASE_DIR / "content_data" / "wiki_missing_entries_raw.json"
 WIKI_RAW_DIR = BASE_DIR / "content_data" / "wiki_raw"
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # 试点范围：灰眸四线任务 ID 及其关联地区。
 PILOT_TASK_IDS = {"509533", "509538", "509592", "509591"}
@@ -99,6 +99,8 @@ class WikiEntry:
     content_hash: str = ""
     status: str = "ok"
     updated_at: str = ""
+    # v4：来源标记。mihoyo=米游社观测枢；bwiki=B站 wiki 等补充源
+    source: str = "mihoyo"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -124,6 +126,7 @@ class WikiEntry:
             "content_hash": self.content_hash,
             "status": self.status,
             "updated_at": self.updated_at,
+            "source": self.source,
         }
 
     @classmethod
@@ -151,6 +154,7 @@ class WikiEntry:
             content_hash=str(data.get("content_hash", "")),
             status=str(data.get("status", "ok")),
             updated_at=str(data.get("updated_at", "")),
+            source=str(data.get("source", "mihoyo") or "mihoyo"),
         )
 
 
@@ -789,6 +793,259 @@ def build_graph(
     return graph
 
 
+def _norm_meta_key(text: str) -> str:
+    """元数据匹配用的归一化：去空白、书名号、引号、标点。"""
+    s = re.sub(r"<[^>]+>", "", str(text or ""))
+    s = re.sub(r"[\s\u3000「」『』《》【】（）()\[\]{}:：,，。.、;；\-—·!！?？\"'“”‘’]", "", s)
+    return s
+
+
+_BWIKI_ALLOWED_TYPES = (
+    "世界任务", "传说任务", "魔神任务", "活动剧情", "部族纪闻", "委托任务",
+    "地图事件", "其他任务", "隐藏任务", "伴月纪闻", "游逸旅闻", "彩蛋剧情",
+)
+_BWIKI_EXCLUDE_TITLE_KEYWORDS = ("额外对话/彩蛋", "教程", "活动说明", "NPC对话")
+_ACT_NAME_RE = re.compile(r"第[一二三四五六七八九十0-9]+(?:幕|回|章)|尾声|序奏|序章|间章|幕间")
+
+
+def _parse_title_meta(title: str):
+    """从标题拆出 (chapter, act, task)；没幕级标记时只返回 (title, '', '')。"""
+    t = str(title or "").strip()
+    m = _ACT_NAME_RE.search(t)
+    if not m:
+        return _norm_meta_key(t), "", ""
+    act = m.group(0)
+    chapter = t[: m.start()].strip(" 　-—_·「」『』《》")
+    task = t[m.end():].strip(" 　-—_·「」『』《》")
+    return _norm_meta_key(chapter), _norm_meta_key(act), _norm_meta_key(task or t)
+
+
+def _load_bwiki_entries() -> List[Dict[str, Any]]:
+    """读取全部 content_data/quests_*.json，整理为可合并的 B 站任务条目。
+
+    过滤规则：只保留任务/剧情类条目；丢弃额外对话、教程、活动说明等非剧情页。
+    优先使用原始 text；原始 text 为空时用 quests_processed.json 的 chunks 兜底。
+    """
+    content_dir = BASE_DIR / "content_data"
+    processed: Dict[str, Any] = {}
+    processed_path = content_dir / "quests_processed.json"
+    if processed_path.exists():
+        try:
+            processed = json.loads(processed_path.read_text(encoding="utf-8"))
+        except Exception:
+            processed = {}
+
+    def _processed_text(item: Dict[str, Any]) -> str:
+        parts: List[str] = []
+        summary = item.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            parts.append(summary.strip())
+        for key in ("chunks_bm25", "chunks_vec"):
+            value = item.get(key)
+            if isinstance(value, list):
+                parts.extend(str(x) for x in value if isinstance(x, str))
+        return "\n".join(parts).strip()
+
+    processed_text = {}
+    for title, item in processed.items():
+        if not isinstance(item, dict):
+            continue
+        text = _processed_text(item)
+        if text:
+            processed_text[_norm_meta_key(title)] = text
+
+    entries: Dict[tuple, Dict[str, Any]] = {}
+    for path in sorted(content_dir.glob("quests_*.json")):
+        if path.name == "quests_processed.json":
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        items = data if isinstance(data, list) else (data.get("items") or list(data.values()))
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            md = item.get("metadata") or {}
+            title = str(item.get("title") or md.get("任务名称") or "").strip()
+            task = str(md.get("任务名称") or title).strip()
+            entry_type = str(md.get("任务类型") or item.get("category") or "").strip()
+            if not title or not task:
+                continue
+            if any(k in title for k in _BWIKI_EXCLUDE_TITLE_KEYWORDS):
+                continue
+            if any(k in entry_type for k in ("额外", "教程", "说明")):
+                continue
+            if entry_type and not any(t in entry_type for t in _BWIKI_ALLOWED_TYPES):
+                continue
+            chapter = str(md.get("chapter_name") or md.get("系列任务") or "").split(",")[0].strip()
+            act = str(md.get("act_name") or "").strip()
+            text = str(item.get("text") or "").strip()
+            if not text:
+                text = processed_text.get(_norm_meta_key(title), "")
+            if not text:
+                continue
+            key = (_norm_meta_key(chapter), _norm_meta_key(act), _norm_meta_key(task))
+            row = {
+                "title": title,
+                "task": task,
+                "entry_type": entry_type,
+                "chapter": chapter,
+                "act": act,
+                "region": str(md.get("任务区域") or md.get("地区") or "").strip(),
+                "text": text,
+                "file": path.name,
+            }
+            old = entries.get(key)
+            if old is None or len(text) > len(old["text"]):
+                entries[key] = row
+
+    # quests_processed.json 中 raw 文件没有覆盖到的任务，用 chunks 补建。
+    for title, item in processed.items():
+        if not isinstance(item, dict):
+            continue
+        entry_type = str(item.get("category") or "").strip()
+        if any(k in entry_type for k in ("额外", "教程", "说明")):
+            continue
+        if entry_type and not any(t in entry_type for t in _BWIKI_ALLOWED_TYPES):
+            continue
+        text = _processed_text(item)
+        if not text:
+            continue
+        task = str(item.get("title") or title).strip()
+        key = ("", "", _norm_meta_key(task))
+        if key in entries:
+            continue
+        entries[key] = {
+            "title": task,
+            "task": task,
+            "entry_type": entry_type,
+            "chapter": "",
+            "act": "",
+            "region": "",
+            "text": text,
+            "file": "quests_processed.json",
+        }
+    # 同一任务若已有带 chapter/act 的条目，丢弃无元数据的重复条目，避免建出重复节点。
+    metadata_tasks = {
+        _norm_meta_key(row["task"])
+        for row in entries.values()
+        if row["chapter"] or row["act"]
+    }
+    if metadata_tasks:
+        for key in list(entries.keys()):
+            row = entries[key]
+            if (not row["chapter"] and not row["act"]) and _norm_meta_key(row["task"]) in metadata_tasks:
+                del entries[key]
+    return list(entries.values())
+
+
+def _build_graph_key_index(graph: WikiEntryGraph) -> Dict[tuple, List[WikiEntry]]:
+    index: Dict[tuple, List[WikiEntry]] = {}
+    for entry in graph.entries.values():
+        if entry.entry_type not in ("task", "activity"):
+            continue
+        chapter, act, task = _parse_title_meta(entry.title)
+        keys = [
+            (chapter, act, task),
+            (chapter, "", task),
+            ("", "", task),
+            ("", "", _norm_meta_key(entry.title)),
+        ]
+        for key in keys:
+            if not key[2]:
+                continue
+            index.setdefault(key, []).append(entry)
+    return index
+
+
+def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
+    """把 B 站 wiki 语料合并进图。
+
+    规则：
+    - 元数据 (chapter+act+task) 精确匹配且只命中一个图节点：B 站文本更长则替换主文本；
+    - 其他多命中/弱命中：不覆盖图节点，新建 B 站节点并写别名；
+    - 图里没有的：按 task 新建节点，source=bwiki。
+    """
+    entries = _load_bwiki_entries()
+    index = _build_graph_key_index(graph)
+    stats = {
+        "loaded": len(entries),
+        "merged": 0,
+        "replaced": 0,
+        "created": 0,
+        "skipped": 0,
+    }
+    for row in entries:
+        text = row["text"]
+        chapter, act, task = row["chapter"], row["act"], row["task"]
+        keys = [
+            (_norm_meta_key(chapter), _norm_meta_key(act), _norm_meta_key(task)),
+            (_norm_meta_key(chapter), "", _norm_meta_key(task)),
+            ("", "", _norm_meta_key(task)),
+            ("", "", _norm_meta_key(row["title"])),
+        ]
+        matched: List[WikiEntry] = []
+        used_key = None
+        for key in keys:
+            if key[2] and key in index:
+                matched = index[key]
+                used_key = key
+                break
+        if matched:
+            # 单节点命中即可合并：任务名一致时，B 站文本更长就替换主文本；多节点命中则新建节点，避免误伤。
+            if len(matched) == 1:
+                entry = matched[0]
+                old_text = entry.story_text or entry.full_text or ""
+                if len(text) > len(old_text):
+                    entry.story_text = text
+                    entry.full_text = text
+                    entry.source = "bwiki"
+                    stats["replaced"] += 1
+                for alias in (chapter, act, task, row["title"]):
+                    alias = str(alias or "").strip()
+                    if alias and alias not in entry.aliases:
+                        entry.aliases.append(alias)
+                stats["merged"] += 1
+                continue
+            # 一对多/弱匹配：保留图节点，落成新的 B 站节点。
+        entry_id = "bwiki_" + hashlib.sha1(
+            f"{chapter}|{act}|{task}|{row['title']}".encode("utf-8")
+        ).hexdigest()[:12]
+        if entry_id in graph.entries:
+            stats["skipped"] += 1
+            continue
+        aliases = []
+        for alias in (row["title"], task, f"{chapter} {act} {task}", f"{chapter} {task}", chapter, act):
+            alias = str(alias or "").strip()
+            if alias and alias not in aliases:
+                aliases.append(alias)
+        entry_type = "task"
+        if not act and not chapter and row["title"].startswith("「") and row["title"].endswith("」"):
+            entry_type = "activity"
+        filters = [f"来源/bwiki"]
+        if row["entry_type"]:
+            filters.append(f"任务类型/{row['entry_type']}")
+        graph.add(
+            WikiEntry(
+                entry_id=entry_id,
+                title=row["title"] if entry_type == "activity" else task,
+                entry_type=entry_type,
+                full_text=text,
+                story_text=text,
+                aliases=aliases,
+                region=row["region"],
+                filters=filters,
+                source_channel=-1,
+                fetched_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                content_hash=hashlib.sha1(text.encode("utf-8")).hexdigest()[:16],
+                source="bwiki",
+            )
+        )
+        stats["created"] += 1
+    return stats
+
+
 def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
     """全量图构建：读取 content_data/wiki_raw/channel_*.json 全部频道词条。
 
@@ -843,11 +1100,13 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
                 continue
             graph.add(entry)
 
+    bwiki_stats = merge_bwiki_entries(graph)
     graph.meta = {
         "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "entry_count": len(graph.entries),
         "link_count": sum(len(e.links) for e in graph.entries.values()),
         "sources": sources_meta,
+        "bwiki": bwiki_stats,
         "dirty_links": [],
     }
     return graph

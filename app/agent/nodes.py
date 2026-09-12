@@ -1614,25 +1614,84 @@ def _load_wiki_graph_cached():
     return _wiki_graph_cache or None
 
 
-def _task_title_aliases(entry):
-    """生成任务标题的通用别名：完整标题、去地区前缀、去章节幕号、去书名号后缀。
+# ====== L3 全景题的任务定位：别名匹配 + 地区主线补全 + 词条链补全 ======
+# 幕号/序尾这类“结构噪声别名”不参与匹配，否则“第一幕”会命中整章所有任务。
+_TASK_ALIAS_NOISE_RE = re.compile(
+    r"^(第[一二三四五六七八九十百0-9]+[章幕回]|序奏|序章|尾声|终章|终回|间章|幕间"
+    r"|其一|其二|其三|其四|其五|其六|其七|其上|其下|上篇|下篇|前篇|后篇)$"
+)
+# “系列·子任务”结构（黄金梦乡·热砂之梦）。
+_TASK_SERIES_SEP_RE = re.compile(r"[·・]")
+# 标题里的「幕名」/【说明】内容本身就是任务别名。
+_TASK_BRACKET_RE = re.compile(r"[「【]([^」】]{2,60})[」】]")
+# “<地区>主线”题面没有具体任务名时，用地区词表 + 章节结构补全。
+_REGION_MAIN_RE = re.compile(r"([\u4e00-\u9fff]{2,4})主线")
+# 题面里书名号/引号内的专名（俗称、台词）也是检索关键词。
+_QUOTE_RE = re.compile(r"[「【《“‘\"']([^」】》”’\"']{3,60})[」】》”’\"']")
+# B站 wikitext 里的系列归属标记：完成系列任务「[[流灰之国的迷旅人]]」。
+_SERIES_MARK_RE = re.compile(r"系列任务[「『]?\[\[([^\]|#]{2,40})\]\]")
+# 词条 full_text 里的顺序元数据字段（story_text 会把它们剥掉）。
+_TASK_META_KEYS = ("触发条件", "前置任务", "后续任务")
+_TASK_META_STOPS = (
+    "触发条件", "前置任务", "后续任务", "起始NPC", "结束NPC",
+    "等级限制", "特殊限制", "任务过程", "任务奖励", "[",
+)
+_CHAIN_MAX_TASKS = 40
+_ANCHOR_MAX = 6
+_ANCHOR_TASK_LIMIT = 5
+_COVER_FRAG = 24
+_COVER_SAMPLE = 200
+_COVER_MIN_RATIO = 0.5
+_GRAPH_AUX_CACHE = {}
 
-    注意：只做字符串结构处理，不引入任何地区/主题关键词；
-    地区前缀从 entry.region 读取，避免把“至冬”这种地区名本身当成任务名匹配。
+
+def _graph_aux(graph):
+    """按图缓存：地区词表 + 任务名索引（供“主线/字段链”定位使用）。"""
+    cached = _GRAPH_AUX_CACHE.get(id(graph))
+    if cached is not None:
+        return cached
+    cached = {"region": set(), "names": {}}
+    _GRAPH_AUX_CACHE[id(graph)] = cached
+    for entry in graph.entries.values():
+        region = (entry.region or "").strip()
+        if region:
+            cached["region"].add(region)
+    for entry in graph.entries.values():
+        if entry.entry_type != "task":
+            continue
+        names = {(entry.title or "").strip()}
+        names.update((a or "").strip() for a in (entry.aliases or []))
+        names.update(_TASK_BRACKET_RE.findall(entry.title or ""))
+        names.discard("")
+        for name in names:
+            # 幕号/序尾这类结构词会把整章任务带进来，必须排除。
+            if len(name) < 4 or name in cached["region"] or _TASK_ALIAS_NOISE_RE.match(name):
+                continue
+            cached["names"].setdefault(name, []).append(entry.entry_id)
+    return cached
+
+
+def _task_title_aliases(entry, region_vocab=None):
+    """生成任务标题的匹配别名：结构性派生 + 词条自带别名（爬取元数据）。
+
+    结构性处理不引入任何主题关键词：地区前缀取自 entry.region；
+    「幕名」取自标题书名号；“系列·子任务”按 · 拆系列；第X幕后缀剥离。
+    词条自带别名只做长度/地区词表/幕号噪声过滤，不判定来源可信度。
     """
-    title = (entry.title or "").strip()
+    title = (entry.title or "").strip().replace("\xa0", " ")
     region = (entry.region or "").strip()
+    region_vocab = region_vocab or set()
     aliases = {title}
 
     # 去掉“地区 + 空格”前缀，例如“至冬 在生命的寓所” -> “在生命的寓所”。
     if region and title.startswith(region + " "):
         aliases.add(title[len(region) + 1:].strip())
-    # 去掉首段地区/系列前缀，但不要把地区名本身当成任务别名。
+    # 去掉首段系列前缀，但不要把地区名本身当成任务别名。
     first = title.split(" ", 1)[0].strip()
     if len(first) >= 2 and first != region:
         aliases.add(first)
     # 去掉“第X幕「...」”后缀，例如“水仙的追迹 第一幕「藻海的寻踪」” -> “水仙的追迹”。
-    m = re.match(r"^(.*?)\s*第[一二三四五六七八九十百0-9]+幕", title)
+    m = re.match(r"^(.*?)\s*第[一二三四五六七八九十百0-9]+[幕章回]", title)
     if m:
         base = m.group(1).strip()
         if len(base) >= 2:
@@ -1643,28 +1702,234 @@ def _task_title_aliases(entry):
         base = m2.group(1).strip()
         if len(base) >= 2:
             aliases.add(base)
+    # “系列·子任务”拆出系列名。
+    for part in _TASK_SERIES_SEP_RE.split(title):
+        part = part.strip()
+        if len(part) >= 2:
+            aliases.add(part)
+    # 标题里的幕名/说明本身就是别名。
+    aliases.update(_TASK_BRACKET_RE.findall(title))
+    # 词条自带别名（B站章节/幕/子任务名称等）。
+    for alias in (entry.aliases or []):
+        alias = (alias or "").strip().replace("\xa0", " ")
+        if len(alias) < 3 or alias in region_vocab or _TASK_ALIAS_NOISE_RE.match(alias):
+            continue
+        aliases.add(alias)
 
-    return [a for a in aliases if len(a) >= 2]
+    out = []
+    for alias in aliases:
+        alias = alias.strip()
+        # 幕号/序尾噪声必须对结构性别名同样生效：
+        # “古老的颜色·第三幕”按 · 拆分会析出裸“第三幕”，不拦就会误命中任何提到“第三幕”的问题。
+        if _TASK_ALIAS_NOISE_RE.match(alias):
+            continue
+        if len(alias) >= 3 or (len(alias) == 2 and alias == title):
+            out.append(alias)
+    return out
+
+
+def _task_meta_fields(entry):
+    """取 full_text 里的 触发条件/前置任务/后续任务 字段（story_text 会剥掉这些字段）。"""
+    text = getattr(entry, "full_text", "") or ""
+    fields = {}
+    for key in _TASK_META_KEYS:
+        idx = text.find(key)
+        if idx < 0:
+            continue
+        seg = text[idx + len(key): idx + len(key) + 240]
+        cut = len(seg)
+        for stop in _TASK_META_STOPS:
+            pos = seg.find(stop)
+            if 0 <= pos < cut:
+                cut = pos
+        seg = seg[:cut].strip(" \u3000:：、")
+        if seg:
+            fields[key] = seg
+    return fields
+
+
+def _region_main_tasks(graph, query, matched_ids):
+    """“<地区>主线”题面：补全该地区主线章节的幕级任务（只认“第X章”开头的幕）。
+
+    支线/传说任务的标题里也带“第X幕”，只按“第X幕”判断会把整章支线全部带进来，
+    所以这里要求标题以“第X章”开头（主线章节结构）。
+    """
+    out = []
+    chapter_re = re.compile(r"^第[一二三四五六七八九十百0-9]+章")
+    for region in _graph_aux(graph)["region"]:
+        if len(region) < 2 or region + "主线" not in query:
+            continue
+        for entry in graph.entries.values():
+            if entry.entry_type != "task" or entry.entry_id in matched_ids:
+                continue
+            if (entry.region or "").strip() != region:
+                continue
+            if chapter_re.match((entry.title or "").strip()):
+                matched_ids.add(entry.entry_id)
+                out.append(entry)
+    return out
+
+
+def _query_keywords(graph, query):
+    """题面检索关键词：引号/书名号内的专名 + 题面出现的非任务词条名。
+
+    对应答题 SOP 3.8 的“① search 关键词 → 抓回若干任务页”：
+    只靠任务名匹配会漏掉“题面给了俗称/台词，需要反查任务页”的情况（Q7/Q12）。
+    """
+    keywords = []
+    for m in _QUOTE_RE.finditer(query):
+        kw = m.group(1).strip()
+        if len(kw) >= 3 and kw not in keywords:
+            keywords.append(kw)
+    for entry in graph.entries.values():
+        if entry.entry_type == "task":
+            continue
+        title = (entry.title or "").strip()
+        if len(title) < 4 or title in _ENTITY_GENERIC_ALIASES:
+            continue
+        if title in query and title not in keywords:
+            keywords.append(title)
+    return keywords
+
+
+def _anchor_seed_tasks(graph, query, matched_ids):
+    """用题面关键词回搜“正文里高频道提到它的任务”，取前几个作为锚点任务。
+
+    对应 SOP 3.8 的“② 从任务页读系列字段”：先要有锚点任务，才能顺字段找到整条链。
+    词频阈值按 SOP 3.8 的判定口径：短词（泛指）要求多次出现，
+    长专名/整句台词只出现一次也是有效锚点。
+    """
+    seeds = []
+    for kw in _query_keywords(graph, query):
+        min_hits = 2 if len(kw) <= 6 else 1
+        ranked = []
+        for entry in graph.entries.values():
+            if entry.entry_type != "task" or entry.entry_id in matched_ids:
+                continue
+            hits = _entry_story_text(entry).count(kw)
+            if hits >= min_hits:
+                ranked.append((-hits, entry.title, entry))
+        ranked.sort()
+        for item in ranked[:_ANCHOR_TASK_LIMIT]:
+            entry = item[2]
+            matched_ids.add(entry.entry_id)
+            seeds.append(entry)
+        if len(seeds) >= _ANCHOR_MAX:
+            break
+    return seeds
+
+
+def _task_closure(graph, seeds, matched, matched_ids, keywords):
+    """BFS 补全整条任务链：触发条件/前置/后续 字段 + 系列别名 + B站系列任务标记。
+
+    对应 SOP 3.8 的“② 读系列字段 → ③ 枚举系列子页 → ④ 合并去重”。
+    补进来的子任务必须仍然与题面关键词相关，否则“台词溯源”这类题会顺着台词所在幕的
+    前后置字段把整条无关主线（例如整部空月之歌）一起拉进来。
+    """
+    aux = _graph_aux(graph)
+    names = aux["names"]
+    series_names = {n for n, ids in names.items() if len(ids) >= 2}
+    queue = list(seeds)
+    while queue and len(matched) < _CHAIN_MAX_TASKS:
+        entry = queue.pop(0)
+        next_ids = []
+        fields = _task_meta_fields(entry)
+        if fields:
+            text = " ".join(fields.values())
+            for name, ids in names.items():
+                if name in text:
+                    next_ids.extend(ids)
+        linked = set(entry.aliases or [])
+        linked.update(_SERIES_MARK_RE.findall(entry.full_text or ""))
+        for name in linked:
+            if name in series_names:
+                next_ids.extend(names[name])
+        for eid in next_ids:
+            if eid in matched_ids or len(matched) >= _CHAIN_MAX_TASKS:
+                continue
+            nxt = graph.get(eid)
+            if nxt is None:
+                continue
+            if keywords:
+                text = _entry_story_text(nxt)
+                if not any(kw in text for kw in keywords):
+                    continue
+            matched_ids.add(eid)
+            matched.append(nxt)
+            queue.append(nxt)
+    return matched
+
+
+def _cover_norm(text):
+    """去模板/标点/空白，只留正文，用于“子任务是否已被上位词条覆盖”判定。"""
+    text = re.sub(r"\{\{[^{}]*\}\}", " ", text or "")
+    return re.sub(r"[^\w\u4e00-\u9fff]+", "", text)
+
+
+def _drop_covered_entries(graph, matched):
+    """同一幕的子任务词条若正文已被更大的上位词条覆盖，则不重复注入。
+
+    判定与来源无关：只看子任务正文片段在上位词条正文中的命中比例。
+    """
+    if len(matched) < 2:
+        return matched
+    norm_cache = {}
+
+    def norm_text(entry):
+        if entry.entry_id not in norm_cache:
+            norm_cache[entry.entry_id] = _cover_norm(
+                _entry_story_text(entry) or (entry.full_text or "")
+            )
+        return norm_cache[entry.entry_id]
+
+    order = {e.entry_id: i for i, e in enumerate(matched)}
+    kept = []
+    for entry in sorted(matched, key=lambda e: -len(norm_text(e))):
+        small = norm_text(entry)
+        covered = False
+        if len(small) >= _COVER_FRAG * 4:
+            step = max(_COVER_FRAG, len(small) // _COVER_SAMPLE)
+            frags = [
+                small[i:i + _COVER_FRAG]
+                for i in range(0, len(small) - _COVER_FRAG, step)
+            ]
+            for big in kept:
+                big_text = norm_text(big)
+                if len(big_text) < len(small) * 1.2:
+                    continue
+                hit = sum(1 for frag in frags if frag in big_text)
+                if frags and hit / len(frags) >= _COVER_MIN_RATIO:
+                    covered = True
+                    break
+        if not covered:
+            kept.append(entry)
+    kept.sort(key=lambda e: order[e.entry_id])
+    return kept
 
 
 def _match_graph_task_titles(graph, query):
-    """找出标题（或其通用别名）出现在用户问题里的任务词条。
-
-    通用化点：不再假设任务标题一定以“至冬 ”开头；
-    任何“地区 任务名”结构都会去掉地区前缀，任何“系列名 第X幕”结构都会去掉幕号。
-    """
+    """找出问题相关的任务词条：标题/别名命中、地区主线补全、词条链补全、去重。"""
     matched = []
-    seen = set()
+    matched_ids = set()
     for entry in graph.entries.values():
         if entry.entry_type != "task":
             continue
-        for alias in _task_title_aliases(entry):
+        for alias in _task_title_aliases(entry, _graph_aux(graph)["region"]):
             if alias in query:
-                if entry.entry_id not in seen:
-                    seen.add(entry.entry_id)
-                    matched.append(entry)
+                matched_ids.add(entry.entry_id)
+                matched.append(entry)
                 break
-    return matched
+
+    matched.extend(_region_main_tasks(graph, query, matched_ids))
+    # 题面已经点到具体任务（>=2 条）时不需要锚点补链，否则会把无关系列一起拉进来。
+    if len(matched) < 2:
+        seeds = _anchor_seed_tasks(graph, query, matched_ids)
+        if seeds:
+            matched.extend(seeds)
+            matched = _task_closure(
+                graph, seeds, matched, matched_ids, _query_keywords(graph, query)
+            )
+    return _drop_covered_entries(graph, matched)
 
 
 def _collect_graph_map_texts(graph, task_entries):
@@ -2064,7 +2329,10 @@ def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, re
     if not graph:
         return None
     matched_tasks = _match_graph_task_titles(graph, original_query)
-    if len(matched_tasks) < 2:
+    # 通常要求至少 2 条任务；但题面给了长台词/长专名时，单条溯源任务也构成强证据（SOP 3.8 台词溯源）。
+    if len(matched_tasks) < 2 and not any(
+        len(kw) >= 8 for kw in _query_keywords(graph, original_query)
+    ):
         return None
     matched_map_texts = _collect_graph_map_texts(graph, matched_tasks)
     task_texts = [_entry_story_text(e) or (e.full_text or "") for e in matched_tasks]
@@ -2081,6 +2349,12 @@ def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, re
         parts.append(
             f"\n===== 任务 {i}: {entry.title} (ID {entry.entry_id}) 共 {len(text)} 字 ====="
         )
+        meta = _task_meta_fields(entry)
+        if meta:
+            parts.append(
+                "顺序元数据（词条 触发条件/前置/后续 字段）："
+                + "；".join(f"{k}：{v[:160]}" for k, v in meta.items())
+            )
         parts.append(text)
     if matched_map_texts:
         parts.append("\n\n===== 相关地图文本剧情文本 =====")
