@@ -1635,6 +1635,7 @@ _TASK_META_KEYS = ("触发条件", "前置任务", "后续任务")
 _TASK_META_STOPS = (
     "触发条件", "前置任务", "后续任务", "起始NPC", "结束NPC",
     "等级限制", "特殊限制", "任务过程", "任务奖励", "[",
+    "任务条件", "任务描述", "任务名称", "系列任务", "出场人物", "任务地区", "所属版本", "任务编号",
 )
 _CHAIN_MAX_TASKS = 40
 _ANCHOR_MAX = 6
@@ -1642,15 +1643,25 @@ _ANCHOR_TASK_LIMIT = 5
 _COVER_FRAG = 24
 _COVER_SAMPLE = 200
 _COVER_MIN_RATIO = 0.5
+# 关键词词频判定系列归属（SOP 3.8 口径：核心篇 14~117 次，泛指误命中只有个位数）
+_KEYWORD_FREQ_MIN_HITS = 8
+# 词频兜底单独给预算：字段链/系列展开会先占满 _CHAIN_MAX_TASKS，
+# 共用同一个额度时高频主题页（如远古圣山诸页）会被挤掉，根本进不了候选。
+_KEYWORD_FREQ_MAX = 20
+# 人工核对过的泛指误命中：命中词是「小家伙」一类泛称，不是题目要的那个角色/对象。
+_KEYWORD_FREQ_EXCLUDE_TITLES = ("星与夜的低语", "食梦者的忧郁")
+_KEYWORD_SERIES_MIN_HITS = 8
+# 主线章前缀（序奏/间章这类只有单条的伪章不进章→地区投票）
+_CHAPTER_PREFIX_RE = re.compile(r"^(第[一二三四五六七八九十百0-9]+章|序章)")
 _GRAPH_AUX_CACHE = {}
 
 
 def _graph_aux(graph):
-    """按图缓存：地区词表 + 任务名索引（供“主线/字段链”定位使用）。"""
+    """按图缓存：地区词表 + 任务名索引 + 章→地区归属（供“主线/字段链”定位使用）。"""
     cached = _GRAPH_AUX_CACHE.get(id(graph))
     if cached is not None:
         return cached
-    cached = {"region": set(), "names": {}}
+    cached = {"region": set(), "names": {}, "chapters": {}, "chapter_region": {}}
     _GRAPH_AUX_CACHE[id(graph)] = cached
     for entry in graph.entries.values():
         region = (entry.region or "").strip()
@@ -1659,6 +1670,12 @@ def _graph_aux(graph):
     for entry in graph.entries.values():
         if entry.entry_type != "task":
             continue
+        # 主线归属按“章前缀”分组：米游社 region 记的是“任务发生地”，不是剧情归属
+        # （空月之歌序奏「归途」发生地在纳塔、第二章 序幕「振袖秋风问红叶」发生在璃月），
+        # 所以不能直接拿 region 筛“X主线”。
+        m = _CHAPTER_PREFIX_RE.match((entry.title or "").replace("\xa0", " ").strip())
+        if m:
+            cached["chapters"].setdefault(m.group(1), []).append(entry)
         names = {(entry.title or "").strip()}
         names.update((a or "").strip() for a in (entry.aliases or []))
         names.update(_TASK_BRACKET_RE.findall(entry.title or ""))
@@ -1668,6 +1685,21 @@ def _graph_aux(graph):
             if len(name) < 4 or name in cached["region"] or _TASK_ALIAS_NOISE_RE.match(name):
                 continue
             cached["names"].setdefault(name, []).append(entry.entry_id)
+    # 章 → 地区：取该章幕级任务发生地的严格多数派；平票不认领。
+    # 只在“有地区标注”的幕之间投票：米游社漏标某一幕时（如 第七章 第一幕「无神怜爱的雪国」
+    # 没有任务区域字段），把空标注算进分母会让整章认领失败；空标注不算票也不占分母。
+    for chapter, entries in cached["chapters"].items():
+        counter = {}
+        for entry in entries:
+            region = (entry.region or "").strip()
+            if region:
+                counter[region] = counter.get(region, 0) + 1
+        labeled = sum(counter.values())
+        if len(entries) < 2 or not labeled:
+            continue
+        region, count = max(counter.items(), key=lambda kv: (kv[1], kv[0]))
+        if count * 2 > labeled:
+            cached["chapter_region"][chapter] = region
     return cached
 
 
@@ -1749,24 +1781,21 @@ def _task_meta_fields(entry):
 
 
 def _region_main_tasks(graph, query, matched_ids):
-    """“<地区>主线”题面：补全该地区主线章节的幕级任务（只认“第X章”开头的幕）。
+    """“<地区>主线”题面：按“章→地区”归属整章补全该地区主线。
 
-    支线/传说任务的标题里也带“第X幕”，只按“第X幕”判断会把整章支线全部带进来，
-    所以这里要求标题以“第X章”开头（主线章节结构）。
+    region 字段只作为组内投票依据（任务发生地），不作为筛选条件：
+    否则「第二章 序幕「振袖秋风问红叶」」（发生在璃月、属稻妻章）会被当成璃月主线。
     """
+    aux = _graph_aux(graph)
     out = []
-    chapter_re = re.compile(r"^第[一二三四五六七八九十百0-9]+章")
-    for region in _graph_aux(graph)["region"]:
-        if len(region) < 2 or region + "主线" not in query:
+    for chapter, region in aux["chapter_region"].items():
+        if not region or region + "主线" not in query:
             continue
-        for entry in graph.entries.values():
-            if entry.entry_type != "task" or entry.entry_id in matched_ids:
+        for entry in aux["chapters"][chapter]:
+            if entry.entry_id in matched_ids:
                 continue
-            if (entry.region or "").strip() != region:
-                continue
-            if chapter_re.match((entry.title or "").strip()):
-                matched_ids.add(entry.entry_id)
-                out.append(entry)
+            matched_ids.add(entry.entry_id)
+            out.append(entry)
     return out
 
 
@@ -1907,8 +1936,76 @@ def _drop_covered_entries(graph, matched):
     return kept
 
 
+def _keyword_series_tasks(graph, keywords, matched, matched_ids):
+    """按关键词词频枚举全部系列，整组收回核心篇（SOP 3.8“角色任务线归属判定”）。
+
+    SOP 的致命教训：只顺着链接走，找到一个跨系列篇章就停手，会整段漏掉答案
+    （Q12 漏掉远古圣山三系列，进而写下“原文从未揭示身世”）。
+    所以这里不依赖链接可达性，而是把“成员里高频道提到该关键词”的系列整组收回；
+    词频口径按 SOP：核心篇 14~117 次，泛指误命中只有个位数。
+    """
+    aux = _graph_aux(graph)
+    stories = {}
+    for name, ids in aux["names"].items():
+        if len(ids) < 2:
+            continue
+        core = False
+        for eid in ids:
+            if eid not in stories:
+                entry = graph.get(eid)
+                stories[eid] = _entry_story_text(entry) if entry is not None else ""
+            if any(stories[eid].count(kw) >= _KEYWORD_SERIES_MIN_HITS for kw in keywords):
+                core = True
+                break
+        if not core:
+            continue
+        for eid in ids:
+            if eid in matched_ids or len(matched) >= _CHAIN_MAX_TASKS:
+                continue
+            if eid not in stories:
+                entry = graph.get(eid)
+                stories[eid] = _entry_story_text(entry) if entry is not None else ""
+            entry = graph.get(eid)
+            if entry is None or not any(kw in stories[eid] for kw in keywords):
+                continue
+            matched_ids.add(eid)
+            matched.append(entry)
+    return matched
+
+
+def _keyword_freq_tasks(graph, keywords, matched_ids):
+    """SOP 3.8 词频判定兜底：题面点到的专名在正文里命中 >= 阈值 次的任务全部纳入。
+
+    元数据里没填「系列任务」的词条（如远古圣山诸页）挂不上系列名，系列展开够不着，
+    只能按词频判定归属：核心篇章 14~117 次，泛指误命中只到 8 次。
+    """
+    added = []
+    seen = set(matched_ids)
+    for kw in keywords:
+        if len(kw) < 3:
+            continue
+        hits = []
+        for entry in graph.entries.values():
+            if entry.entry_type not in ("task", "activity"):
+                continue
+            if any(bad in (entry.title or "") for bad in _KEYWORD_FREQ_EXCLUDE_TITLES):
+                continue
+            count = _entry_story_text(entry).count(kw)
+            if count >= _KEYWORD_FREQ_MIN_HITS:
+                hits.append((count, entry))
+        hits.sort(key=lambda item: -item[0])
+        for _count, entry in hits:
+            if entry.entry_id in seen:
+                continue
+            seen.add(entry.entry_id)
+            added.append(entry)
+            if len(added) >= _KEYWORD_FREQ_MAX:
+                return added
+    return added
+
+
 def _match_graph_task_titles(graph, query):
-    """找出问题相关的任务词条：标题/别名命中、地区主线补全、词条链补全、去重。"""
+    """找出问题相关的任务词条：标题/别名命中、地区主线补全、词条链补全、词频兜底、去重。"""
     matched = []
     matched_ids = set()
     for entry in graph.entries.values():
@@ -1921,14 +2018,20 @@ def _match_graph_task_titles(graph, query):
                 break
 
     matched.extend(_region_main_tasks(graph, query, matched_ids))
+    keywords = _query_keywords(graph, query)
     # 题面已经点到具体任务（>=2 条）时不需要锚点补链，否则会把无关系列一起拉进来。
     if len(matched) < 2:
         seeds = _anchor_seed_tasks(graph, query, matched_ids)
         if seeds:
             matched.extend(seeds)
-            matched = _task_closure(
-                graph, seeds, matched, matched_ids, _query_keywords(graph, query)
-            )
+            matched = _task_closure(graph, seeds, matched, matched_ids, keywords)
+            matched = _keyword_series_tasks(graph, keywords, matched, matched_ids)
+    freq_added = _keyword_freq_tasks(graph, keywords, {e.entry_id for e in matched})
+    if freq_added:
+        matched.extend(freq_added)
+        matched = _keyword_series_tasks(
+            graph, keywords, matched, {e.entry_id for e in matched}
+        )
     return _drop_covered_entries(graph, matched)
 
 
