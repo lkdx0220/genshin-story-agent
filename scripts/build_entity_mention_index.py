@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """构建实体提及索引：谁在哪些词条剧情文本里被提到。
 
-输入：kb_vectors/wiki_entry_graph.json（Schema v3）
-输出：kb_vectors/wiki_entity_mention_index.json
+输入：$KB_GRAPH_DIR/wiki_entry_graph.json（默认 kb_vectors，Schema v4）
+输出：$KB_GRAPH_DIR/wiki_entity_mention_index.json（与输入同目录，运行时按同目录读取）
 
 原理：Aho-Corasick 多模式匹配，纯 Python 实现，不新增外部依赖。
 用途：全景题旁路中，从任务/地图文本的剧情文本抽取人名/组织/圣遗物等实体，
@@ -14,13 +14,17 @@
 """
 import argparse
 import json
+import sys
 import time
 from collections import defaultdict, deque
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_GRAPH = BASE_DIR / "kb_vectors" / "wiki_entry_graph.json"
-DEFAULT_OUT = BASE_DIR / "kb_vectors" / "wiki_entity_mention_index.json"
+sys.path.insert(0, str(BASE_DIR))
+# 与 wiki_entry_graph.py 共用同一份目录常量，避免两处硬编码 kb_vectors 漂移
+from wiki_entry_graph import DEFAULT_OUTPUT as DEFAULT_GRAPH  # noqa: E402
+
+DEFAULT_OUT = DEFAULT_GRAPH.parent / "wiki_entity_mention_index.json"
 
 # 参与实体索引的叙事/世界观类型
 ENTITY_TYPES = {

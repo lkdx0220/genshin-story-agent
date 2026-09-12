@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import html
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -25,8 +26,11 @@ from wiki_graph_channels import CHANNEL_TYPE_MAP
 from character_aliases import CHARACTER_ALIASES
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_OUTPUT = BASE_DIR / "kb_vectors" / "wiki_entry_graph.json"
-PILOT_OUTPUT = BASE_DIR / "kb_vectors" / "wiki_entry_graph_pilot.json"
+# 词条图目录：默认 kb_vectors，可用 KB_GRAPH_DIR 指向他处（例如自包含部署的 kb_vectors_m3）。
+# 词条图与实体提及索引都不含向量、与嵌入后端无关，运行时整体跟随本目录。
+GRAPH_DIR = Path(os.getenv("KB_GRAPH_DIR") or (BASE_DIR / "kb_vectors"))
+DEFAULT_OUTPUT = GRAPH_DIR / "wiki_entry_graph.json"
+PILOT_OUTPUT = GRAPH_DIR / "wiki_entry_graph_pilot.json"
 
 TASK_RAW = BASE_DIR / "content_data" / "mihoyo_tasks_raw.json"
 MAP_TEXT_RAW = BASE_DIR / "content_data" / "mihoyo_map_text_raw_full.json"
