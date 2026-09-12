@@ -303,6 +303,14 @@ python scripts/build_entity_mention_index.py
 > ```
 >
 > 建库脚本 `scripts/kb_build_index.py` 默认仍写入 `kb_vectors/`；`scripts/build_m3_vectors.py` 写入 `kb_vectors_m3/`。
+>
+> **词条图目录（KB_GRAPH_DIR）**：`wiki_entry_graph.json`（L3 全景题任务定位用）与 `wiki_entity_mention_index.json`（实体提及索引）默认从 `kb_vectors/` 读取；两者都是纯文本产物、不含向量、与嵌入后端无关。只部署 `kb_vectors_m3/` 时，把这两个 JSON 放进同一目录并设置：
+>
+> ```powershell
+> $env:KB_GRAPH_DIR="<项目根>\kb_vectors_m3"
+> ```
+>
+> 该变量同时决定构建落点：`python wiki_entry_graph.py --build` 与 `python scripts/build_entity_mention_index.py` 都写到 `KB_GRAPH_DIR`（不设置则仍写 `kb_vectors/`）。当前发布包把这两个 JSON 放在 `kb-vectors-text-embedding-v4` 资产内，只装 bge-m3 包会缺图。
 
 ## 快速开始
 

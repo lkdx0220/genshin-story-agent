@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """本地 wiki 词条链接图工具（轻量 GraphRAG 试点）。
 
-数据源：kb_vectors/wiki_entry_graph.json（由 wiki_entry_graph.py 构建）。
+数据源：$KB_GRAPH_DIR/wiki_entry_graph.json（默认 kb_vectors/，由 wiki_entry_graph.py 构建）。
 设计：Agent 先 search 找到词条，再 expand 顺链接找相邻词条，最后 get 取定向片段。
 不返回整篇 3 万字全文，避免撑爆 Plan 上下文；get 支持 focus 参数定位原文。
 """

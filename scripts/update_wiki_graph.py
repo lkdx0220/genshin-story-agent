@@ -27,7 +27,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 FETCH_SCRIPT = BASE_DIR / "wiki_data_tools" / "_fetch_mihoyo_channel.py"
 BUILD_SCRIPT = BASE_DIR / "wiki_entry_graph.py"
 RAW_DIR = BASE_DIR / "content_data" / "wiki_raw"
-GRAPH_PATH = BASE_DIR / "kb_vectors" / "wiki_entry_graph.json"
 IDS_FILE = RAW_DIR / "_pending_ids.json"
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -48,6 +47,10 @@ from _fetch_mihoyo_channel import (  # noqa: E402
     save_report,
     select_channels,
 )
+
+sys.path.insert(0, str(BASE_DIR))
+# 与 wiki_entry_graph.py 共用同一份目录常量：apply 前的备份必须落在 --build 实际写入的位置
+from wiki_entry_graph import DEFAULT_OUTPUT as GRAPH_PATH  # noqa: E402
 
 
 def now() -> str:
