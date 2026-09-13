@@ -1651,6 +1651,14 @@ _KEYWORD_FREQ_MAX = 20
 # 人工核对过的泛指误命中：命中词是「小家伙」一类泛称，不是题目要的那个角色/对象。
 _KEYWORD_FREQ_EXCLUDE_TITLES = ("星与夜的低语", "食梦者的忧郁")
 _KEYWORD_SERIES_MIN_HITS = 8
+# 系列页/合集页补全：米游社的「合集页 + 子页」两层结构，子页正文通常被合集页覆盖，
+# 所以合集页进包就够用；合集页自己往往标题不带题面关键词（如「荒落之城的记述人」
+# 只在 4 条子页标题里出现），只能靠别名链和正文复述补回来。
+_SERIES_PARENT_MIN_CHARS = 800
+_SERIES_CHILD_MIN_CHARS = 100
+_SERIES_HUB_MIN_CHARS = 3000
+_SERIES_HUB_TITLE_HITS = 2
+_SERIES_MAX_ADD = 12
 # 主线章前缀（序奏/间章这类只有单条的伪章不进章→地区投票）
 _CHAPTER_PREFIX_RE = re.compile(r"^(第[一二三四五六七八九十百0-9]+章|序章)")
 _GRAPH_AUX_CACHE = {}
@@ -1661,7 +1669,10 @@ def _graph_aux(graph):
     cached = _GRAPH_AUX_CACHE.get(id(graph))
     if cached is not None:
         return cached
-    cached = {"region": set(), "names": {}, "chapters": {}, "chapter_region": {}}
+    cached = {
+        "region": set(), "names": {}, "chapters": {}, "chapter_region": {},
+        "series_children": {}, "series_parent": {},
+    }
     _GRAPH_AUX_CACHE[id(graph)] = cached
     for entry in graph.entries.values():
         region = (entry.region or "").strip()
@@ -1700,6 +1711,38 @@ def _graph_aux(graph):
         region, count = max(counter.items(), key=lambda kv: (kv[1], kv[0]))
         if count * 2 > labeled:
             cached["chapter_region"][chapter] = region
+    # 系列页索引：米游社把这些任务写成「合集页 + 子页」两层，B 站词条的「系列任务」
+    # 字段又常常没填，父子关系只能靠别名（「荒落之城的记述人  昔时演算阵列之处」）
+    # 和标题前缀（「龙选者的旅迹 第一章…」）还原。
+    title_to_entry = {}
+    for entry in graph.entries.values():
+        if entry.entry_type != "task":
+            continue
+        title = (entry.title or "").strip()
+        if title:
+            title_to_entry.setdefault(title, entry)
+    series_children = {}
+    series_parent = {}
+    for entry in graph.entries.values():
+        if entry.entry_type != "task":
+            continue
+        candidates = []
+        for name in set(entry.aliases or []):
+            parts = (name or "").split()
+            if parts:
+                candidates.append(parts[0])
+        title = (entry.title or "").strip()
+        parts = title.split(" ", 1)
+        if len(parts) == 2 and parts[0].strip():
+            candidates.append(parts[0].strip())
+        for head in candidates:
+            parent = title_to_entry.get(head)
+            if parent is None or parent.entry_id == entry.entry_id:
+                continue
+            series_children.setdefault(parent.entry_id, []).append(entry.entry_id)
+            series_parent.setdefault(entry.entry_id, []).append(parent.entry_id)
+    cached["series_children"] = series_children
+    cached["series_parent"] = series_parent
     return cached
 
 
@@ -2004,6 +2047,58 @@ def _keyword_freq_tasks(graph, keywords, matched_ids):
     return added
 
 
+def _series_hub_tasks(graph, matched, matched_ids):
+    """系列页/合集页补全（SOP 3.8 第③步：系列页要展开子页，子页也要回到系列页）。
+
+    三条路径（都不看主题关键词，纯结构）：
+    1) 命中的是子页 → 补回它的系列页；
+    2) 命中的是系列页 → 展开它的子页（已被系列页正文覆盖的由覆盖度去重淘汰）；
+    3) 正文合集页：正文里复述了 >= 2 条已命中任务标题的大页，别名链上却没有任何一条
+       指向它（如「荒落之城的记述人」复述了冷薪与重燃之地/昔时裁决的圣座等）。
+    """
+    aux = _graph_aux(graph)
+    children = aux.get("series_children") or {}
+    parents = aux.get("series_parent") or {}
+    added = []
+    seen = set(matched_ids)
+
+    def push(entry_id):
+        if entry_id in seen or len(added) >= _SERIES_MAX_ADD:
+            return
+        entry = graph.get(entry_id)
+        if entry is None or entry.entry_type != "task":
+            return
+        if len(_entry_story_text(entry)) < _SERIES_CHILD_MIN_CHARS:
+            return
+        seen.add(entry_id)
+        added.append(entry)
+
+    for entry in matched:
+        for parent_id in parents.get(entry.entry_id, ()):
+            parent = graph.get(parent_id)
+            if parent is not None and len(_entry_story_text(parent)) >= _SERIES_PARENT_MIN_CHARS:
+                push(parent_id)
+        for child_id in children.get(entry.entry_id, ()):
+            push(child_id)
+
+    titles = []
+    for entry in matched:
+        title = (entry.title or "").strip()
+        if len(title) >= 4 and title not in titles:
+            titles.append(title)
+    if len(titles) >= _SERIES_HUB_TITLE_HITS:
+        for entry in graph.entries.values():
+            if entry.entry_type != "task" or entry.entry_id in seen:
+                continue
+            text = _entry_story_text(entry)
+            if len(text) < _SERIES_HUB_MIN_CHARS:
+                continue
+            hits = sum(1 for title in titles if title in text)
+            if hits >= _SERIES_HUB_TITLE_HITS:
+                push(entry.entry_id)
+    return added
+
+
 def _match_graph_task_titles(graph, query):
     """找出问题相关的任务词条：标题/别名命中、地区主线补全、词条链补全、词频兜底、去重。"""
     matched = []
@@ -2032,6 +2127,9 @@ def _match_graph_task_titles(graph, query):
         matched = _keyword_series_tasks(
             graph, keywords, matched, {e.entry_id for e in matched}
         )
+    hub_added = _series_hub_tasks(graph, matched, {e.entry_id for e in matched})
+    if hub_added:
+        matched.extend(hub_added)
     return _drop_covered_entries(graph, matched)
 
 
@@ -2220,8 +2318,7 @@ _PANORAMIC_ENTITY_TEXT_CAP = 6000
 # 说话人名字没有独立角色词条时，只在“正文提及该名字”的档案类词条里找，
 # 避免把闲云/珊瑚宫心海这类泛角色长档案误当成本任务相关角色。
 _UNKNOWN_SPEAKER_TARGET_TYPES = {
-    "artifact", "organization", "map_text", "story_chapter", "book",
-    "gadget", "item", "task", "activity",
+    "artifact", "organization", "story_chapter", "book", "gadget", "item",
 }
 # 实体相关性过滤：只在“正文里出现具体名字/具体别名，或本人就是说话人”时保留。
 # 这里的通用别名/头衔表不是主题词，而是为了防止“妹妹/父亲/偶像”这类泛称别名
@@ -2238,10 +2335,21 @@ _ENTITY_GENERIC_ALIASES = frozenset({
 _ENTITY_GENERIC_TITLE_KEYWORDS = (
     "接待员", "冒险家协会", "商人", "村民", "守卫", "士兵", "记者", "编辑",
     "厨师", "船夫", "工人", "学徒", "信使", "使者", "观众", "听众", "路人",
-    "老板", "店主", "店员", "摊主",
+    "老板", "店主", "店员", "摊主", "看守", "酒保", "铁匠", "教练", "保镖",
+    "主管", "服务员", "护卫",
 )
+# 非人词条：纳塔龙众、驮兽这类生物页码没有立场与结局，不进角色档案。
+_ENTITY_NONHUMAN_TITLE_KEYWORDS = (
+    "驮兽", "匿叶龙", "嵴锋龙", "绒翼龙", "鳍游龙", "幼龙", "龙众",
+)
+# 尘歌壶【洞天】页码是壶内闲聊台词，不是剧情正文，只靠同名变体折叠会把它留成代表条目。
+_ENTITY_EXCLUDE_TITLE_KEYWORDS = ("【洞天】",)
+# 同名变体折叠：凯瑟琳【地区】、玛薇卡【洞天】这类同一角色的变体共享基础别名，
+# 会把同一个人的所有版本一起挤进候选并各占一个档案名额，只保留基础名命中最高的。
+_ENTITY_TITLE_SUFFIX_RE = re.compile(r"【[^】]{1,40}】\s*$")
+# 怪物/兵种有独立 type，不参与实体档案展开。
 _ENTITY_ALLOWED_TYPES = {
-    "character", "npc", "organization", "monster", "artifact", "weapon",
+    "character", "npc", "organization", "artifact", "weapon",
     "book", "story_chapter", "gadget", "item", "region_feature",
 }
 # 图谱一跳扩展：只从任务/地图词条向这些“造物/文献/组织/地点”类型扩展，
@@ -2356,9 +2464,15 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
             # 没有剧情文本的词条不进入剧情证据（例如只有玩法模块的图鉴/成就）。
             continue
         speaker_hit = _entity_is_speaker(entry, speaker_names)
-        if any(k in title for k in _ENTITY_GENERIC_TITLE_KEYWORDS) and not speaker_hit:
+        # 接待员/看守/店主/酒保这类工具型头衔，以及纳塔龙众、驮兽这类生物页码，
+        # 即使本人确实在任务里说话，也不进角色档案：它们没有立场与结局可评价。
+        if any(k in title for k in _ENTITY_GENERIC_TITLE_KEYWORDS):
             continue
-        if title in _ENTITY_GENERIC_ALIASES and not speaker_hit:
+        if any(k in title for k in _ENTITY_NONHUMAN_TITLE_KEYWORDS):
+            continue
+        if any(k in title for k in _ENTITY_EXCLUDE_TITLE_KEYWORDS):
+            continue
+        if title in _ENTITY_GENERIC_ALIASES:
             continue
         hits = _entity_specific_alias_hits(entry, combined_text)
         if not speaker_hit and hits == 0:
@@ -2406,6 +2520,18 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
             x["entry"].title,
         ),
     )
+    # 同名变体折叠：凯瑟琳【须弥/至冬/…】、玛薇卡【洞天】这类变体共享基础别名，
+    # 会一起排进前 30 并各占一个档案名额，只保留排序最靠前的那一条。
+    collapsed = []
+    seen_base = set()
+    for info in ordered:
+        title = (info["entry"].title or "").strip()
+        base = _ENTITY_TITLE_SUFFIX_RE.sub("", title) or title
+        if base in seen_base:
+            continue
+        seen_base.add(base)
+        collapsed.append(info)
+    ordered = collapsed
     out = []
     total_chars = 0
     for info in ordered[:_PANORAMIC_ENTITY_MAX]:
