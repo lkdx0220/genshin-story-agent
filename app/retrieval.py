@@ -672,6 +672,83 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
     return results
 
 
+# ====== 任务条目展示：关键词片段 + 任务内代表 chunk ======
+# 向量语料把每个任务切成多个约 1.5k 字的 chunk，检索层按任务标题折叠成一个 key（见 _get_doc_key）。
+# 原实现只展示两路排在最前的那一个 chunk，而答案要的关键句常常落在没有挤进 top-k 的兄弟 chunk 里
+# （H3：金标句在「请饮下祝胜之酒」chunk:19、「意识之舟所至之处」chunk:5，两个都没进 top-k）。
+# 任务内按与查询的向量相似度挑代表 chunk 可以把这个损失补回来：这两个任务的代表 chunk 正是金标 chunk。
+_QUEST_CHUNK_RE = re.compile(r"^quest:(.+):chunk:(\d+)$")
+_DISPLAY_MAX_CHARS = 1400          # 单条正文展示上限（关键词路与向量路统一）
+_QUEST_SHOW_MAX_PIECES = 2         # 单个任务最多展示几条正文（关键词片段 + 代表 chunk）
+_QUEST_SHOW_MAX_CHARS = 2800       # 单个任务正文展示字数上限
+_QUEST_EXPAND_TOP_KEYS = 4         # 只有 RRF 前 N 个任务额外展示代表 chunk
+_QUEST_EXPAND_TOTAL_CHARS = 8000   # 单次检索「额外展示代表 chunk」的总预算
+_QUEST_CHUNK_MAP: Optional[Dict[str, list]] = None
+_QUEST_VECTORS = None              # 任务 chunk 向量矩阵（运行时常驻，任务内相似度排序用）
+
+
+def _quest_chunk_map() -> Dict[str, list]:
+    """任务标题 → 按 chunk 序号升序的 [(序号, 正文, 向量行号)]。首次调用时构建并常驻缓存。"""
+    global _QUEST_CHUNK_MAP, _QUEST_VECTORS
+    if _QUEST_CHUNK_MAP is not None:
+        return _QUEST_CHUNK_MAP
+    from app.data import _vector_store
+
+    grouped: Dict[str, list] = {}
+    if _vector_store is not None:
+        vectors, ids, docs = _vector_store._load("kb_quests_vec")
+        _QUEST_VECTORS = vectors
+        for row, (doc_id, text) in enumerate(zip(ids, docs)):
+            m = _QUEST_CHUNK_RE.match(doc_id)
+            if not m or not text:
+                continue
+            grouped.setdefault(m.group(1), []).append((int(m.group(2)), text, row))
+    for chunks in grouped.values():
+        chunks.sort()
+    _QUEST_CHUNK_MAP = grouped
+    return grouped
+
+
+def _quest_best_chunk(key: str, query_vec) -> Optional[tuple]:
+    """任务内与查询最相似的 chunk → (序号, 正文)；向量不可用时退回第一个 chunk。"""
+    chunks = _quest_chunk_map().get(key, [])
+    if not chunks:
+        return None
+    if _QUEST_VECTORS is None or query_vec is None:
+        return chunks[0][0], chunks[0][1]
+    best = max(chunks, key=lambda item: float(_QUEST_VECTORS[item[2]] @ query_vec))
+    return best[0], best[1]
+
+
+def _quest_display_chunks(key: str, hit_docs: list, query_vec, budget: int) -> list:
+    """汇总某任务本次展示的 [(标签, 正文)]：关键词片段（含查询词，保留原有行为）在前，
+    任务内代表 chunk 在后；代表 chunk 只在还有预算时补，预算耗尽时至少保证展示一条正文。"""
+    pieces: list = []
+    seen = set()
+    used = 0
+
+    def push(label: str, text: str) -> bool:
+        nonlocal used
+        if not text or text in seen or len(pieces) >= _QUEST_SHOW_MAX_PIECES:
+            return False
+        piece = text[:_DISPLAY_MAX_CHARS]
+        if pieces and used + len(piece) > budget:
+            return False
+        seen.add(text)
+        used += len(piece)
+        pieces.append((label, piece))
+        return True
+
+    for doc in hit_docs:
+        if not _QUEST_CHUNK_RE.match(str(doc.get("id", ""))):
+            push("关键词片段", doc.get("document", ""))
+            break
+    best = _quest_best_chunk(key, query_vec)
+    if best:
+        push(f"chunk:{best[0]}", best[1])
+    return pieces
+
+
 @tool
 def hybrid_search(query: str, top_k: int = 10) -> str:
     """混合检索：同时执行关键词匹配和语义搜索，自动融合排序。大多数内容搜索场景的默认工具。
@@ -697,10 +774,21 @@ def hybrid_search(query: str, top_k: int = 10) -> str:
 
     # 构建输出：合并关键词和向量两路中命中的结果
     lines = [f"\n===== 混合检索「{query}」({len(top_keys)}条结果) ====="]
-    for key in top_keys:
+    chunk_map = _quest_chunk_map()
+    expand_budget = _QUEST_EXPAND_TOTAL_CHARS
+    # 任务内挑代表 chunk 需要查询向量：只在结果里真的有任务条目时才算一次
+    query_vec = None
+    if _vector_store is not None and any(_get_doc_key(d) in chunk_map for d in kw_docs + vec_docs):
+        from kb_vector_store import get_embedder
+
+        query_vec = get_embedder(_vector_store.embedding_backend).embed_single(query)
+    for order, key in enumerate(top_keys):
         # 从关键词结果中找
         kw_match = [d for d in kw_docs if _get_doc_key(d) == key]
         vec_match = [d for d in vec_docs if _get_doc_key(d) == key] if vec_docs else []
+        hit_docs = kw_match + vec_match
+        if not hit_docs:
+            continue
         tags = []
         if kw_match:
             tags.append("关键词")
@@ -708,30 +796,37 @@ def hybrid_search(query: str, top_k: int = 10) -> str:
             tags.append("向量")
         tag_str = "+".join(tags)
 
-        # 优先用关键词结果的完整 snipet
         region = TITLE_REGISTRY.get(key, {}).get("region", "")
-        if kw_match:
-            doc = kw_match[0]
-            doc_id = doc.get("id", key)
-            collection = doc.get("collection", "")
-            category = doc.get("category", "")
-            attrs = []
-            if category:
-                attrs.append(category)
-            if region:
-                attrs.append(f"任务地区：{region}")
-            attr_str = f"（{'，'.join(attrs)}）" if attrs else ""
-            lines.append(f"\n【{key}】{attr_str}({collection}) [{tag_str}]")
+        head = hit_docs[0]
+        collection = head.get("collection", "")
+        category = head.get("category", "")
+        attrs = []
+        if category:
+            attrs.append(category)
+        if region:
+            attrs.append(f"任务地区：{region}")
+        attr_str = f"（{'，'.join(attrs)}）" if attrs else ""
+        score_str = f" 相似度:{vec_match[0].get('score', 0):.4f}" if not kw_match else ""
+        lines.append(f"\n【{key}】{attr_str}({collection}) [{tag_str}]{score_str}")
+
+        # 任务条目：已命中的正文（关键词片段 / 向量 chunk）之外，再按 chunk 序号就近补齐同任务
+        # 其余 chunk；补齐只给 RRF 靠前的任务，且受单次检索总预算约束
+        is_quest = key in chunk_map and any(
+            _QUEST_CHUNK_RE.match(str(d.get("id", ""))) for d in hit_docs
+        )
+        if is_quest:
+            if order < _QUEST_EXPAND_TOP_KEYS:
+                budget = min(_QUEST_SHOW_MAX_CHARS, expand_budget)
+                shown = _quest_display_chunks(key, hit_docs, query_vec, budget)
+                expand_budget -= sum(len(text) for _, text in shown)
+            else:
+                shown = _quest_display_chunks(key, hit_docs, query_vec, 0)
+        else:
+            shown = [("", head.get("document", "")[:_DISPLAY_MAX_CHARS])]
+
+        for label, text in shown:
             # 关键词路长文档片段最多约 3x400 字，展示上限放宽，避免 R3 类后部关键信息被截断
-            lines.append(f"  {doc['document'][:1400]}")
-        elif vec_match:
-            doc = vec_match[0]
-            doc_id = doc.get("id", key)
-            collection = doc.get("collection", "")
-            score = doc.get("score", 0)
-            region_str = f"（任务地区：{region}）" if region else ""
-            lines.append(f"\n【{key}】{region_str}({collection}) [{tag_str}] 相似度:{score:.4f}")
-            lines.append(f"  {doc['document'][:600]}")
+            lines.append(f"  [{label}] {text}" if label else f"  {text}")
 
     if not top_keys:
         return f"混合检索未找到与「{query}」相关的内容。"
