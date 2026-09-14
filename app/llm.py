@@ -222,26 +222,32 @@ mechanism_judge_llm = QwenFallbackChatOpenAI(
     extra_body={"enable_thinking": False},
 )
 
-# 意图 → Answer LLM 映射：取最高优先级的意图
-INTENT_LLM_MAP = {
-    "D": answer_llm_deep,     # 剧情任务
-    "F": answer_llm_deep,     # 溯源追踪
-    "C2": answer_llm_deep,    # 世界观设定
-    "E": answer_llm_medium,   # 书籍文献
-    "A": answer_llm_medium,   # 搜索检索
-    "B": answer_llm_light,    # 角色查询
+# 意图 → Answer LLM 档位：取最高优先级的意图
+# 这里只存"档位名"，取用时现查模块全局。不要改成直接存 LLM 实例：
+# 字典按值捕获实例后，任何"重绑 answer_llm_*"的配置覆盖（临时换模型、灰度切换）
+# 都传导不进来，会出现"换了模型但路由仍走旧实例"的静默污染。
+_INTENT_ANSWER_LEVEL = {
+    "D": "deep",      # 剧情任务
+    "F": "deep",      # 溯源追踪
+    "C2": "deep",     # 世界观设定
+    "E": "medium",    # 书籍文献
+    "A": "medium",    # 搜索检索
+    "B": "light",     # 角色查询
 }
+
+_ANSWER_INTENT_PRIORITY = ("D", "F", "C2", "E", "A", "B")
 
 
 def _select_answer_llm(intent_labels: list) -> ChatOpenAI:
     """根据意图标签选择最合适的 Answer LLM。
-    多个意图取最高优先级（Deep > Medium > Light）。"""
+    多个意图取最高优先级（Deep > Medium > Light）。
+    每次调用现查模块全局，保证外部重绑 answer_llm_* 立即生效。"""
     if not intent_labels:
         return answer_llm_deep  # 未知意图用深度
-    # 按优先级查找：先找 D/F/C2，再 E/A，最后 B
-    for priority_key in ("D", "F", "C2", "E", "A", "B"):
+    # 按优先级查找：先找 D/F/C2，再找 E/A，最后 B
+    for priority_key in _ANSWER_INTENT_PRIORITY:
         if priority_key in intent_labels:
-            return INTENT_LLM_MAP[priority_key]
+            return globals()[f"answer_llm_{_INTENT_ANSWER_LEVEL[priority_key]}"]
     return answer_llm_deep
 
 
