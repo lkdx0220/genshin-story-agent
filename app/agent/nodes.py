@@ -3523,7 +3523,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     if alias_notes:
         system_content += alias_notes
 
-    # 构建回答阶段的上下文：系统提示 + 执行报告 + 原始问题 + 所有工具返回
+    # 构建回答阶段的上下文：系统提示 + 执行报告 + 所有工具返回 + 用户原始问题
     answer_messages = [SystemMessage(content=system_content)]
 
     # 注入规划阶段的执行报告作为上下文
@@ -3532,13 +3532,16 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             f"以下是规划阶段的简短结论（仅作参考，最终以工具返回原文为准）：\n\n{execution_plan[:500]}"
         )))
 
-    # 注入用户原始问题
-    answer_messages.append(HumanMessage(content=f"请基于上述规划结果和工具搜索内容，回答用户问题：{original_query}"))
-
     # 注入所有对话消息（工具调用和返回结果）
     for msg in messages:
         if isinstance(msg, (ToolMessage, AIMessage)):
             answer_messages.append(msg)
+
+    # 用户原始问题必须放在最后一条：规划阶段收尾时会留下一条无 tool_calls 的 AIMessage
+    # （计划自己写的草稿），它若位于列表末尾，对话就停在 assistant 轮上，服务端模板不再
+    # 追加生成提示，模型直接输出 EOS（实测 content 为空、output_tokens=1），触发"空回复
+    # 兜底"把工具原文当答案。以 user 轮收尾可同时适配所有模板。
+    answer_messages.append(HumanMessage(content=f"请基于上述规划结果和工具搜索内容，回答用户问题：{original_query}"))
 
     trace_emit("llm_start", {"role": "answer", "run_id": state.get("run_id"), "model": getattr(answer_llm, "model_name", None)})
     # 流式生成：逐 chunk 推送给前端；失败或疑似截断则回退非流式。
