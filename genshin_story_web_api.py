@@ -9,15 +9,20 @@
 import os
 import sys
 import json
+import hashlib
+import hmac
 import queue
+import tempfile
 import threading
 import time
 from collections import defaultdict, deque
 from datetime import datetime
 from typing import Dict, Any
 
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
+# 本地默认走 HF 镜像并禁网（避免启动时探测 huggingface.co）；容器/云端部署用官方端点。
+if os.getenv("CLOUD_DEPLOY") != "1":
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 if sys.platform == 'win32':
     try:
@@ -26,7 +31,7 @@ if sys.platform == 'win32':
     except Exception:
         pass
 
-from flask import Flask, request, jsonify, render_template_string, Response
+from flask import Flask, g, request, jsonify, render_template_string, Response
 from flask_cors import CORS
 import re
 
@@ -50,35 +55,157 @@ app.config['JSON_AS_ASCII'] = False
 app.config['MAX_CONTENT_LENGTH'] = 64 * 1024
 
 # ====== API 访问控制 ======
-# 未配置 API_TOKEN 时仅允许本机访问；配置后远程须携带 Bearer Token。
+# 未配置任何口令时仅允许本机访问；配置后远程须携带 Bearer Token。
+# 每把口令各自对应一个会话命名空间（见 _tenant_session_dir）：
+# 不同 k 的会话列表互相不可见，访客也看不到本机 conversation_memory/ 里的历史。
 API_TOKEN = os.getenv("API_TOKEN", "").strip()
+API_TOKENS_EXTRA = os.getenv("API_TOKENS", "").strip()  # 形如 "alice:tokenA,bob:tokenB"
 _LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", None}
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_TENANT_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def _auto_tenant_name(token: str) -> str:
+    """未显式命名的口令按哈希取稳定短名：重启后同一口令仍落在同一份会话列表"""
+    return "tok_" + hashlib.sha256(token.encode("utf-8")).hexdigest()[:10]
+
+
+def _build_token_map() -> Dict[str, str]:
+    """口令 -> 会话命名空间。API_TOKENS 支持显式命名："alice:tokenA,bob:tokenB"。"""
+    mapping: Dict[str, str] = {}
+    for item in API_TOKENS_EXTRA.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        name, sep, token = item.partition(":")
+        name, token = name.strip(), token.strip()
+        if not sep or not name or not token:
+            print("[口令配置] 忽略一项（格式应为 名称:口令）")
+            continue
+        if not _TENANT_NAME_RE.fullmatch(name):
+            print(f"[口令配置] 忽略一项（名称只允许字母数字下划线短横，1-32 位）: {name!r}")
+            continue
+        mapping[token] = name
+    if API_TOKEN:
+        mapping.setdefault(API_TOKEN, _auto_tenant_name(API_TOKEN))
+    return mapping
+
+
+TOKEN_MAP = _build_token_map()
+if TOKEN_MAP:
+    print(f"[口令配置] 启用 {len(TOKEN_MAP)} 把口令，各持独立会话列表")
 
 
 def _is_local_request() -> bool:
     return (request.remote_addr or "") in _LOCAL_HOSTS or (request.remote_addr or "").startswith("127.")
 
 
+def _match_token() -> str:
+    """返回请求携带的合法口令原文；无匹配返回空串。
+
+    逐个常数时间比较且不提前退出，避免按响应耗时逐字节试探口令。
+    """
+    provided = request.headers.get("Authorization", "")
+    matched = ""
+    for token in TOKEN_MAP:
+        if hmac.compare_digest(provided, f"Bearer {token}"):
+            matched = token
+    return matched
+
+
+def _has_valid_token() -> bool:
+    """请求是否携带任一有效口令（未配置口令时恒为 False）。"""
+    return bool(_match_token())
+
+
 def _check_api_access():
-    """保护所有 /api/* 路由：本机免 token，远程需 Bearer Token。"""
+    """保护所有 /api/* 路由。
+
+    - 未配置口令：仅允许本机访问（本地启动器默认场景）。
+    - 配置了口令：所有来源（含本机）都要求 Bearer Token。
+      注意：经 Cloudflare Tunnel 等本地代理访问时，remote_addr 恒为 127.0.0.1；
+      若仍保留「本机免 token」，隧道外的任何人都等同于本机，口令形同虚设。
+    """
     if not request.path.startswith("/api/"):
         return None
     if request.method == "OPTIONS":
         return None
-    if _is_local_request():
-        return None
-    if not API_TOKEN:
+    token = _match_token()
+    g.tenant = TOKEN_MAP.get(token) if token else None  # 无口令或本地直连 → 根目录
+    if request.path == "/api/health":
+        return None  # 健康检查公开可读，供云平台/隧道探活
+    if not TOKEN_MAP:
+        if _is_local_request():
+            return None
         return jsonify({
             "error": "该 API 仅限本机访问。若需远程访问，请在服务端配置 API_TOKEN。"
         }), 403
-    auth = request.headers.get("Authorization", "")
-    if auth != f"Bearer {API_TOKEN}":
+    if not token:
         return jsonify({"error": "无效或缺失 API_TOKEN"}), 403
     return None
 
 
 app.before_request(_check_api_access)
+
+SERVICE_VERSION = "web-1.0"
+
+
+@app.route('/api/health', methods=['GET'])
+def api_health():
+    """健康检查：供云平台/隧道探活（公开可读，不含敏感信息）。"""
+    kb_counts = {}
+    try:
+        # 统计接口在 KBVectorStore 实例上，运行时单例由 app/data.py 顶层初始化
+        from app.data import _vector_store
+        if _vector_store is not None:
+            kb_counts = _vector_store.get_stats()
+    except Exception as e:
+        print(f"[health] 读取向量库统计失败: {type(e).__name__}: {e}")
+        kb_counts = {}
+    payload = {
+        "status": "ok",
+        "service": "genshin-story-agent-web",
+        "version": SERVICE_VERSION,
+        "agent_ok": AGENT_OK,
+        "l3_enabled": os.getenv("L3_ENABLED", "1") == "1",
+        "kb_counts": kb_counts,
+    }
+    # 部署细节（本地路径等）只对可信来源返回，避免公开端点泄漏服务端目录结构。
+    # 配置了口令时（隧道/云端）必须校验 Token：此时 remote_addr 恒为 127.0.0.1，不能仅凭来源地址判断。
+    if (not TOKEN_MAP and _is_local_request()) or _has_valid_token():
+        payload["tenant"] = _current_tenant() or "local"  # 便于确认自己在哪个会话命名空间
+        # 上报"实际生效"的向量目录与嵌入后端：环境变量常常没设（本地实例就没设），
+        # kb_vector_store 会按默认值回退（kb_vectors_m3 + bge-m3），只读 env 会得到空串。
+        try:
+            import kb_vector_store as _kvs
+            vector_dir = str(getattr(_kvs, "RUNTIME_VECTOR_DIR", "") or "")
+            embedding_backend = str(getattr(_kvs, "RUNTIME_EMBEDDING_BACKEND", "") or "")
+            from app.data import _vector_store
+            if _vector_store is not None:
+                vector_dir = str(getattr(_vector_store, "vector_dir", "") or vector_dir)
+                embedding_backend = str(getattr(_vector_store, "embedding_backend", "") or embedding_backend)
+        except Exception as e:
+            print(f"[health] 读取向量库运行时配置失败: {type(e).__name__}: {e}")
+            vector_dir = os.getenv("KB_VECTOR_DIR", "")
+            embedding_backend = os.getenv("KB_EMBEDDING_BACKEND", "")
+        payload["vector_dir"] = vector_dir
+        payload["embedding_backend"] = embedding_backend
+    return jsonify(payload)
+
+
+# Agent 工作流单例：gunicorn 单 worker 下由各请求线程共享，避免每次请求重复编译图
+_workflow_cache = None
+_workflow_lock = threading.Lock()
+
+
+def _get_workflow():
+    global _workflow_cache
+    if _workflow_cache is None:
+        with _workflow_lock:
+            if _workflow_cache is None:
+                import genshin_story_agent as agent_module
+                _workflow_cache = agent_module.create_agent_workflow()
+    return _workflow_cache
 
 # 取消信号映射：session_id → threading.Event
 _cancel_events: Dict[str, threading.Event] = {}
@@ -92,11 +219,31 @@ _RATE_LIMITS = {
     "/api/status": (60, 60),
     "/api/sessions": (30, 60),
     "/api/quest": (30, 60),
+    "/api/search": (30, 60),
     "/api/chat": (10, 60),
 }
 _DEFAULT_RATE_LIMIT = (60, 60)
+
+
+def _env_int(name: str, default: int) -> int:
+    """读整型环境变量；缺失或非法时退回默认（部署时手滑不该让服务起不来）。"""
+    try:
+        value = int(os.getenv(name, "") or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# 日配额：滑动窗口挡不住「慢速刷」（10 次/分钟累积起来一天也有一万多次），
+# 这里给演示站兜底，主要防「链接被转发出去后无上限烧 API 配额」。
+# 进程重启（HF 休眠唤醒、重新部署）会清零，属尽力而为的成本阻尼，不是安全边界。
+_DAILY_LIMITS = {
+    "/api/chat": _env_int("API_DAILY_CHAT_LIMIT", 120),
+}
 _rate_records: Dict[str, deque] = defaultdict(deque)
 _rate_lock = threading.Lock()
+_daily_records: Dict[str, list] = {}
+_daily_lock = threading.Lock()
 
 
 def _get_rate_limit(path: str):
@@ -106,10 +253,31 @@ def _get_rate_limit(path: str):
     return _DEFAULT_RATE_LIMIT, path
 
 
+def _get_daily_limit(path: str) -> int:
+    for prefix, limit in _DAILY_LIMITS.items():
+        if path == prefix or path.startswith(prefix + "/"):
+            return limit
+    return 0
+
+
+def _client_key() -> str:
+    """限流用的客户端标识：优先取代理链最左侧的 X-Forwarded-For（HF / Cloudflare 会写入真实访客 IP），
+    否则退回 remote_addr。注意：这只是成本阻尼标识，不是安全边界（XFF 可伪造）；
+    真正的访问控制是 Bearer Token。
+    """
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+    return request.remote_addr or "unknown"
+
+
 def _check_rate_limit():
-    """Flask before_request 钩子：按客户端 IP + 路径前缀做滑动窗口限流。"""
+    """Flask before_request 钩子：按客户端 + 路径前缀做滑动窗口限流，并对 /api/chat 计日配额。"""
+    client = _client_key()
     (limit, window), key_prefix = _get_rate_limit(request.path)
-    key = f"{request.remote_addr or 'unknown'}:{key_prefix}"
+    key = f"{client}:{key_prefix}"
     now = time.time()
     with _rate_lock:
         q = _rate_records[key]
@@ -121,6 +289,26 @@ def _check_rate_limit():
                 "retry_after": int(window),
             }), 429, {"Retry-After": str(int(window))}
         q.append(now)
+
+    daily_limit = _get_daily_limit(request.path)
+    if daily_limit:
+        today = time.strftime("%Y-%m-%d")
+        dkey = f"{client}:{request.path}"
+        with _daily_lock:
+            if len(_daily_records) > 2000:  # 顺手清掉隔天记录，避免长期运行内存增长
+                for k in [k for k, v in _daily_records.items() if v[0] != today]:
+                    _daily_records.pop(k, None)
+            rec = _daily_records.get(dkey)
+            if rec is None or rec[0] != today:
+                rec = [today, 0]
+                _daily_records[dkey] = rec
+            if rec[1] >= daily_limit:
+                retry_after = max(1, int(86400 - (now % 86400)))
+                return jsonify({
+                    "error": "已达到今日使用上限，请明天再试",
+                    "retry_after": retry_after,
+                }), 429, {"Retry-After": str(retry_after)}
+            rec[1] += 1
     return None
 
 
@@ -139,9 +327,6 @@ def _find_tool(name: str):
 @app.route('/chat')
 def chat_ui():
     """提供聊天客户端界面"""
-    _rl = _check_rate_limit()
-    if _rl is not None:
-        return _rl
     ui_path = os.path.join(os.path.dirname(__file__), 'chat_ui.html')
     if os.path.exists(ui_path):
         try:
@@ -200,9 +385,6 @@ pre{background:rgba(0,0,0,.3);padding:14px;border-radius:8px;overflow-x:auto;fon
 
 @app.route('/api/status')
 def status():
-    _rl = _check_rate_limit()
-    if _rl is not None:
-        return _rl
     return jsonify({
         "status": "running",
         "agent": AGENT_OK,
@@ -225,13 +407,17 @@ def api_shutdown():
 
 @app.route('/api/sessions')
 def api_sessions():
-    """列出磁盘上所有已保存的会话"""
+    """列出磁盘上已保存的会话（只列当前口令命名空间内的）"""
     sessions = []
-    if os.path.exists(SESSION_DIR):
-        for fname in sorted(os.listdir(SESSION_DIR), reverse=True):
+    session_dir = _tenant_session_dir(_current_tenant())
+    if os.path.exists(session_dir):
+        for fname in sorted(os.listdir(session_dir), reverse=True):
             if not fname.startswith("session_") or not fname.endswith(".json"):
                 continue
-            fpath = os.path.join(SESSION_DIR, fname)
+            session_id = fname[8:-5]  # 去掉 "session_" 前缀和 ".json" 后缀
+            if not _valid_session_id(session_id):
+                continue  # 目录里手工放入的异常文件名不进列表（前端会把 id 拼进 HTML）
+            fpath = os.path.join(session_dir, fname)
             try:
                 with open(fpath, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -246,7 +432,7 @@ def api_sessions():
                 if pairs[-1].get("user"):
                     last_message = pairs[-1]["user"][:50]
             sessions.append({
-                "id": fname[8:-5],  # 去掉 "session_" 前缀和 ".json" 后缀
+                "id": session_id,
                 "title": title,
                 "count": len(pairs),
                 "last_message": last_message,
@@ -261,7 +447,8 @@ def api_cancel():
     session_id = data.get("session_id", "")
     if not _valid_session_id(session_id):
         return jsonify({"success": False, "error": "非法的 session_id"}), 400
-    run_id = _session_cancel_keys.get(session_id)
+    session_key = _session_key(_current_tenant(), session_id)
+    run_id = _session_cancel_keys.get(session_key)
     if not run_id:
         return jsonify({"success": False, "error": "未找到运行中的会话"}), 404
     cancel_event = _cancel_events.get(run_id)
@@ -275,22 +462,21 @@ def api_cancel():
 @app.route('/api/sessions/<session_id>', methods=['GET', 'DELETE'])
 def api_session_detail(session_id):
     """获取或删除指定会话"""
-    _rl = _check_rate_limit()
-    if _rl is not None:
-        return _rl
     if not _valid_session_id(session_id):
         return jsonify({"success": False, "error": "非法的 session_id"}), 400
+    tenant = _current_tenant()
     if request.method == 'DELETE':
-        fpath = _session_file(session_id)
+        fpath = _session_file(session_id, tenant)
         if os.path.exists(fpath):
             try:
                 os.remove(fpath)
                 return jsonify({"success": True, "deleted": session_id})
             except Exception as e:
-                return jsonify({"success": False, "error": str(e)}), 500
+                print(f"[会话删除失败] {type(e).__name__}: {e}")
+                return jsonify({"success": False, "error": "删除会话失败，请查看服务端日志"}), 500
         return jsonify({"success": False, "error": "会话不存在"}), 404
 
-    data = _load_session_from_disk(session_id)
+    data = _load_session_from_disk(session_id, tenant)
     return jsonify(data)
 
 
@@ -347,9 +533,6 @@ def api_weapon():
 
 @app.route('/api/quest', methods=['POST'])
 def api_quest():
-    _rl = _check_rate_limit()
-    if _rl is not None:
-        return _rl
     tool = _find_tool("query_quest")
     if not tool:
         return jsonify({"error": "模块未加载"}), 500
@@ -385,25 +568,46 @@ def api_search():
 
 
 # 会话存储（简单内存字典，单机使用）
+# 会话按口令分命名空间：每个 k 只看得见自己的列表；本地直连（无口令）落根目录。
 _sessions: Dict[str, list] = {}
-SESSION_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conversation_memory")
+SESSION_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conversation_memory")
 
 
 def _valid_session_id(session_id: str) -> bool:
     return bool(_SESSION_ID_RE.fullmatch(session_id or ""))
 
 
-def _session_file(session_id: str) -> str:
+def _tenant_session_dir(tenant: str = None) -> str:
+    """当前命名空间的会话目录。
+
+    命名空间名来自 API_TOKENS 的显式命名或口令哈希，只含 [A-Za-z0-9_-]，
+    因此不会越出 conversation_memory/；本地直连（tenant=None）用根目录。
+    """
+    path = os.path.join(SESSION_ROOT, tenant) if tenant else SESSION_ROOT
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _current_tenant():
+    """本次请求所属的会话命名空间；None = 本地直连。只能在请求上下文中调用。"""
+    return getattr(g, "tenant", None)
+
+
+def _session_key(tenant: str, session_id: str) -> str:
+    """内存缓存的键：带命名空间前缀，避免不同口令的同名 session_id 互相串到。"""
+    return f"{tenant or '_local'}:{session_id}"
+
+
+def _session_file(session_id: str, tenant: str = None) -> str:
     """获取会话存储文件路径"""
     if not _valid_session_id(session_id):
         raise ValueError("非法的 session_id")
-    os.makedirs(SESSION_DIR, exist_ok=True)
-    return os.path.join(SESSION_DIR, f"session_{session_id}.json")
+    return os.path.join(_tenant_session_dir(tenant), f"session_{session_id}.json")
 
 
-def _load_session_from_disk(session_id: str) -> dict:
+def _load_session_from_disk(session_id: str, tenant: str = None) -> dict:
     """从 JSON 文件加载会话记录"""
-    fpath = _session_file(session_id)
+    fpath = _session_file(session_id, tenant)
     if os.path.exists(fpath):
         try:
             with open(fpath, "r", encoding="utf-8") as f:
@@ -413,16 +617,25 @@ def _load_session_from_disk(session_id: str) -> dict:
     return {"pairs": [], "summary": ""}
 
 
-def _save_session_to_disk(session_id: str, data: dict):
-    """将会话记录写入 JSON 文件（原子写入）"""
-    fpath = _session_file(session_id)
-    tmp = fpath + ".tmp"
+def _save_session_to_disk(session_id: str, data: dict, tenant: str = None):
+    """将会话记录写入 JSON 文件（随机临时文件 + 原子替换，避免并发写互相截断）"""
+    if not _valid_session_id(session_id):
+        raise ValueError("非法的 session_id")
+    session_dir = _tenant_session_dir(tenant)
+    fpath = os.path.join(session_dir, f"session_{session_id}.json")
+    tmp = None
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        fd, tmp = tempfile.mkstemp(prefix="session_", suffix=".tmp", dir=session_dir)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(tmp, fpath)
-    except Exception:
-        pass
+    except Exception as e:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        print(f"[会话写入失败] {type(e).__name__}: {e}")
 
 
 def _extract_tool_calls(state: Dict) -> list:
@@ -448,9 +661,6 @@ def _extract_tool_calls(state: Dict) -> list:
 
 @app.route('/api/chat', methods=['POST'])
 def api_chat():
-    _rl = _check_rate_limit()
-    if _rl is not None:
-        return _rl
     import genshin_story_agent as agent_module
     data = request.get_json(silent=True)
     if not data or "message" not in data:
@@ -466,11 +676,13 @@ def api_chat():
     if not _valid_session_id(session_id):
         return jsonify({"error": "非法的 session_id"}), 400
 
-    # 加载历史
-    history = _sessions.get(session_id)
+    # 加载历史（按口令命名空间隔离：不同 k 看不到彼此的会话列表）
+    tenant = _current_tenant()
+    session_key = _session_key(tenant, session_id)
+    history = _sessions.get(session_key)
     if not history:
-        history = _load_session_from_disk(session_id)
-        _sessions[session_id] = history
+        history = _load_session_from_disk(session_id, tenant)
+        _sessions[session_key] = history
     conv_pairs = history.get("pairs", [])
     conv_summary = history.get("summary", "")
     progress_queue = queue.Queue()
@@ -482,7 +694,7 @@ def api_chat():
         try:
             agent_module.set_progress_hook(progress_hook)
             agent_module._cancel_events[run_id] = cancel_event
-            agent = agent_module.create_agent_workflow()
+            agent = _get_workflow()
             result = agent.invoke({
                 "user_query": message,
                 "rewritten_query": None,
@@ -508,18 +720,19 @@ def api_chat():
         except Exception as e:
             import traceback
             traceback.print_exc()
-            progress_queue.put({"type": "error", "error": str(e)})
+            # 只回传异常类型，完整堆栈留在服务端日志，避免向客户端泄漏内部路径
+            progress_queue.put({"type": "error", "error": f"服务器内部错误（{type(e).__name__}），详情见服务端日志"})
         finally:
             agent_module.set_progress_hook(None)
             agent_module._cancel_events.pop(run_id, None)
 
-    # 生成运行标识并注册取消信号
+    # 生成运行标识并注册取消信号（完整 UUID，避免短号被猜测后取消他人任务）
     import uuid
-    run_id = str(uuid.uuid4())[:8]
+    run_id = str(uuid.uuid4())
     cancel_event = threading.Event()
     _cancel_events[run_id] = cancel_event
-    # session_id → run_id 映射，供 /api/cancel 查找
-    _session_cancel_keys[session_id] = run_id
+    # 会话键 → run_id 映射，供 /api/cancel 查找（键含命名空间，避免跨口令误取消）
+    _session_cancel_keys[session_key] = run_id
 
     thread = threading.Thread(target=run_agent, daemon=True)
     thread.start()
@@ -561,21 +774,21 @@ def api_chat():
 
         # 清理
         _cancel_events.pop(run_id, None)
-        _session_cancel_keys.pop(session_id, None)
+        _session_cancel_keys.pop(session_key, None)
 
         # 保存会话（所有路径都保留用户消息）
         if final_event == "done":
-            _sessions[session_id] = {"pairs": conv_pairs, "summary": conv_summary}
-            _save_session_to_disk(session_id, _sessions[session_id])
+            _sessions[session_key] = {"pairs": conv_pairs, "summary": conv_summary}
+            _save_session_to_disk(session_id, _sessions[session_key], tenant)
         elif final_event == "cancelled":
             # 中断：保存用户消息但不保存 AI 回复
             conv_pairs.append({"user": message, "assistant": ""})
-            _sessions[session_id] = {"pairs": conv_pairs, "summary": conv_summary}
-            _save_session_to_disk(session_id, _sessions[session_id])
+            _sessions[session_key] = {"pairs": conv_pairs, "summary": conv_summary}
+            _save_session_to_disk(session_id, _sessions[session_key], tenant)
         else:
             conv_pairs.append({"user": message, "assistant": ""})
-            _sessions[session_id] = {"pairs": conv_pairs, "summary": conv_summary}
-            _save_session_to_disk(session_id, _sessions[session_id])
+            _sessions[session_key] = {"pairs": conv_pairs, "summary": conv_summary}
+            _save_session_to_disk(session_id, _sessions[session_key], tenant)
 
     return Response(generate(), mimetype='text/event-stream')
 

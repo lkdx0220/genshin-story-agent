@@ -1,0 +1,58 @@
+# 构建上下文裁剪。Dockerfile 是显式 COPY，所以这里主要裁掉备份文件、原始抓取语料与开发脚本
+# —— 它们属于「构建期用得到、运行期读不到」的东西（运行期真实读盘清单见 _probe_runtime_files.py）。
+#
+# 匹配语义提醒（Docker 用 Go filepath.Match）：
+#   - 不含 / 的模式只匹配上下文根目录那一层，所以要跨目录排除必须写 **/；
+#   - 末尾带 / 的模式表示目录，整个子树都被排除；
+#   - 不要用裸的 *.txt / *.md / _*.py：prompts/*.txt 与 content_data/魔神任务架构.txt 是运行时要读的，
+#     app/__init__.py 等包内文件会被裸 _*.py 误伤（* 能匹配下划线）。
+
+.git
+.gitignore
+.github
+.env
+.env.*
+!.env.example
+
+# Python 编译缓存（跨目录）
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# 备份文件（跨目录）：*.bak / *.bak-* / *.bakN / *.before_fold
+**/*.bak*
+**/*.before_fold
+
+# ---- 向量库：只保留 v4 六集合（docs/meta/vectors）与词条图两个 JSON ----
+kb_vectors_m3/
+kb_vectors/_backup*/
+kb_vectors/_rebuild_quests_ckpt.json
+
+# ---- 语料：只保留运行时读盘的那批 ----
+content_data/wiki_raw/
+content_data/source_scope/
+# 只在构建词条图/知识库时读取的原始抓取数据
+content_data/mihoyo_*.json
+content_data/_mihoyo_*.json
+content_data/npcs_smw_raw.json
+content_data/wiki_missing_entries_raw.json
+
+# ---- 开发、抓取、发布产物 ----
+scripts/
+wiki_data_tools/
+ui/
+docs/
+reports/
+build/
+dist/
+release_assets*/
+*.exe
+conversation_memory/
+
+# ---- 根目录临时脚本与产物（根层模式，不会误伤包内 __init__.py）----
+_*.py
+_*.json
+_*.txt
+_*.log
+_*.md
+*.log
