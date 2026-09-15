@@ -54,7 +54,27 @@ body{
 .sidebar-header{
   padding:20px 16px 12px;
   border-bottom:1px solid var(--border);
+  position:relative;
 }
+/* 会话列表关闭按钮：仅移动端显示（桌面端侧栏常驻，不需要关） */
+.sidebar-close{
+  display:none;
+  position:absolute;top:14px;right:12px;
+  width:30px;height:30px;align-items:center;justify-content:center;
+  background:none;border:1px solid var(--border);border-radius:6px;
+  color:var(--text-dim);font-size:16px;line-height:1;cursor:pointer;
+}
+.sidebar-close:hover{color:var(--text);border-color:var(--gold)}
+/* 移动端侧栏遮罩：点空白处收起抽屉 */
+.sidebar-backdrop{
+  display:none;
+  position:fixed;inset:0;
+  background:rgba(0,0,0,0.55);
+  z-index:9;
+  opacity:0;visibility:hidden;
+  transition:opacity 0.3s ease,visibility 0.3s ease;
+}
+.sidebar-backdrop.show{opacity:1;visibility:visible}
 .sidebar-header h1{
   font-family:var(--font-display);
   font-size:17px;color:var(--gold);
@@ -385,6 +405,9 @@ body{
 @media(max-width:768px){
   .sidebar{position:fixed;left:0;top:0;height:100%;transform:translateX(-100%);z-index:10}
   .sidebar.open{transform:translateX(0)}
+  /* 抽屉盖住左侧 260px，汉堡按钮在它下面点不到，必须有遮罩与关闭按钮 */
+  .sidebar-backdrop{display:block}
+  .sidebar-close{display:flex}
   .message{max-width:92%}
   .example-grid{grid-template-columns:1fr}
   .input-area{padding:12px 16px 16px}
@@ -408,10 +431,12 @@ body{
 
 <canvas id="starfield"></canvas>
 
-<!-- 侧边栏 -->
+<!-- 侧边栏（移动端为抽屉式：点遮罩、点关闭、切换会话均可收起） -->
+<div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeSidebar()"></div>
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-header">
     <h1>原神剧情助手</h1>
+    <button class="sidebar-close" onclick="closeSidebar()" aria-label="关闭会话列表" title="关闭">&times;</button>
     <button class="new-chat-btn" onclick="newChat()">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       新建对话
@@ -506,8 +531,34 @@ try {
   }
 } catch(e) { console.warn('marked.js 加载失败，将使用纯文本模式'); }
 
+// marked 默认放行原始 HTML，而答案文本来自 LLM/知识库，直接 innerHTML 会执行
+// （例如 <img src=x onerror=...>）；这里对渲染结果做白名单清洗。
+const ALLOWED_TAGS=new Set(['A','P','BR','HR','STRONG','EM','B','I','DEL','S','CODE','PRE','BLOCKQUOTE','UL','OL','LI','H1','H2','H3','H4','H5','H6','TABLE','THEAD','TBODY','TR','TH','TD','SPAN','DIV','SUP','SUB']);
+const DROP_TAGS=new Set(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','LINK','META','BASE','FORM','INPUT','BUTTON','TEXTAREA','SELECT','OPTION','VIDEO','AUDIO','SOURCE','SVG','MATH','TEMPLATE','NOSCRIPT','IMG','HTML','HEAD','BODY']);
+const SAFE_ATTRS=new Set(['href','title','align','colspan','rowspan']);
+const SAFE_URL_RE=/^(https?:|mailto:|#|\/)/i;
+
+function sanitizeHtml(html){
+  const doc=new DOMParser().parseFromString(html,'text/html');
+  // 只遍历 body 内部：html/head 是 DOMParser 的骨架，替换它们会抛 "Only one element on document allowed"
+  doc.body.querySelectorAll('*').forEach(el=>{
+    if(DROP_TAGS.has(el.tagName)){el.remove();return;}
+    if(!ALLOWED_TAGS.has(el.tagName)){el.replaceWith(...el.childNodes);return;}
+    Array.from(el.attributes).forEach(a=>{
+      const name=a.name.toLowerCase();
+      const value=(a.value||'').trim();
+      if(name.startsWith('on')||!SAFE_ATTRS.has(name)||
+         ((name==='href'||name==='src')&&!SAFE_URL_RE.test(value))){
+        el.removeAttribute(a.name);
+      }
+    });
+    if(el.tagName==='A'){el.setAttribute('target','_blank');el.setAttribute('rel','noopener noreferrer');}
+  });
+  return doc.body.innerHTML;
+}
+
 function renderMarkdown(text) {
-  if (markedAvailable) return marked.parse(text);
+  if (markedAvailable) return sanitizeHtml(marked.parse(text));
   // 兜底：纯文本 + 换行转 <br>
   return escHtml(text).replace(/\n/g, '<br>');
 }
@@ -517,6 +568,13 @@ const API_BASE = window.location.origin;
 let conversations = [];
 let currentConvId = null;
 let isStreaming = false;
+// 支持 ?k=<访问口令> 直接开链：写入 localStorage 后随请求带 Bearer（演示站用）
+const urlK = new URLSearchParams(location.search).get('k');
+if (urlK && urlK.trim()) {
+  localStorage.setItem('api_token', urlK.trim());
+  // 口令已存入 localStorage，立刻从地址栏抹掉：避免它残留在浏览器历史、截图和复制出去的链接里
+  history.replaceState(null, '', location.pathname);
+}
 let apiToken = localStorage.getItem('api_token') || '';
 
 function getAuthHeaders(extra){
@@ -533,7 +591,11 @@ function saveApiToken(){
   console.log('已保存访问令牌');
 }
 
-function generateConvId(){return 'conv_'+Date.now()}
+// 会话 ID 由时间戳 + 随机串组成：时间戳可猜，光靠它别人能凭 /api/sessions/<id> 读删同一个会话
+function generateConvId(){
+  const buf=crypto.getRandomValues(new Uint8Array(8));
+  return 'conv_'+Date.now()+'_'+Array.from(buf,b=>b.toString(16).padStart(2,'0')).join('');
+}
 
 // ====== 对话管理 ======
 async function loadSessions(){
@@ -541,7 +603,8 @@ async function loadSessions(){
     const resp=await fetch(API_BASE+'/api/sessions',{headers:getAuthHeaders()});
     const data=await resp.json();
     if(data.sessions&&data.sessions.length>0){
-      conversations=data.sessions.map(s=>({
+      // id 会被拼进 onclick 的 JS 字符串，只接受服务端约定的字符集
+      conversations=data.sessions.filter(s=>/^[A-Za-z0-9_-]{1,64}$/.test(s.id||'')).map(s=>({
         id:s.id,title:s.title,messages:[],loaded:false
       }));
       renderSidebar();
@@ -552,6 +615,7 @@ async function loadSessions(){
 }
 
 function newChat(){
+  closeSidebar();
   currentConvId = generateConvId();
   conversations.push({id:currentConvId,title:'新对话',messages:[],loaded:true});
   showWelcome();
@@ -576,6 +640,7 @@ function renderSidebar(){
 
 function switchConv(id){
   currentConvId=id;
+  closeSidebar();  // 移动端点完会话就收起抽屉
   const conv=conversations.find(c=>c.id===id);
   if(!conv)return;
   document.getElementById('convTitle').textContent=conv.title;
@@ -963,9 +1028,24 @@ function scrollBottom(){
   setTimeout(()=>{area.scrollTop=area.scrollHeight},50);
 }
 
-function toggleSidebar(){
-  document.getElementById('sidebar').classList.toggle('open');
+function openSidebar(){
+  document.getElementById('sidebar').classList.add('open');
+  document.getElementById('sidebarBackdrop').classList.add('show');
 }
+
+function closeSidebar(){
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarBackdrop').classList.remove('show');
+}
+
+function toggleSidebar(){
+  // 桌面端侧栏常驻（不会带 open），只有移动端抽屉才有开/关两态
+  if(document.getElementById('sidebar').classList.contains('open')){closeSidebar()}else{openSidebar()}
+}
+
+// 移动端横屏/窗口变宽回到桌面布局时收起抽屉，避免留下点不掉的灰层
+window.addEventListener('resize',()=>{if(window.innerWidth>768)closeSidebar()});
+window.addEventListener('keydown',e=>{if(e.key==='Escape')closeSidebar()});
 
 // 页面关闭时自动取消正在运行的 Agent
 window.addEventListener('beforeunload',()=>{

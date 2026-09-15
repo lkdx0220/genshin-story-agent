@@ -7,6 +7,7 @@
 import re
 import json
 import time
+import os
 from typing import Dict, Any, List, Tuple
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
@@ -2546,6 +2547,9 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
 
 def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, response=None):
     """全景/综合题：代码直接加载相关任务+地图文本+实体档案全文，绕过普通截断与熔断。"""
+    if os.getenv("L3_ENABLED", "1") != "1":
+        # 演示站默认关闭全景旁路（L3_ENABLED=0）：L3 单次生成长、烧 token，留给持口令的自己人手动开启。
+        return None
     original_query = state.get("user_query", "") or state.get("rewritten_query", "")
     if not _PANORAMIC_FULL_TEXT_RE.search(original_query):
         return None

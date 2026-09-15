@@ -1,0 +1,19 @@
+# 云端演示镜像依赖（本地开发仍用 requirements.txt）
+#
+# 相对 requirements.txt 的差异：
+#   1) 去掉 chromadb / sentence-transformers：云端裁剪长期记忆（memory_manager.py 缺失这两个包时
+#      自动降级为「记忆功能不可用」），镜像因此不用装 torch，省 2-3 GB；
+#   2) 补上 numpy / python-dotenv：这两项原先靠 chromadb、sentence-transformers 间接带入，
+#      去掉它们后会变成运行时真缺失（kb_vector_store.py 读 .npy 用 numpy，load_dotenv 用 dotenv）；
+#   3) 补上 gunicorn：容器里的 WSGI 进程管理器（本地启动器仍用 Flask 自带 dev server）。
+langchain>=1.0.0
+langchain_core>=1.0.0
+langgraph>=1.0.0
+langchain_openai>=0.3.0
+requests>=2.32.0
+numpy>=1.24.0
+python-dotenv>=1.0.0
+
+flask>=2.0.0
+flask-cors>=3.0.0
+gunicorn>=21.0.0
