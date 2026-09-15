@@ -15,13 +15,19 @@ dist/
 build/
 *.spec
 
-# 备份文件
+# 备份文件（**/*.bak* 覆盖 .bak-20260825 这类带日期/说明后缀的备份，防 git add -A 误提交）
 *.bak
 *.bak[0-9]
 *.before_fold
+**/*.bak*
 
 # 本地缓存
 _wiki_cache/
+
+# 本地服务与部署（svc_*.bat 内含明文口令，严禁入库；_tools/ 为本地隧道工具；*.log 为运行日志）
+svc_*.bat
+_tools/
+*.log
 
 # 测试结果与中间缓存
 _speed_test_results.html
