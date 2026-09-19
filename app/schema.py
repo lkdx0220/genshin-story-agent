@@ -29,6 +29,9 @@ AGENT_SYSTEM_PROMPT_FAST = _load_prompt("system/agent_fast_answer.txt")
 HELP_TEXT = _load_prompt("help.txt")
 
 # ====== L3 全景题专用提示词 ======
+# 图谱一跳扩展进来的实体（与任务正文仅链接相关、无强共现）在证据包里的标记；
+# 输出规约规定此类条目至多一句带过，覆盖兜底跳过，不强制出现在答案中。
+L3_WEAK_ENTITY_TAG = "〔仅图谱关联〕"
 AGENT_SYSTEM_PROMPT_L3_ANSWER = _load_prompt("system/agent_system_v4_l3_answer.txt")
 L3_SECTION_COMMON = _load_prompt("system/agent_system_v4_l3_section_common.txt")
 L3_SECTION_TASK = _load_prompt("system/agent_system_v4_l3_section_task.txt")
