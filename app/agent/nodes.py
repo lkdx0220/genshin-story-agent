@@ -22,7 +22,7 @@ from app.llm import (
 from app.schema import (
     GenshinAdvisorState,
     AGENT_SYSTEM_PROMPT_PLAN, AGENT_SYSTEM_PROMPT_ANSWER, AGENT_SYSTEM_PROMPT_FAST,
-    AGENT_SYSTEM_PROMPT_L3_ANSWER,
+    AGENT_SYSTEM_PROMPT_L3_ANSWER, L3_WEAK_ENTITY_TAG,
 )
 from app.progress import _emit_progress, _cancel_events
 from app.trace_recorder import emit as trace_emit
@@ -2135,9 +2135,18 @@ def _match_graph_task_titles(graph, query):
 
 
 def _collect_graph_map_texts(graph, task_entries):
-    """收集与任务相关的本地地图文本：反向引用优先，再用地区词补全。"""
+    """收集与任务相关的本地地图文本：反向引用优先，再用地区词补全。
+
+    反向引用路径带相关性闸门（2026-09 C4 事故同款）：地图页会反链到它列出的全部
+    任务，属于目录关系。放行条件 = 标题/别名/【地名】在任务正文中出现 ≥1 次，
+    或地图与任务同地区（反链 + 同地区是地点类词条的强相关信号，地名不必在对话里点名）。
+    """
     candidates: List[Tuple[int, str, Any]] = []
     seen = set()
+    task_regions = {t.region for t in task_entries if t.region}
+    task_text = "\n".join(
+        f"{task.title}\n{_entry_story_text(task) or ''}" for task in task_entries
+    )
     # 先收全部反向引用（优先级 0），再按地区补全（优先级 1），
     # 否则先处理到的任务会把后续任务的 backlink 地图文本抢先标成低优先级。
     for task in task_entries:
@@ -2145,6 +2154,22 @@ def _collect_graph_map_texts(graph, task_entries):
             if source is None or source.entry_type != "map_text":
                 continue
             if source.entry_id in seen:
+                continue
+            co_hits = _entry_co_occurrence(source, task_text)
+            same_region = bool(source.region) and source.region in task_regions
+            if co_hits <= 0 and not same_region:
+                print(
+                    f"  -> [地图闸门] 跳过仅反向链接且零共现、不同地区的地图文本："
+                    f"{source.title} (ID {source.entry_id})"
+                )
+                trace_emit("filtered_map_text", {
+                    "entry_id": source.entry_id,
+                    "title": source.title,
+                    "entry_type": source.entry_type,
+                    "co_hits": 0,
+                    "same_region": False,
+                    "source": "map_backlink",
+                })
                 continue
             seen.add(source.entry_id)
             candidates.append((0, source.entry_id, source))
@@ -2373,6 +2398,25 @@ def _entity_specific_alias_hits(entry, text):
     return hits
 
 
+def _entry_co_occurrence(entry, text: str) -> int:
+    """实体/地图在参考文本中的别名感知共现次数。
+
+    候选名 = 标题 + 全部别名 + 标题括号里的地名（如「山间的告示牌【彩冰镇】」的彩冰镇）。
+    用于图谱一跳扩展与地图反链路径的共现闸门：图上链接不等于情节相关。
+    """
+    names = [entry.title or ""]
+    names.extend(entry.aliases or [])
+    bracket = _TASK_BRACKET_RE.search(entry.title or "")
+    if bracket:
+        names.append(bracket.group(1))
+    total = 0
+    for name in names:
+        name = (name or "").strip()
+        if len(name) >= 2:
+            total += text.count(name)
+    return total
+
+
 def _entity_is_speaker(entry, speakers):
     title = (entry.title or "").strip()
     if title and title in speakers:
@@ -2488,8 +2532,17 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
 
     # 4) 图谱一跳扩展：从任务/地图词条出发，补回与其显式链接的造物/文献/组织/地点。
     #    只做一跳、只允许上面 _LORE_EXPAND_TYPES 的类型，避免噪声扩散。
+    #    共现闸门（2026-09 C4 事故）：图上的链接不等于情节相关性——任务页会链到
+    #    “同世界观的其他作品”（武器故事），聚所页会反链到它列出的全部任务（目录关系）。
+    #    只有标题/别名/【地名】在已选任务与地图正文里出现 ≥1 次的条目才允许进包。
     existing_ids = {info["entry"].entry_id for info in filtered}
+    reference_text = "\n".join(task_texts)
+    if map_entries:
+        reference_text += "\n" + "\n".join(
+            _entry_story_text(e) or "" for e in map_entries
+        )
     expanded = []
+    evaluated = set()
     for seed in list(task_entries) + list(map_entries):
         neighbors = [t for t, _ in graph.expand(seed.entry_id, limit=100) if t is not None]
         neighbors += [s for s, _ in graph.backlinks(seed.entry_id) if s is not None]
@@ -2500,8 +2553,27 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
                 continue
             if any(info["entry"].entry_id == neighbor.entry_id for info in expanded):
                 continue
+            if neighbor.entry_id in evaluated:
+                # 同一邻居可能被多个种子链接到，共现闸门只评估、只记一次。
+                continue
+            evaluated.add(neighbor.entry_id)
+            co_hits = _entry_co_occurrence(neighbor, reference_text)
+            if co_hits <= 0:
+                print(
+                    f"  -> [实体闸门] 跳过仅图谱关联且零共现：{neighbor.title} "
+                    f"({neighbor.entry_type}, ID {neighbor.entry_id})"
+                )
+                trace_emit("filtered_entity", {
+                    "entry_id": neighbor.entry_id,
+                    "title": neighbor.title,
+                    "entry_type": neighbor.entry_type,
+                    "co_hits": 0,
+                    "source": "graph_expand",
+                })
+                continue
             expanded.append({
-                "entry": neighbor, "known": 0, "speaker": 0, "hits": 0, "expand": 1,
+                "entry": neighbor, "known": 0, "speaker": 0,
+                "hits": co_hits, "expand": 1, "weak": True,
             })
             if len(expanded) >= _LORE_EXPAND_MAX:
                 break
@@ -2542,7 +2614,10 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
             break
         out.append(entry)
         total_chars += text_len
-    return out
+    # 仅图谱关联（第 4 步进包、共现较弱）的条目：证据包内打弱标记，
+    # 输出规约要求至多一句带过，L3 覆盖兜底也跳过它们，不强制出现在答案中。
+    weak_ids = {info["entry"].entry_id for info in ordered[:len(out)] if info.get("weak")}
+    return out, weak_ids
 
 
 def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, response=None):
@@ -2569,7 +2644,7 @@ def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, re
         return None
     matched_map_texts = _collect_graph_map_texts(graph, matched_tasks)
     task_texts = [_entry_story_text(e) or (e.full_text or "") for e in matched_tasks]
-    related_entities = _collect_related_entity_entries(
+    related_entities, _weak_entity_ids = _collect_related_entity_entries(
         graph, matched_tasks, task_texts, matched_map_texts
     )
 
@@ -2599,11 +2674,15 @@ def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, re
     if related_entities:
         parts.append("\n\n===== 相关角色/组织/圣遗物/地点剧情档案 =====")
         for entry in related_entities:
+            title = entry.title
+            if entry.entry_id in _weak_entity_ids:
+                # 仅图谱关联：与任务正文只有图链接、共现弱，输出规约要求至多一句带过。
+                title = f"{title} {L3_WEAK_ENTITY_TAG}"
             text = _entry_story_text(entry)
             if len(text) > _PANORAMIC_ENTITY_TEXT_CAP:
                 text = text[:_PANORAMIC_ENTITY_TEXT_CAP] + "\n...[档案过长已截断]"
             parts.append(
-                f"\n----- {entry.title} ({entry.entry_type}, ID {entry.entry_id}) "
+                f"\n----- {title} ({entry.entry_type}, ID {entry.entry_id}) "
                 f"共 {len(text)} 字 -----\n" + text
             )
 

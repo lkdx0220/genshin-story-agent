@@ -32,6 +32,7 @@ from app.schema import (
     L3_SECTION_MAP as _MAP_INSTRUCTION,
     L3_SECTION_SYNTHESIS as _SYNTHESIS_INSTRUCTION,
     L3_SECTION_COVERAGE as _COVERAGE_INSTRUCTION,
+    L3_WEAK_ENTITY_TAG,
 )
 
 _FULL_TEXT_HEADER = "[全景全文读取]"
@@ -296,7 +297,11 @@ def _entity_titles(sections) -> List[str]:
         for line in section.text.splitlines():
             m = re.match(r"----- (.+?) \((.+?), ID (\d+)\) -----", line.strip())
             if m:
-                titles.append(m.group(1).strip())
+                title = m.group(1).strip()
+                # 仅图谱关联的弱条目不参与覆盖兜底：不强制出现在答案里。
+                if L3_WEAK_ENTITY_TAG in title:
+                    continue
+                titles.append(title)
     return titles
 
 
