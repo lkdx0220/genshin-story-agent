@@ -5,6 +5,7 @@
 """
 import os
 import json
+import re
 
 from langchain_core.tools import tool
 
@@ -552,4 +553,11 @@ def get_book_metadata(book_name: str) -> str:
         lines.append(f"卷数: {meta['卷数']}")
     if meta.get("实装版本"):
         lines.append(f"版本: {meta['实装版本']}")
+    # 卷目录：长书正文分页返回，规划模型需要知道有哪几卷才能逐卷精读
+    text = best.get("text", "")
+    volumes = re.findall(r"【卷(\d+)内容】\s*([^\n]{0,24})", text)
+    if volumes:
+        lines.append("卷目录: " + " / ".join(f"卷{n} {t.strip()}".strip() for n, t in volumes))
+    if len(text) > 3000:
+        lines.append(f"正文长度: {len(text)} 字（超过 3000 字，load_book_content 会分页返回，用 part 参数逐页读完）")
     return "\n".join(lines)

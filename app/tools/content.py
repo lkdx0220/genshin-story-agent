@@ -7,6 +7,7 @@
 """
 import os
 import json
+import re
 
 from langchain_core.tools import tool
 
@@ -19,9 +20,59 @@ from app.data import (
 from app.retrieval import SimpleBM25, _rerank
 
 
+_PAGE_CHARS = 3000  # 每页正文预算（与改造前的 preview 上限一致，避免单次返回膨胀）
+_VOLUME_RE = re.compile(r"【卷(\d+)内容】\s*([^\n]{0,24})")
+
+
+def _book_pages(text: str) -> list:
+    """把书籍正文切成页：带【卷N内容】标记的按整卷打包，其余按 _PAGE_CHARS 定长切。
+
+    返回 [(页标签, 页正文)]。单卷超过预算时整卷返回，不把一卷劈成两页——
+    分页的意义是让模型能读完长书，而不是把卷切碎。
+    """
+    marks = list(_VOLUME_RE.finditer(text))
+    pages = []
+    if marks:
+        segs = []
+        if marks[0].start() > 0:
+            segs.append((None, "", text[:marks[0].start()]))  # 卷前导言
+        for i, m in enumerate(marks):
+            end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+            segs.append((m.group(1), m.group(2).strip(), text[m.start():end]))
+        cur, labels, cur_len = [], [], 0
+        for num, title, seg in segs:
+            label = (f"卷{num} {title}".strip() if num else "卷前导言")
+            if cur and cur_len + len(seg) > _PAGE_CHARS:
+                pages.append(("、".join(labels), "".join(cur)))
+                cur, labels, cur_len = [], [], 0
+            cur.append(seg)
+            labels.append(label)
+            cur_len += len(seg)
+        if cur:
+            pages.append(("、".join(labels), "".join(cur)))
+    else:
+        for i in range(0, len(text), _PAGE_CHARS):
+            pages.append((f"第{i + 1}-{min(i + _PAGE_CHARS, len(text))}字", text[i:i + _PAGE_CHARS]))
+    return pages
+
+
+def _page_hint(title: str, pages: list, page_no: int, total_chars: int) -> str:
+    """返回续读指引；只有一页时返回空串。"""
+    if len(pages) <= 1:
+        return ""
+    head = f"\n...（本书共{total_chars}字，共 {len(pages)} 页；本页为第 {page_no} 页 = {pages[page_no - 1][0]}）"
+    if page_no < len(pages):
+        nxt = page_no + 1
+        return f"{head}\n【续读】load_book_content(book_name=\"{title}\", part={nxt}) → {pages[nxt - 1][0]}"
+    return f"{head}\n【续读】已是最后一页。"
+
+
 @tool
-def load_book_content(book_name: str, query: str = "") -> str:
-    """加载指定书籍的完整文本。book_name: 书籍名称。query: 可选，传入后按关键词定位返回上下文片段（最多3个，各500字）。"""
+def load_book_content(book_name: str, query: str = "", part: int = 1) -> str:
+    """加载指定书籍的完整文本。
+    book_name: 书籍名称。
+    query: 可选，传入后按关键词定位返回上下文片段（最多3个，各500字）。
+    part: 可选，页码（默认1）。正文超过 3000 字会自动分页（按卷打包），返回内容尾部会给出下一页码与对应的卷，长书需逐页读完。"""
     content_file = os.path.join(CONTENT_DIR, "books.json")
     try:
         with open(content_file, "r", encoding="utf-8") as f:
@@ -40,6 +91,12 @@ def load_book_content(book_name: str, query: str = "") -> str:
     best = max(matches, key=lambda b: len(b["text"]))
     text = best["text"]
     print(f"[工具] 加载书籍: {best['title']} ({len(text)}字)")
+    pages = _book_pages(text)
+    try:
+        page_no = max(1, min(int(part), len(pages)))
+    except (TypeError, ValueError):
+        page_no = 1
+    page_label, page_body = pages[page_no - 1]
 
     if query and query.strip():
         # 关键词定位：找到 query 在书中的位置，返回上下文片段
@@ -66,7 +123,8 @@ def load_book_content(book_name: str, query: str = "") -> str:
             result += "\n---\n".join(snippets)
             return result
         else:
-            return f"\n【{best['title']}】\n[关键词\"{query}\"未在书中找到，返回开头]\n{text[:3000]}"
+            return (f"\n【{best['title']}】\n[关键词\"{query}\"未在书中找到，返回第 {page_no} 页 = {page_label}]\n"
+                    f"{page_body}{_page_hint(best['title'], pages, page_no, len(text))}")
 
     # 附加元数据摘要
     meta = best.get("metadata", {})
@@ -83,9 +141,8 @@ def load_book_content(book_name: str, query: str = "") -> str:
         meta_parts.append("作者: 游戏内未提及")
     meta_line = f"\n[书籍信息] {', '.join(meta_parts)}" if meta_parts else ""
 
-    preview = text[:3000]
-    more = f"\n...（共{len(text)}字）" if len(text) > 3000 else ""
-    return f"\n【{best['title']}】\n{preview}{more}{meta_line}"
+    return (f"\n【{best['title']}】\n{page_body}"
+            f"{_page_hint(best['title'], pages, page_no, len(text))}{meta_line}")
 
 
 @tool
