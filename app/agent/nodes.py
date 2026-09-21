@@ -1600,6 +1600,10 @@ _wiki_graph_cache: Any = None
 _MAP_TEXT_QUESTION_RE = re.compile(
     r"地图文本|地图说明|地图相关|地点文本|周边文本|地区文本|对应地区|结合.{0,6}地图|结合.{0,6}地区"
 )
+# 地图文本上限。2026-09-20 试过放宽到 12 并按「与任务正文的共现度」排序，实测无效且更差：
+# 反链档先占满 8 个名额，地区档只剩 4 个，目标词条（至冬白冕宫「某位高贵之人的笔记」）仍进不来；
+# 共现度实际由标题地名词频主导，反而挤掉原本入选的白冕宫条目、换进《至冬先驱报》(19670 字)。
+# 结论：地图候选缺少相关性信号，只能在 P2（检索兜底）/P3（图谱补链）里治本，见 _l3_paper/PROGRESS-L3试卷制作.md。
 _GRAPH_MAP_MAX_ENTRIES = 8
 
 
@@ -2144,7 +2148,8 @@ def _collect_graph_map_texts(graph, task_entries):
     candidates: List[Tuple[int, str, Any]] = []
     seen = set()
     task_regions = {t.region for t in task_entries if t.region}
-    task_text = "\n".join(
+    # 全部任务的合并正文（共现闸门与候选排序都用它，避免被循环内单任务文本覆盖）
+    all_task_text = "\n".join(
         f"{task.title}\n{_entry_story_text(task) or ''}" for task in task_entries
     )
     # 先收全部反向引用（优先级 0），再按地区补全（优先级 1），
@@ -2155,7 +2160,7 @@ def _collect_graph_map_texts(graph, task_entries):
                 continue
             if source.entry_id in seen:
                 continue
-            co_hits = _entry_co_occurrence(source, task_text)
+            co_hits = _entry_co_occurrence(source, all_task_text)
             same_region = bool(source.region) and source.region in task_regions
             if co_hits <= 0 and not same_region:
                 print(
@@ -2174,13 +2179,16 @@ def _collect_graph_map_texts(graph, task_entries):
             seen.add(source.entry_id)
             candidates.append((0, source.entry_id, source))
     for task in task_entries:
-        task_text = f"{task.title}\n{_entry_story_text(task)}"
+        one_task_text = f"{task.title}\n{_entry_story_text(task)}"
         for entry in graph.entries.values():
             if entry.entry_type != "map_text" or entry.entry_id in seen:
                 continue
-            if entry.region and entry.region in task_text:
+            if entry.region and entry.region in one_task_text:
                 seen.add(entry.entry_id)
                 candidates.append((1, entry.entry_id, entry))
+    # 排序：优先级（反链优先）→ ID（稳定）。
+    # 2026-09-20：只放宽上限 8 → 12，不动排序。曾试过按「与任务正文的共现度」排序，实测反效果：
+    # 共现度实际由标题里的地名词频主导（【奥古洛夫镇】压过【白冕宫】），白冕宫词条被挤出而目标词条仍不在候选内。
     candidates.sort(key=lambda x: (x[0], x[1]))
     return [entry for _priority, _eid, entry in candidates[:_GRAPH_MAP_MAX_ENTRIES]]
 
