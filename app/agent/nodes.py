@@ -3375,6 +3375,232 @@ def _apply_answer_scope_guard(original_query: str, content: str, messages, state
     return content
 
 
+# ===== 线上引用自检 =====
+# 口径与评测器 evaluator/scorers/citations.py 一致：答案里用引号标出的原文片段必须在工具返回里
+# 找得到出处。查无出处＝模型用「煞有介事的引用」包装自己写的话（H1《浮世记》修前就是这个病：
+# 拿《浮浪记》冒充并附原文引用，faithfulness/answer_relevancy 双双掉到 1）。
+_CITATION_META_ABSENCE_MARKERS = (
+    "未在", "未提及", "未包含", "未收录", "未明确", "未找到", "无法回答",
+    "没有", "不包含", "不在", "并不存在", "未验证",
+)
+
+
+def _is_meta_absence_quote(answer: str, quote: str) -> bool:
+    """引号出现在「未找到/没有/不包含」这类缺席语境里 → 是元语言用法，不算引用。"""
+    idx = answer.find(quote)
+    if idx < 0:
+        return False
+    around = answer[max(0, idx - 15):idx + len(quote) + 30]
+    return any(marker in around for marker in _CITATION_META_ABSENCE_MARKERS)
+
+
+def _strip_for_cite(text: str) -> str:
+    """去掉空白与标点（保留文字/字母/数字），引用比对的归一化。"""
+    return re.sub(r"[\W_]+", "", text or "", flags=re.UNICODE)
+
+
+def _cite_fragments(text: str) -> List[str]:
+    """按省略号切分：允许「……前段……后段」这种节引，各段分别核对。"""
+    parts = re.split(r"[.．]{2,}|…+", text or "")
+    return [p.strip() for p in parts if len(_strip_for_cite(p)) >= 4]
+
+
+def _text_in_context(text: str, ctx_normalized: str) -> bool:
+    """引用比对：去标点后必须逐字出现（含省略号时按段分别核对）。
+
+    刻意不用评测器那种「字符按先后顺序都能找到」的宽松规则：中文常用字极易按序命中，
+    实测编造的台词也会被判为"有出处"（形同虚设）。声称逐字引用就必须真的逐字存在。
+    """
+    fragments = _cite_fragments(text) or [text]
+    checked = False
+    for frag in fragments:
+        frag_normalized = _strip_for_cite(frag)
+        if not frag_normalized:
+            continue
+        checked = True
+        if frag_normalized not in ctx_normalized:
+            return False
+    return checked
+
+
+def _unverified_quotes(answer: str, contexts: str) -> List[str]:
+    """返回答案里查无出处的引号片段（与评测器同口径）。"""
+    quoted = re.findall(r"「([^」]{4,80})」", answer)
+    quoted += re.findall(r'"([^"]{4,80})"', answer)
+    quoted = list(dict.fromkeys(quoted))
+    quoted = [q for q in quoted if not _is_meta_absence_quote(answer, q)]
+    if not quoted or not contexts:
+        return []
+    ctx_normalized = _strip_for_cite(contexts)
+    return [q for q in quoted if not _text_in_context(q, ctx_normalized)]
+
+
+# 【原文引用】这类标题下的裸台词不带引号，逃得过引号检查；但整段都在声称「逐字引用」，
+# 所以同样要核。标题名与评测器/提示词里用到的写法保持一致。
+_CITATION_SECTION_LABELS = (
+    "原文引用", "原文摘录", "引用原文", "原文片段", "原文对话",
+    "对话原文", "台词原文", "原文", "台词",
+)
+_CITATION_SECTION_HEAD_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*|\*\*\s*)?【?(" + "|".join(_CITATION_SECTION_LABELS) + r")】?\s*\*{0,2}\s*$"
+)
+_CITATION_SECTION_STOP_RE = re.compile(r"^\s*(?:#{1,6}\s|\*\*|【)")
+
+
+def _citation_section_lines(answer: str) -> List[str]:
+    """取「【原文引用】/【台词】」等标题下、声称逐字引用的那些行。"""
+    collecting = False
+    out = []
+    for raw in answer.split("\n"):
+        line = raw.strip()
+        if _CITATION_SECTION_HEAD_RE.match(line):
+            collecting = True
+            continue
+        if not collecting or not line:
+            continue
+        if _CITATION_SECTION_STOP_RE.match(line):
+            collecting = False
+            continue
+        out.append(line)
+    return out
+
+
+def _dialogue_payload(line: str) -> str:
+    """「角色：台词」→ 只核台词；其它形式整行核。"""
+    if "：" in line:
+        speaker, _, payload = line.partition("：")
+        if len(speaker) <= 8 and len(payload.strip()) >= 6:
+            return payload.strip()
+    return line
+
+
+_BLOCKQUOTE_DIALOGUE_RE = re.compile(r"^[>\s]*\**\s*([^：\n]{1,8})：\s*\**(.+)$")
+
+
+def _blockquote_dialogue_lines(answer: str) -> List[str]:
+    """正文里「> **角色**：台词」这种引用块台词。
+
+    模型换一种写法就能绕开【原文引用】标题（实测同一题：上一版用【原文引用】标题，下一版改用
+    引用块），所以把「角色：台词」形式的引用块也纳入核对。非台词型引用块（分析强调）不查，
+    避免把正常排版判成编造。
+    """
+    out = []
+    for raw in answer.split("\n"):
+        line = raw.strip()
+        if line.startswith(">") and _BLOCKQUOTE_DIALOGUE_RE.match(line):
+            out.append(line)
+    return out
+
+
+def _unverified_dialogue_lines(answer: str, contexts: str, min_count: int = 3,
+                               exempt_normalized: str = "") -> List[str]:
+    """【原文引用】段与引用块里的台词，是否都能在工具返回里找到出处。
+
+    单行对不上可能只是排版/省略号造成的，所以要求累计至少 min_count 行对不上才判不合格，
+    避免动辄把正常答案判成编造。exempt_normalized 里的内容（用户提问、系统提示原文）不算编造。
+    """
+    lines = _citation_section_lines(answer) + _blockquote_dialogue_lines(answer)
+    if not lines or not contexts:
+        return []
+    ctx_normalized = _strip_for_cite(contexts)
+    unverified = []
+    for line in lines:
+        payload = _dialogue_payload(line.lstrip("> ").strip()).strip("*_ ")
+        if len(payload) < 6 or "「" in payload:
+            continue
+        if not payload.strip("…。，、 "):
+            continue
+        if exempt_normalized and _strip_for_cite(payload) in exempt_normalized:
+            continue
+        if not _text_in_context(payload, ctx_normalized):
+            unverified.append(payload)
+    return unverified if len(unverified) >= min_count else []
+
+
+
+def _enforce_citation_grounding(content, messages, answer_messages, answer_llm, response_mode,
+                                run_id=None, original_query=""):
+    """引用自检：查无出处的引号 → 一次纠错重试 → 仍不合格则降级为「未收录」。
+
+    全景题（L3）例外：答案近 2 万字、证据包十几万字，重试一次成本极高，且 L3 的引号多是对长段
+    原文的节引；这类题只记 trace 供人工复核，不做重试与降级。
+    """
+    if response_mode != "found" or not content or not content.strip():
+        return content
+    contexts = "\n".join(str(m.content or "") for m in messages if isinstance(m, ToolMessage))
+    if not contexts.strip():
+        return content
+    # 用户提问与系统提示里出现过的词句不算编造（实测误报：「引蝶之章」是题面里的任务名，
+    # 而本次工具返回里恰好没有它，被当成查无出处的引用触发了一次无谓重试）。
+    exempt_normalized = _strip_for_cite(
+        original_query + "\n" + "\n".join(
+            str(m.content or "") for m in answer_messages if isinstance(m, SystemMessage)
+        )
+    )
+    unverified = [
+        q for q in _unverified_quotes(content, contexts)
+        if _strip_for_cite(q) not in exempt_normalized
+    ]
+    unverified_lines = _unverified_dialogue_lines(
+        content, contexts, exempt_normalized=exempt_normalized
+    )
+    if not unverified and not unverified_lines:
+        return content
+    panoramic = _already_full_text_panoramic(messages)
+    print(
+        f"  -> [引用自检] 查无出处：引号 {len(unverified)} 个、引用段裸行 {len(unverified_lines)} 行: "
+        f"{(unverified + unverified_lines)[:5]}"
+    )
+    trace_emit("citation_check", {
+        "run_id": run_id,
+        "unverified": unverified[:20],
+        "unverified_lines": [x[:80] for x in unverified_lines[:20]],
+        "unverified_count": len(unverified) + len(unverified_lines),
+        "panorama": panoramic,
+    })
+    if panoramic:
+        return content
+
+    retry_messages = list(answer_messages) + [SystemMessage(content=(
+        "===== 引用自检（硬规则）=====\n"
+        "上一版回答里以下内容在工具返回原文中找不到出处"
+        "（前者是标了引号的片段，后者是【原文引用】等标题下的台词/文段）：\n"
+        + "\n".join(f"- 「{q}」" for q in unverified[:10])
+        + "\n".join(f"- {line}" for line in unverified_lines[:10])
+        + "\n工具返回里没有的文字，禁止用「」标成原文引用，也禁止写进【原文引用】这类标题下。"
+        "请重写回答：删除这些内容，或改写成工具返回里真实存在的原句；不得编造，"
+        "也不得只改标点后继续当作引用。其余内容保持原有结构与详细程度。"
+    ))]
+    try:
+        retry_response = llm_invoke_with_retry(retry_messages, llm_instance=answer_llm)
+        retry_content = (getattr(retry_response, "content", "") or "").strip()
+    except Exception as e:
+        print(f"  -> [引用自检] 纠错重试失败: {type(e).__name__}: {e}")
+        retry_content = ""
+    if retry_content:
+        left = _unverified_quotes(retry_content, contexts)
+        left_lines = _unverified_dialogue_lines(retry_content, contexts)
+        if not left and not left_lines:
+            print("  -> [引用自检] 纠错重试通过，引用全部有出处")
+            trace_emit("citation_check", {"run_id": run_id, "status": "retry_ok", "unverified_count": 0})
+            return retry_content
+        print(
+            f"  -> [引用自检] 重试后仍有 引号 {len(left)} 个 / 引用段裸行 {len(left_lines)} 行，"
+            "降级为未收录"
+        )
+        trace_emit("citation_check", {
+            "run_id": run_id,
+            "status": "downgraded",
+            "unverified": left[:20],
+            "unverified_lines": [x[:80] for x in left_lines[:20]],
+            "unverified_count": len(left) + len(left_lines),
+        })
+    else:
+        print("  -> [引用自检] 重试无输出，降级为未收录")
+        trace_emit("citation_check", {"run_id": run_id, "status": "downgraded_empty"})
+    return "当前知识库未收录。"
+
+
 def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     """回答阶段：基于规划阶段的【执行报告】和工具返回结果，生成最终回答。不调用任何工具。"""
     messages = list(state.get("messages", []))
@@ -3695,6 +3921,13 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 范围守卫：概念本质题剔除组织名，对比分析题剔除题目未要求的分析维度。
     # 这是生成后校验，不依赖模型自觉；只对 R1/C1 这类结构性范围问题触发。
     content = _apply_answer_scope_guard(original_query, content, messages, state)
+
+    # 引用自检：答案里的引号片段必须在工具返回里找得到出处；查无出处先纠错重试一次，
+    # 仍不合格降级为「未收录」（L3 长答案只记 trace，不重试不降级）。
+    content = _enforce_citation_grounding(
+        content, messages, answer_messages, answer_llm, response_mode,
+        state.get("run_id"), original_query,
+    )
 
     trace_emit("llm_end", {
         "role": "answer",
