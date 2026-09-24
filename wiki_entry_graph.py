@@ -957,8 +957,20 @@ def _load_bwiki_entries() -> List[Dict[str, Any]]:
                 "file": path.name,
             }
             old = entries.get(key)
-            if old is None or len(text) > len(old["text"]):
+            if old is None:
                 entries[key] = row
+            else:
+                # 同标题 = 同一页的两次抓取，只留更长的一份；
+                # 不同标题 = 兄弟页（如 奇石历险记·其一/其二：task 同为「奇石历险记」），正文互不覆盖时都保留。
+                same_title = _norm_meta_key(old["title"]) == _norm_meta_key(title)
+                if len(text) > len(old["text"]):
+                    entries[key] = row
+                    if (not same_title and len(old["text"]) >= _SIBLING_MIN_CHARS
+                            and not _text_covered(old["text"], text)):
+                        entries[key + ("sibling", _norm_meta_key(old["title"]))] = old
+                elif (not same_title and len(text) >= _SIBLING_MIN_CHARS
+                        and not _text_covered(text, old["text"])):
+                    entries[key + ("sibling", _norm_meta_key(title))] = row
 
     # quests_processed.json 中 raw 文件没有覆盖到的任务，用 chunks 补建。
     for title, item in processed.items():
@@ -987,17 +999,25 @@ def _load_bwiki_entries() -> List[Dict[str, Any]]:
             "meta_text": _bwiki_meta_header(item.get("metadata") or {}),
             "file": "quests_processed.json",
         }
-    # 同一任务若已有带 chapter/act 的条目，丢弃无元数据的重复条目，避免建出重复节点。
-    metadata_tasks = {
-        _norm_meta_key(row["task"])
-        for row in entries.values()
-        if row["chapter"] or row["act"]
-    }
-    if metadata_tasks:
+    # 同一任务若已有带 chapter/act 的条目，丢弃无元数据的重复条目，避免建出重复节点；
+    # 但标题不同、正文没被覆盖的兄弟页要保留（霜月的祝祷·其二、受选者的诺言等曾因此被丢）。
+    metadata_rows = {}
+    for row in entries.values():
+        if row["chapter"] or row["act"]:
+            metadata_rows.setdefault(_norm_meta_key(row["task"]), row)
+    if metadata_rows:
         for key in list(entries.keys()):
             row = entries[key]
-            if (not row["chapter"] and not row["act"]) and _norm_meta_key(row["task"]) in metadata_tasks:
-                del entries[key]
+            if row["chapter"] or row["act"]:
+                continue
+            keeper = metadata_rows.get(_norm_meta_key(row["task"]))
+            if keeper is None:
+                continue
+            same_title = _norm_meta_key(keeper["title"]) == _norm_meta_key(row["title"])
+            if (not same_title and len(row["text"]) >= _SIBLING_MIN_CHARS
+                    and not _text_covered(row["text"], keeper["text"])):
+                continue  # 兄弟页，保留
+            del entries[key]
     return list(entries.values())
 
 
@@ -1020,6 +1040,39 @@ def _build_graph_key_index(graph: WikiEntryGraph) -> Dict[tuple, List[WikiEntry]
     return index
 
 
+_SIBLING_MIN_CHARS = 200  # 低于此长度的兄弟页视为模板桩，不为它单建节点
+
+
+def _sibling_norm(text: str) -> str:
+    """兄弟页覆盖度比对用的归一化：去 wikitext 模板与标点空白。"""
+    text = re.sub(r"\{\{[^{}]*\}\}", " ", text or "")
+    text = re.sub(r"\[\[([^\]|]*\|)?([^\]]*)\]\]", r"\2", text)
+    return re.sub(r"[\s\u00a0·・「」『』（）()、，。！？!?：:；;“”\"'’‘\-—=+*#>\[\]]", "", text)
+
+
+def _text_covered(needle: str, haystack: str, samples: int = 20, frag: int = 24) -> bool:
+    """needle 的正文是否已被 haystack 覆盖（抽样片段命中率 >= 0.5）。
+
+    haystack 明显更短时直接判未覆盖。用来区分「同一页的重复抓取」与「同一节点下的兄弟页」。
+    """
+    n, h = _sibling_norm(needle), _sibling_norm(haystack)
+    if not n or not h:
+        return False
+    if len(h) < len(n) * 0.6:
+        return False
+    if len(n) <= frag:
+        return n in h
+    step = max(1, (len(n) - frag) // samples)
+    hits = total = 0
+    for start in range(0, len(n) - frag, step):
+        total += 1
+        if n[start:start + frag] in h:
+            hits += 1
+        if total >= samples:
+            break
+    return total > 0 and hits / total >= 0.5
+
+
 def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
     """把 B 站 wiki 语料合并进图。
 
@@ -1036,7 +1089,9 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
         "replaced": 0,
         "created": 0,
         "skipped": 0,
+        "siblings": 0,
     }
+    absorbed_ids: set = set()  # 本轮已被某个 B 站页占用的图节点（用于识别兄弟页）
     for row in entries:
         text = row["text"]
         meta_text = str(row.get("meta_text") or "")
@@ -1055,22 +1110,36 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
                 matched = index[key]
                 used_key = key
                 break
+        sibling_rescue = False  # 本次是否为兄弟页救回（标题要用页面名而不是任务名）
         if matched:
             # 单节点命中即可合并：任务名一致时，B 站文本更长就替换主文本；多节点命中则新建节点，避免误伤。
             if len(matched) == 1:
                 entry = matched[0]
-                old_text = entry.story_text or entry.full_text or ""
-                if len(text) > len(old_text):
-                    entry.story_text = text
-                    entry.full_text = full
-                    entry.source = "bwiki"
-                    stats["replaced"] += 1
-                for alias in (chapter, act, task, row["title"]):
-                    alias = str(alias or "").strip()
-                    if alias and alias not in entry.aliases:
-                        entry.aliases.append(alias)
-                stats["merged"] += 1
-                continue
+                # 兄弟页保护：同一图节点已被本轮另一个 B 站页占用，且本页正文没有被那一页覆盖时，
+                # 「合并」只会保留最长的一份、其余静默丢弃（奇石历险记·其二等 5 页曾因此丢失），
+                # 所以这种情况改为落成独立节点。
+                if (
+                    entry.entry_id in absorbed_ids
+                    and len(text) >= _SIBLING_MIN_CHARS
+                    and not _text_covered(text, entry.story_text or "")
+                ):
+                    stats["siblings"] += 1
+                    sibling_rescue = True
+                    # 落到下面的新建分支
+                else:
+                    old_text = entry.story_text or entry.full_text or ""
+                    if len(text) > len(old_text):
+                        entry.story_text = text
+                        entry.full_text = full
+                        entry.source = "bwiki"
+                        stats["replaced"] += 1
+                    for alias in (chapter, act, task, row["title"]):
+                        alias = str(alias or "").strip()
+                        if alias and alias not in entry.aliases:
+                            entry.aliases.append(alias)
+                    absorbed_ids.add(entry.entry_id)
+                    stats["merged"] += 1
+                    continue
             # 一对多/弱匹配：保留图节点，落成新的 B 站节点。
         entry_id = "bwiki_" + hashlib.sha1(
             f"{chapter}|{act}|{task}|{row['title']}".encode("utf-8")
@@ -1092,7 +1161,7 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
         graph.add(
             WikiEntry(
                 entry_id=entry_id,
-                title=row["title"] if entry_type == "activity" else task,
+                title=row["title"] if (entry_type == "activity" or sibling_rescue) else task,
                 entry_type=entry_type,
                 full_text=full,
                 story_text=text,
