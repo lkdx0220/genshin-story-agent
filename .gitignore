@@ -46,3 +46,6 @@ _crawl_manifest.json
 _crawl_content_queue.json
 _wiki_metadata_cache.json
 _wiki_metadata_武器_cache.json
+
+# 知识库图谱资产（约 29MB 构建产物，随 GitHub Release 分发，不入库）
+kb-graph-schema4-*.zip

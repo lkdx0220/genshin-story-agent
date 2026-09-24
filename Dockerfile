@@ -20,8 +20,8 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 # 知识库资产：默认从公开 Release 下载；离线/自建场景可用 --build-arg 覆盖为本地 HTTP 地址。
 ARG KB_VECTORS_URL=https://github.com/lkdx0220/genshin-story-agent/releases/download/kb-2026.09.10/kb-vectors-text-embedding-v4-2026.09.10.zip
 ARG KB_VECTORS_SHA256=96e7c78184ae1c6e1b5aac1cdf8a9a19714637c79d85e3d056bdd651392021ab
-ARG KB_GRAPH_URL=https://github.com/lkdx0220/genshin-story-agent/releases/download/kb-2026.09.10/kb-graph-schema4-20260912.zip
-ARG KB_GRAPH_SHA256=92f139b38aacd2374e61477f5461b2a27ae779c3de3316b4490a4f489bd538ba
+ARG KB_GRAPH_URL=https://github.com/lkdx0220/genshin-story-agent/releases/download/kb-2026.09.10/kb-graph-schema4-20260925.zip
+ARG KB_GRAPH_SHA256=d2f291520556ac430b10e97d46f2e7835a28edc8f53a064182a8267d7e56d873
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
