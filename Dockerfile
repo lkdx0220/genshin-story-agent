@@ -35,6 +35,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# 确保 urllib 能验证 GitHub HTTPS 证书
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 # 下载并校验知识库资产；图谱 schema4 包后解压，覆盖旧向量包内的 schema3 图谱。
 COPY download_kb_assets.py ./
 RUN python download_kb_assets.py /app \
