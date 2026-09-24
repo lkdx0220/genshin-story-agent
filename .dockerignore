@@ -23,10 +23,10 @@
 **/*.bak*
 **/*.before_fold
 
-# ---- 向量库：只保留 v4 六集合（docs/meta/vectors）与词条图两个 JSON ----
+# ---- 向量库：不入构建上下文，Dockerfile 从 Release 下载并校验 ----
+kb_vectors/
 kb_vectors_m3/
-kb_vectors/_backup*/
-kb_vectors/_rebuild_quests_ckpt.json
+kb-*.zip
 
 # ---- 语料：只保留运行时读盘的那批 ----
 content_data/wiki_raw/
