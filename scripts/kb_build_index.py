@@ -564,26 +564,7 @@ def index_characters(store: KBVectorStore):
         else:
             identities_str = str(identities)
 
-        # 拼接角色故事
-        stories = role.get("角色故事", {})
-        stories_text = ""
-        if stories:
-            for sk, sv in stories.items():
-                stories_text += f"\n[{sk}]\n{sv[:500]}"
-        stories_text = stories_text[:2000]
-
-        # 文档内容
-        doc = (
-            f"【{name}】{title_tag}  {element}元素  {weapon}  {region}\n"
-            f"身份: {identities_str}\n"
-            f"简介: {description}\n"
-            f"角色故事:{stories_text}"
-        )
-
-        char_id = f"character:{name}"
-        ids.append(char_id)
-        docs.append(doc)
-        metas.append({
+        base_meta = {
             "source_file": "角色知识库",
             "title": name,
             "entry_type": "角色",
@@ -597,10 +578,34 @@ def index_characters(store: KBVectorStore):
             "weapon": weapon,
             "region": region,
             "rarity": rarity,
-        })
+        }
+
+        # 主条目：基础信息 + 简介，保留角色级检索能力
+        ids.append(f"character:{name}")
+        docs.append(
+            f"【{name}】{title_tag}  {element}元素  {weapon}  {region}\n"
+            f"身份: {identities_str}\n"
+            f"简介: {description}\n"
+        )
+        metas.append(dict(base_meta, entry_type="角色", section="基础信息"))
+
+        # 角色档案逐段索引：角色详细 / 角色故事1~5 / 特殊档案（如多目标烹饪机关组）/ 神之眼
+        stories = role.get("角色故事", {})
+        for sk, sv in stories.items():
+            if not sv:
+                continue
+            section_meta = dict(
+                base_meta,
+                entry_type="角色档案",
+                section=sk,
+                text_preview=str(sv)[:200],
+            )
+            ids.append(f"character:{name}:{sk}")
+            docs.append(f"【{name}】{title_tag}\n[{sk}]\n{sv}")
+            metas.append(section_meta)
 
     store.add("kb_characters", ids, docs, metas)
-    print(f"  角色索引完成: {len(角色知识库)} 条")
+    print(f"  角色索引完成: {len(角色知识库)} 位角色，共 {len(ids)} 条向量（主条目 + 档案段落）")
 
 
 def index_npcs(store: KBVectorStore):

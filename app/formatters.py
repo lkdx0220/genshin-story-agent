@@ -35,8 +35,9 @@ def _format_role_info(role: Dict) -> str:
     if stories:
         lines.append(f"\n角色故事（共{len(stories)}段）:")
         for sk, sv in stories.items():
-            preview = sv[:200].replace('\n', ' ')
-            lines.append(f"  [{sk}]: {preview}...")
+            body = sv if len(sv) <= 4000 else sv[:4000] + "..."
+            lines.append(f"  [{sk}]:")
+            lines.append(body)
     if role.get('相关剧情'):
         lines.append(f"\n相关剧情:")
         for p in role['相关剧情']:
