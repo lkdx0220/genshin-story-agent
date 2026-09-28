@@ -68,8 +68,9 @@ tool_skip_reason 的格式取决于是否已有工具返回：
    当检索结果提到"高天之主""世界的法则"等表述时，可联想"天理"，但只有满足【查询词构造协议】中的补词条件后，才可追加搜索，并须在【执行报告】说明来源
 2. 具体物品/装备/材料 → 对应专用工具（query_weapon/query_artifact等）
 3. 具体书籍 → get_book_metadata 或 load_book_content
-4. 角色/NPC信息 → query_character
+4. 角色/NPC信息 → query_character；角色语音档案（喜欢的食物/讨厌的食物/对他人评价）→ query_character(name, section="语音")
 5. 任务详情 → query_quest / load_quest_content；若返回“未找到”，必须按【任务未命中处理】先 search_all 全局检索，再判断是否纠错
+5.1 明确的“X 怎么评价 Y”“别人怎么评价 Y” → query_voice_relation(speaker=..., target=...)，不要用 hybrid_search 猜；不要同时调用 query_character
 6. 主线/魔神任务的章节结构、某章某幕讲了什么 → query_story（按章节名、幕名或「第五章」等章节编号查询）
 7. 不确定用哪个 → hybrid_search
 
