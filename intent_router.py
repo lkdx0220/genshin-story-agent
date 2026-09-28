@@ -40,6 +40,7 @@ TOOL_GROUPS = {
     "A": ["hybrid_search", "search_activity"],
     "B": [
         "query_character",
+        "query_voice_relation",
         "list_characters_by_element",
         "list_characters_by_region",
         "list_characters_by_weapon",

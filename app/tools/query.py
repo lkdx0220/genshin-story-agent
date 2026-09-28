@@ -20,6 +20,118 @@ from app.formatters import (
 )
 from character_aliases import ALIAS_MAP, resolve_aliases
 
+_VOICE_PROFILE_PATH = os.path.join(CONTENT_DIR, "character_voices.json")
+_VOICE_RELATION_PATH = os.path.join(CONTENT_DIR, "voice_relations.json")
+_voice_profile_cache = None
+_voice_relation_cache = None
+
+
+def _load_voice_profiles():
+    global _voice_profile_cache
+    if _voice_profile_cache is None:
+        try:
+            with open(_VOICE_PROFILE_PATH, "r", encoding="utf-8") as f:
+                _voice_profile_cache = json.load(f)
+        except Exception:
+            _voice_profile_cache = {"characters": {}}
+    return _voice_profile_cache
+
+
+def _load_voice_relations():
+    global _voice_relation_cache
+    if _voice_relation_cache is None:
+        try:
+            with open(_VOICE_RELATION_PATH, "r", encoding="utf-8") as f:
+                _voice_relation_cache = json.load(f)
+        except Exception:
+            _voice_relation_cache = {"edges": []}
+    return _voice_relation_cache
+
+
+def _voice_norm(s):
+    if not s:
+        return ""
+    s = s.strip().strip("「」『』《》\"' ")
+    return re.sub(r"\s+", "", s)
+
+
+def _voice_alias_set(raw):
+    if not raw:
+        return set()
+    keys = {raw.strip()}
+    for c in resolve_aliases(raw):
+        if c:
+            keys.add(c.strip())
+    canon = ALIAS_MAP.get(raw.strip())
+    if canon:
+        keys.add(canon)
+    return {_voice_norm(k) for k in keys if _voice_norm(k)}
+
+
+def _voice_match(edge_value, query):
+    return bool(_voice_alias_set(edge_value) & _voice_alias_set(query))
+
+
+def _voice_coverage_message(name):
+    return (f"「{name}」没有可用的语音档案或评价记录。"
+            f"语音档案目前仅覆盖可操控角色；NPC 自身没有语音档案。")
+
+
+def _format_voice_profile(name):
+    item = (_load_voice_profiles().get("characters") or {}).get(name)
+    if not item:
+        return _voice_coverage_message(name)
+    lines = [f"\n{'='*50}", f"【{name}】语音档案（汉语）"]
+    profile = item.get("profile") or []
+    if profile:
+        lines.append("\n档案类语音:")
+        for row in profile:
+            lines.append(f"  [{row.get('line_name','')}] {row.get('content','')}")
+    situation = item.get("situation") or []
+    if situation:
+        lines.append(f"\n情境/其他语音: 共 {len(situation)} 条（未展开）")
+    lines.append(f"\n关系语音: 本角色评价过 {item.get('outgoing_relation_count',0)} 个对象；"
+                 f"被 {item.get('incoming_relation_count',0)} 个对象评价过。")
+    lines.append("如需查询具体评价，请使用 query_voice_relation(speaker=..., target=...)。")
+    lines.append(f"{'='*50}")
+    return "\n".join(lines)
+
+
+def _format_voice_edges(edges, speaker="", target=""):
+    if not edges:
+        return "未找到相关的语音评价。"
+    total = len(edges)
+    if total > 80:
+        edges = edges[:80]
+    lines = [f"\n{'='*50}"]
+    if speaker and target:
+        lines.append(f"【{speaker} → {target}】语音评价")
+        for e in edges:
+            lines.append(f"  [{e.get('line_name','')}] {e.get('content','')}")
+    elif speaker:
+        lines.append(f"【{speaker}】评价过的对象")
+        grouped = {}
+        for e in edges:
+            grouped.setdefault(e.get("target", ""), []).append(e)
+        for t, rows in grouped.items():
+            lines.append(f"\n→ {t}（{len(rows)} 条）")
+            for e in rows:
+                lines.append(f"  [{e.get('line_name','')}] {e.get('content','')}")
+    else:
+        lines.append(f"【{target}】收到的语音评价")
+        grouped = {}
+        for e in edges:
+            grouped.setdefault(e.get("speaker", ""), []).append(e)
+        for s, rows in grouped.items():
+            lines.append(f"\n← {s}（{len(rows)} 条）")
+            for e in rows:
+                lines.append(f"  [{e.get('line_name','')}] {e.get('content','')}")
+    if total > 80:
+        lines.append(f"\n（共 {total} 条，仅展示前 80 条）")
+    lines.append(f"{'='*50}")
+    return "\n".join(lines)
+
+
 
 # 戏称映射：角色名 → 被戏称为该角色传说任务的版本活动
 FAKE_LEGEND_QUESTS = {
@@ -45,9 +157,10 @@ TRIBAL_CHRONICLES = {
 
 
 @tool
-def query_character(name: str) -> str:
-    """查询原神角色详细信息。name: 角色名称或常用别名（如\"胡桃\"、\"钟离\"、\"散兵\"）"""
-    # 别名反向展开：散兵 → 流浪者，确保社区常用名能查到规范名资料
+def query_character(name: str, section: str = "") -> str:
+    """查询原神角色详细信息。section 可选，填“语音”时返回角色语音档案。name: 角色名称或常用别名。"""
+    section = (section or "").strip()
+    voice_mode = section in ("语音", "voice", "语音档案", "档案")
     candidates = []
     seen = set()
     for candidate in resolve_aliases(name):
@@ -55,22 +168,50 @@ def query_character(name: str) -> str:
         if c and c not in seen:
             seen.add(c)
             candidates.append(c)
-    # 原始 name 放在最前，保持精确匹配优先级
     candidates = [name] + [c for c in candidates if c != name]
 
     for candidate in candidates:
         for role in 角色知识库:
             if candidate in role.get("角色名称", "") or candidate in role.get("称号", ""):
                 print(f"[工具] 查询角色: {name} -> {candidate}")
+                if voice_mode:
+                    return _format_voice_profile(role["角色名称"])
                 return _format_role_info(role)
 
-        # 兜底：查 NPC 数据
         npc = _npcs_data.get(candidate)
         if npc:
             print(f"[工具] 查询NPC: {name} -> {candidate}")
+            if voice_mode:
+                return _voice_coverage_message(candidate)
             return _format_npc_info(candidate, npc)
 
+    if voice_mode:
+        return _voice_coverage_message(name)
     return f"未找到角色「{name}」的信息。知识库还在完善中，建议前往 Bilibili Wiki 查看。"
+
+
+@tool
+def query_voice_relation(speaker: str = "", target: str = "") -> str:
+    """查询角色语音评价关系。speaker: 评价者；target: 被评价者。两者至少填一个，可只填一个做列表查询。"""
+    speaker = (speaker or "").strip()
+    target = (target or "").strip()
+    if not speaker and not target:
+        return "请至少提供 speaker 或 target 参数。"
+    edges = _load_voice_relations().get("edges") or []
+    matched = []
+    for e in edges:
+        if speaker and not _voice_match(e.get("speaker", ""), speaker):
+            continue
+        if target and not _voice_match(e.get("target", ""), target):
+            continue
+        matched.append(e)
+    if not matched:
+        if speaker and target:
+            return f"没有找到「{speaker}」评价「{target}」的语音记录。"
+        if speaker:
+            return f"没有找到「{speaker}」的语音评价记录。{_voice_coverage_message(speaker)}"
+        return f"没有找到评价「{target}」的语音记录。{_voice_coverage_message(target)}"
+    return _format_voice_edges(matched, speaker, target)
 
 
 @tool
@@ -558,6 +699,6 @@ def get_book_metadata(book_name: str) -> str:
     volumes = re.findall(r"【卷(\d+)内容】\s*([^\n]{0,24})", text)
     if volumes:
         lines.append("卷目录: " + " / ".join(f"卷{n} {t.strip()}".strip() for n, t in volumes))
-    if len(text) > 3000:
-        lines.append(f"正文长度: {len(text)} 字（超过 3000 字，load_book_content 会分页返回，用 part 参数逐页读完）")
+    if len(text) > 13000:
+        lines.append(f"正文长度: {len(text)} 字（超过 13000 字，load_book_content 会分页返回，用 part 参数逐页读完）")
     return "\n".join(lines)

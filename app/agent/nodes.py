@@ -598,6 +598,12 @@ def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             except Exception:
                 response = AIMessage(content=f"抱歉，处理出错：{e}")
         content = response.content if hasattr(response, 'content') else ''
+        # 空内容兜底：与下方正常收尾分支保持一致——工具已执行、模型却吐空串时，
+        # 不能把空串交给用户（前端会渲染成「（无回复）」）。
+        if not content or not content.strip():
+            print("  -> 强制回答返回空内容，使用未收录兜底")
+            trace_emit("fast_empty_fallback", {"iteration": iteration + 1, "run_id": state.get("run_id")})
+            content = "当前知识库未收录。"
         return {
             "messages": messages,
             "final_response": content,
@@ -3063,6 +3069,7 @@ def _should_return_raw_metadata(original_query: str) -> bool:
 DIRECT_ANSWER_TOOLS = {
     "get_book_metadata",
     "query_character",
+    "query_voice_relation",
     "query_region",
     "query_weapon",
     "query_artifact",
@@ -3121,6 +3128,94 @@ def _get_direct_metadata_answer(messages: list, original_query: str = "") -> str
     return "\n\n".join(parts)
 
 
+def _round_tool_messages(messages) -> List[ToolMessage]:
+    """最近一轮（最后一条带 tool_calls 的 AIMessage 之后）的 ToolMessage 列表。"""
+    out: List[ToolMessage] = []
+    for msg in reversed(messages or []):
+        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            break
+        if isinstance(msg, ToolMessage):
+            out.append(msg)
+        elif not isinstance(msg, AIMessage):
+            break
+    return list(reversed(out))
+
+
+def _evidence_weak_messages(messages) -> List[ToolMessage]:
+    """本轮里带「弱证据」标记的检索结果（标记与检索层共用同一常量）。"""
+    try:
+        from app.retrieval import EVIDENCE_STRENGTH_TAG, EVIDENCE_WEAK_MARK
+
+        weak_mark = f"{EVIDENCE_STRENGTH_TAG} {EVIDENCE_WEAK_MARK}"
+    except Exception:
+        return []
+    return [m for m in _round_tool_messages(messages)
+            if weak_mark in str(getattr(m, "content", "") or "")]
+
+
+_EVIDENCE_CONFIRM_PROMPT = (
+    "下面是从知识库检索到的片段。请判断：这些片段是否包含回答用户问题所需的信息？\n"
+    "只输出一个词：是 或 否。不要输出任何其他内容。\n\n"
+    "用户问题：{question}\n\n检索片段：\n{snippets}"
+)
+
+
+def _confirm_weak_evidence(state) -> None:
+    """规划层确定性确认：本轮全是弱证据时交给便宜裁判，判否则改写成未找到。
+
+    触发条件由代码判定（同源标记 + 本轮无强证据），裁判调用失败一律 fail-open；
+    仅在 RELEVANCE_GATE >= 2 时生效。
+    """
+    try:
+        from app.retrieval import RELEVANCE_GATE, EVIDENCE_STRENGTH_TAG
+
+        if RELEVANCE_GATE < 2:
+            return
+        strong_mark = f"{EVIDENCE_STRENGTH_TAG} 强"
+    except Exception:
+        return
+
+    messages = state.get("messages", []) or []
+    weak = _evidence_weak_messages(messages)
+    if not weak:
+        return
+    # 本轮只要有一条强证据就不确认：多跳检索里弱召回常常是补充信息
+    if any(strong_mark in str(getattr(m, "content", "") or "")
+           for m in _round_tool_messages(messages)):
+        return
+
+    question = ""
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            question = str(msg.content or "")
+            break
+    snippets = "\n---\n".join(str(getattr(m, "content", "") or "")[:300] for m in weak)[:3000]
+    prompt = _EVIDENCE_CONFIRM_PROMPT.format(question=question[:500], snippets=snippets)
+    try:
+        resp = mechanism_judge_llm.invoke([HumanMessage(content=prompt)])
+        verdict = (getattr(resp, "content", "") or "").strip()
+    except Exception as e:
+        print(f"  -> [相关性闸门] 裁判调用失败（fail-open）: {type(e).__name__}")
+        trace_emit("relevance_gate", {"stage": "confirm", "verdict": "error", "action": "fail_open"})
+        return
+
+    rejected = verdict.startswith("否") or verdict.upper().startswith("NO")
+    trace_emit("relevance_gate", {
+        "stage": "confirm",
+        "verdict": "否" if rejected else "是",
+        "raw": verdict[:20],
+        "weak_count": len(weak),
+        "action": "downgrade" if rejected else "pass",
+    })
+    if not rejected:
+        return
+    # 只降级不删除：原文仍在 trace/日志；这里改写成标准未找到文案，
+    # 让既有熔断按「连续未找到」自然计数，不新造机制。
+    for m in weak:
+        m.content = f"未找到与「{question[:40]}」相关的内容（相关性确认未通过）。"
+    print(f"  -> [相关性闸门] 裁判判否，已降级 {len(weak)} 条弱证据")
+
+
 def route_after_tools(state: GenshinAdvisorState) -> str:
     """工具执行后路由：L1 路径回 fast_agent，L2 路径回 plan_agent（含熔断逻辑）"""
     # L1 路径：工具执行后回 fast_agent
@@ -3136,6 +3231,10 @@ def route_after_tools(state: GenshinAdvisorState) -> str:
     if state.get("final_response"):
         return "answer_agent"
 
+    # 规划层确定性确认：本轮全是弱证据且裁判判否时，把结果改写成未找到，
+    # 下面按既有「连续未找到」口径自然计数（阶段 2 才生效）
+    _confirm_weak_evidence(state)
+
     # 从后往前，找到最近一轮 AIMessage（含 tool_calls）之后的所有 ToolMessage
     failures = 0
     for msg in reversed(messages):
@@ -3150,28 +3249,40 @@ def route_after_tools(state: GenshinAdvisorState) -> str:
         if not isinstance(msg, ToolMessage) and not isinstance(msg, AIMessage):
             break
 
-    # 如果整个会话中已有任意成功的工具返回（例如已加载任务全文），
-    # 后续补充查询失败不能把核心内容一并熔断掉，允许 Plan 继续或进入回答。
+    # 只看本轮（最近一条 HumanMessage 之后）的工具返回：多轮会话里历史轮次的成功
+    # 不应永久关闭熔断（旧实现扫全会话，一旦历史上有成功，熔断此后再也不会触发）。
+    turn_start = 0
+    for idx, msg in enumerate(messages):
+        if isinstance(msg, HumanMessage):
+            turn_start = idx
     has_any_success = False
-    for msg in messages:
+    for msg in messages[turn_start:]:
         if isinstance(msg, ToolMessage):
             text = str(getattr(msg, "content", "") or "")
             if not _is_not_found(msg) and "系统拦截" not in text:
                 has_any_success = True
                 break
 
-    if failures >= 2 and not has_any_success:
-        print(f"  -> 连续失败熔断({failures}次)，进入回答阶段")
+    # 相关性确认判否的次数：连续两轮被判否时不再等 has_any_success（早退保护）
+    rejected = sum(1 for msg in messages[turn_start:]
+                   if isinstance(msg, ToolMessage)
+                   and "相关性确认未通过" in str(getattr(msg, "content", "") or ""))
+
+    if (failures >= 2 and not has_any_success) or rejected >= 2:
+        if rejected >= 2:
+            print(f"  -> 相关性确认连续判否({rejected}次)，进入回答阶段")
+            hint = ('\n\n[系统提示] 连续 2 轮检索均未通过相关性确认（检索到的内容与问题无关），'
+                    '已触发熔断。请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。')
+        else:
+            print(f"  -> 连续失败熔断({failures}次)，进入回答阶段")
+            hint = ('\n\n[系统提示] 连续 2 轮搜索均未找到结果，已触发连续失败熔断。'
+                    '请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。')
         # 修改最新 AIMessage 的 tool_calls 为空，阻止执行
         for msg in reversed(messages):
             if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
                 msg.tool_calls = []
                 msg.additional_kwargs = {}
-                new_content = (msg.content or '') + (
-                    '\n\n[系统提示] 连续 2 轮搜索均未找到结果，已触发连续失败熔断。'
-                    '请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。'
-                )
-                msg.content = new_content
+                msg.content = (msg.content or '') + hint
                 break
         return "answer_agent"
 

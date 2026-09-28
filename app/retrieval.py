@@ -172,6 +172,109 @@ def _expand_query_with_aliases(query: str) -> List[str]:
 VECTOR_MIN_SIMILARITY = 0.35
 # 关键词路/rerank 最低相关分：先保守取值，后续用 bad case 集标定。
 RERANK_MIN_SCORE = 0.25
+
+# ====== 相关性闸门（阶段开关 + 阈值）======
+# 0 = 关闭（完全旧行为）；1 = 埋点（只记录不拒绝，默认）；2 = 执行（硬闸拒绝 + 弱证据标注 + 规划层确认）
+RELEVANCE_GATE = int(os.getenv("RELEVANCE_GATE", "1") or "1")
+# 证据强度标注：检索层写、规划层读，两边必须引用同一常量，否则字符串迟早漂移
+EVIDENCE_STRENGTH_TAG = "[证据强度]"
+EVIDENCE_WEAK_MARK = "弱"
+# 阈值按嵌入后端区分：分数尺度随后端不同（bge-m3 与 text-embedding-v4 不可混用），禁止裸写数字。
+# bge-m3 一行是 2026-09-20 用 16 条查询实测标定；v4 未标定 → 取到 None 时必须 fail-open（只记录不拒绝）。
+RELEVANCE_THRESHOLDS = {
+    "bge-m3": {"hard_top1": 0.50, "hard_kw_top1": 0.42, "weak_top1": 0.60, "rrf_min": 0.45},
+    "text-embedding-v4": None,
+}
+
+
+def _relevance_thresholds(backend: str):
+    """按嵌入后端取阈值配置；未标定的后端返回 None，调用方必须 fail-open。"""
+    return RELEVANCE_THRESHOLDS.get(backend or "")
+
+
+def _emit_relevance_signal(query: str, kw_hits: int, top1: float, top2, backend: str,
+                           thresholds, stage: int) -> str:
+    """埋点/执行共用的相关性信号记录：打印 + trace 事件，返回判定结论。
+
+    阶段 1 只调用本函数记录，不改检索输出；阶段 2 起据返回的结论做拒绝与标注。
+    """
+    delta = (top1 - top2) if top2 is not None else 0.0
+    if thresholds is None:
+        verdict = "未标定（fail-open）"
+    elif kw_hits == 0 and top1 < thresholds["hard_top1"]:
+        verdict = "硬拒（R2）"
+    elif kw_hits > 0 and top1 < thresholds["hard_kw_top1"]:
+        verdict = "硬拒（R3）"
+    elif kw_hits == 0 and top1 < thresholds["weak_top1"]:
+        verdict = "弱（应触发确认）"
+    else:
+        verdict = "强"
+    print(f"  -> [相关性埋点] 「{query}」关键词 {kw_hits}｜top1 {top1:.4f}｜差值 {delta:.4f}"
+          f"｜后端 {backend or '未知'}｜判定 {verdict}（阶段 {stage}）")
+    try:
+        from app.trace_recorder import emit as _emit
+
+        _emit("relevance_gate", {
+            "query": query,
+            "kw_hits": kw_hits,
+            "top1": round(top1, 4),
+            "top2": round(top2, 4) if top2 is not None else None,
+            "delta": round(delta, 4),
+            "backend": backend,
+            "thresholds_calibrated": thresholds is not None,
+            "verdict": verdict,
+            "stage": stage,
+        })
+    except Exception as e:
+        print(f"  -> [相关性埋点] trace 写入失败: {type(e).__name__}")
+    return verdict
+
+
+def format_evidence_line(kw_hits: int, top1: float, delta: float) -> str:
+    """拼「弱证据」标注行：检索层写、规划层解析，格式必须只在本处定义。"""
+    return (f"{EVIDENCE_STRENGTH_TAG} {EVIDENCE_WEAK_MARK}"
+            f"（关键词 {kw_hits}｜最高相似度 {top1:.4f}｜分差 {delta:.4f}）")
+
+
+def _trace_relevance(event: str, data: dict) -> None:
+    """写 trace 事件（trace 失败不影响检索主流程）。"""
+    try:
+        from app.trace_recorder import emit as _emit
+
+        _emit(event, data)
+    except Exception as e:
+        print(f"  -> [相关性闸门] trace 写入失败: {type(e).__name__}")
+
+
+_NAMED_QUOTE_RE = re.compile(r"[「『《\"“]([^」』》\"”]{2,40})[」』》\"”]")
+
+
+def _missing_named_quotes(query: str) -> list:
+    """R0：查询里带具名引用（「」『』《》引号）但全库逐字查不到的专名。
+
+    只对带明确引号的查询启用——高精确、零误伤；无引号的交给 R1-R4 与规划层确认。
+    """
+    missing = []
+    for name in _NAMED_QUOTE_RE.findall(query or ""):
+        name = name.strip()
+        if not name or name in missing:
+            continue
+        try:
+            # 先查标题注册表（便宜且精确）
+            if any(name in str(t) for t in TITLE_REGISTRY):
+                continue
+            # 关键词路是模糊匹配（「浮世记」会命中「浮世…」），必须逐字确认正文里有没有
+            hits = _keyword_search_docs(name, top_k=15)
+            if not any(name in str(d.get("document", "")) for d in hits):
+                missing.append(name)
+        except Exception as e:
+            print(f"  -> [相关性闸门] R0 查证失败，跳过: {type(e).__name__}")
+    return missing
+
+
+def _relevance_threshold_or_none(backend: str):
+    """语义化别名：未标定的后端返回 None，调用方必须 fail-open。"""
+    return _relevance_thresholds(backend)
 # 常见停用字/词：关键词路禁止“只命中这些字”的候选进入 RRF。
 _COMMON_STOPWORDS = {
     "的", "了", "是", "人", "我", "你", "他", "她", "它", "我们", "你们", "他们",
@@ -757,17 +860,50 @@ def hybrid_search(query: str, top_k: int = 10) -> str:
     # 延迟导入避免循环依赖（_vector_store 在 data.py 顶层初始化）
     from app.data import _vector_store
 
+    _backend = getattr(_vector_store, "embedding_backend", "") if _vector_store is not None else ""
+    _conf = _relevance_thresholds(_backend)
+    _verdict = ""
+    _top1 = 0.0
+    _delta = 0.0
+
+    # 阶段 2 · R0：具名引用守卫（确定性，零 LLM）——点名的专名全库查不到就直接拒答
+    if RELEVANCE_GATE >= 2:
+        _missing = _missing_named_quotes(query)
+        if _missing:
+            print(f"  -> [相关性闸门] R0 具名引用查无出处：{_missing[0]}")
+            _trace_relevance("relevance_gate", {
+                "query": query, "verdict": "硬拒（R0）",
+                "missing_name": _missing[0], "stage": RELEVANCE_GATE,
+            })
+            return f"混合检索未找到与「{_missing[0]}」相关的内容。"
+
     # 关键词路
     kw_docs = _keyword_search_docs(query, top_k=max(top_k, 15))
-    # 向量路：仅搜索当前有效集合
+    # 向量路：仅搜索当前有效集合；阶段 2 起用按后端标定的下限（未标定则退回常量）
+    _min_sim = VECTOR_MIN_SIMILARITY
+    if RELEVANCE_GATE >= 2 and _conf:
+        _min_sim = _conf["rrf_min"]
     vec_docs = []
+    vec_raw = []
     if _vector_store is not None:
         vec_raw = _vector_store.search(query, top_k=max(top_k, 15), collection=None)
         # 向量路质量过滤：低于最低相似度的弱召回直接丢弃，不进入 RRF。
-        vec_docs = [d for d in vec_raw if d.get("score", 0.0) >= VECTOR_MIN_SIMILARITY]
+        vec_docs = [d for d in vec_raw if d.get("score", 0.0) >= _min_sim]
 
     # RRF 融合
     merged = _rrf_fusion(kw_docs, vec_docs, k=60)
+
+    # 相关性信号：阶段 1 只记录（不改输出），阶段 2 起据结论拒绝与标注
+    if RELEVANCE_GATE >= 1:
+        raw_scores = sorted((d.get("score", 0.0) for d in vec_raw), reverse=True)
+        _top1 = raw_scores[0] if raw_scores else 0.0
+        _top2 = raw_scores[1] if len(raw_scores) > 1 else None
+        _delta = (_top1 - _top2) if _top2 is not None else 0.0
+        _verdict = _emit_relevance_signal(query, len(kw_docs), _top1, _top2, _backend,
+                                          _conf, RELEVANCE_GATE)
+        if RELEVANCE_GATE >= 2 and _verdict.startswith("硬拒"):
+            print(f"  -> [相关性闸门] {_verdict}，直接拒答：{query}")
+            return f"混合检索未找到与「{query}」相关的内容。"
 
     # 取 top_k 结果
     top_keys = [key for key, _ in merged[:top_k]]
@@ -830,6 +966,9 @@ def hybrid_search(query: str, top_k: int = 10) -> str:
 
     if not top_keys:
         return f"混合检索未找到与「{query}」相关的内容。"
+    # 阶段 2 · R4：弱证据在结果尾部标注（供规划层同源解析并触发确认）
+    if RELEVANCE_GATE >= 2 and _verdict.startswith("弱"):
+        lines.append("\n" + format_evidence_line(len(kw_docs), _top1, _delta))
     return "\n".join(lines)
 
 

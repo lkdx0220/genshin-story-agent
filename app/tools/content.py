@@ -20,7 +20,7 @@ from app.data import (
 from app.retrieval import SimpleBM25, _rerank
 
 
-_PAGE_CHARS = 3000  # 每页正文预算（与改造前的 preview 上限一致，避免单次返回膨胀）
+_PAGE_CHARS = 13000  # 每页正文预算：13000 字以内整本一次给全（104/105 本书走这条路），超长书才分页
 _VOLUME_RE = re.compile(r"【卷(\d+)内容】\s*([^\n]{0,24})")
 
 
