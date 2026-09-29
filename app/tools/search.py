@@ -12,7 +12,7 @@ from langchain_core.tools import tool
 from app.config import CONTENT_DIR
 from app.data import (
     角色知识库, 地区知识库, 主线剧情知识库, 武器知识库, 任务知识库,
-    圣遗物知识库, _npcs_data, _match_all_in, _load_content_json, _normalize_for_match,
+    圣遗物知识库, _npcs_data, _match_all_in, _load_content_json,
 )
 from app.formatters import (
     _format_role_info, _format_region_info, _format_story_info,
@@ -478,7 +478,6 @@ def search_world(query: str) -> str:
     for art in 圣遗物知识库:
         if not isinstance(art, dict):
             continue
-        art_hay = str(art.get("圣遗物名称", ""))
         stories = art.get("部位故事", {})
         if isinstance(stories, dict):
             for key, val in stories.items():

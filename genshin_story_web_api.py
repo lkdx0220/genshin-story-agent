@@ -17,7 +17,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict
 
 # 本地默认走 HF 镜像并禁网（避免启动时探测 huggingface.co）；容器/云端部署用官方端点。
 if os.getenv("CLOUD_DEPLOY") != "1":
@@ -526,7 +526,7 @@ def api_weapon():
         return jsonify({"error": "缺少 weapon 参数"}), 400
     try:
         result = tool.invoke(data["weapon"])
-    except Exception as e:
+    except Exception:
         return jsonify({"error": "查询武器信息失败"}), 500
     return jsonify({"success": True, "result": result})
 

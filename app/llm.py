@@ -16,9 +16,7 @@ Qwen 实例统一使用 QwenFallbackChatOpenAI：
   回退时恢复 qwen-plus（保持“一开始的样子”）。
 """
 import time
-from typing import List
 
-from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 from app.config import (
