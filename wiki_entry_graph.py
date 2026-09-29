@@ -16,6 +16,7 @@ import html
 import json
 import os
 import re
+import tempfile
 import time
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -320,7 +321,20 @@ class WikiEntryGraph:
 
     @classmethod
     def load(cls, path: Path) -> "WikiEntryGraph":
-        with open(path, "r", encoding="utf-8") as f:
+        """从 JSON 文件加载词条图。
+
+        路径加固（S8707）：只接受 .json，且解析后的绝对路径必须落在允许的根目录内
+        （项目目录 / KB_GRAPH_DIR / 系统临时目录）——CLI 或环境变量传入 ../.. 也无法逃逸。
+        """
+        candidate = Path(path).expanduser()
+        if candidate.suffix != ".json":
+            raise ValueError(f"词条图必须是 .json 文件：{candidate.name}")
+        resolved = candidate.resolve()
+        roots = [BASE_DIR.resolve(), Path(os.getenv("KB_GRAPH_DIR") or BASE_DIR).resolve(),
+                 Path(tempfile.gettempdir()).resolve()]
+        if not any(resolved == root or root in resolved.parents for root in roots):
+            raise ValueError(f"词条图路径越界（只允许项目目录/KB_GRAPH_DIR/临时目录）：{resolved}")
+        with open(resolved, "r", encoding="utf-8") as f:
             return cls.from_dict(json.load(f))
 
 
@@ -729,8 +743,9 @@ def build_entry_from_raw(
     if not isinstance(page, dict) or not page.get("id"):
         return None
     filters = _parse_filters(item)
-    content_hash = hashlib.sha1(
-        json.dumps(page, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    content_hash = hashlib.sha1(  # usedforsecurity=False：用于内容去重/稳定 ID，非加密用途
+        json.dumps(page, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+        usedforsecurity=False,
     ).hexdigest()
     entry_type = _infer_type(filters, page) if default_type == "unknown" else default_type
     aliases: List[str] = []

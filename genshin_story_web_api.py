@@ -49,8 +49,13 @@ except ImportError as e:
     tools = []
     print(f"[Web] Agent 加载失败: {e}")
 
-app = Flask(__name__)
-CORS(app)
+app = Flask(__name__)  # NOSONAR 本服务用 Bearer 口令鉴权、无 Cookie 会话，CSRF 无攻击面
+# S5122：不用通配 CORS——页面与服务同源，默认只放行本机端口；
+# 需要从别的站点调 API 时，用 CORS_ORIGINS 环境变量显式加白（逗号分隔）。
+_cors_origins = [o.strip() for o in (os.getenv("CORS_ORIGINS") or "").split(",") if o.strip()]
+if not _cors_origins:
+    _cors_origins = [r"http://127\.0\.0\.1:\d+", r"http://localhost:\d+"]
+CORS(app, resources={r"/api/*": {"origins": _cors_origins}})
 app.config['JSON_AS_ASCII'] = False
 app.config['MAX_CONTENT_LENGTH'] = 64 * 1024
 
@@ -599,10 +604,18 @@ def _session_key(tenant: str, session_id: str) -> str:
 
 
 def _session_file(session_id: str, tenant: str = None) -> str:
-    """获取会话存储文件路径"""
-    if not _valid_session_id(session_id):
+    """获取会话存储文件路径。
+
+    进入路径拼接的文件名不直接使用入参：先按白名单逐字符重建，再与原值比对，
+    不等即拒绝。语义与 _valid_session_id 完全一致（同一字符集），
+    但让污点分析能确认「拼进路径的只可能是 [A-Za-z0-9_-]」。
+    """
+    safe_id = "".join(
+        ch for ch in str(session_id or "") if ch.isascii() and (ch.isalnum() or ch in "_-")
+    )
+    if not safe_id or safe_id != session_id or len(safe_id) > 64:
         raise ValueError("非法的 session_id")
-    return os.path.join(_tenant_session_dir(tenant), f"session_{session_id}.json")
+    return os.path.join(_tenant_session_dir(tenant), "session_" + safe_id + ".json")
 
 
 def _load_session_from_disk(session_id: str, tenant: str = None) -> dict:
