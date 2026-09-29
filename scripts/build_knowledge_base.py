@@ -15,7 +15,7 @@
 """
 
 import os, sys, re, json, time, argparse
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 import requests
 
 if sys.platform == 'win32':
@@ -523,7 +523,6 @@ def generate_knowledge_base(characters: List[Dict], weapons: List[Dict],
 
     # 格式化 Python 列表
     def format_list(data: List[Dict], var_name: str) -> str:
-        import pprint
         lines = [f"{var_name} = ["]
         for i, item in enumerate(data):
             # 用 repr 方式输出字典

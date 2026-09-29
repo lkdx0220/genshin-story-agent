@@ -9,9 +9,6 @@ import json
 import os
 import sys
 import time
-import urllib.parse
-import urllib.request
-import urllib.error
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
