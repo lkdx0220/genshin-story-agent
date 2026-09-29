@@ -315,83 +315,68 @@ def _generate_short_names(name: str) -> List[str]:
         shorts.append(clean[:4])
     return shorts
 
+# 实体来源表：顺序即装载顺序，决定 registry 的插入顺序（短名索引与去括号索引都依赖它，
+# 首见者胜出），因此不要重排、不要合并同类项。
+# 行格式：(装载方式, 模块属性/文件名, 条目字段, 标签)
+_ENTITY_SOURCES = (
+    ("module", "武器知识库", "武器名称", "C1"),
+    ("module", "圣遗物知识库", "圣遗物名称", "C1"),
+    ("module", "素材知识库", "素材名称", "C1"),
+    ("json", "materials.json", "名称", "C1"),
+    ("module", "角色知识库", "角色名称", "B"),
+    ("json_keys", "npcs_processed.json", "", "B"),
+    ("quests", "", "", "D"),
+    ("json", "books.json", "title", "E"),
+    ("json", "monsters.json", "名称", "C2"),
+    ("json", "collectibles.json", "名称", "C2"),
+    ("module", "地区知识库", "地区名称", "C2"),
+    ("json", "concepts.json", "名称", "C2"),
+    ("json", "recipes.json", "名称", "C1"),
+    ("json", "foods.json", "名称", "C1"),
+)
 
-def _get_entity_registry():
-    """Lazy-load: 构建实体名→标签映射 + 短名索引。
-    首次调用时扫描所有知识库数据源，后续走缓存。
-    """
-    global _entity_registry, _shortname_index, _exact_index_bracketless
-    if _entity_registry is not None:
-        return _entity_registry, _shortname_index, _exact_index_bracketless
 
-    # registry: name → (labels_set, [short_names])
-    # labels_set 是集合，同一实体名跨类别时合并标签（如"天空"同时是武器C1和地区C2）
-    registry = {}
+def _registry_add(registry: dict, name: str, label: str) -> None:
+    """登记一个实体名：同名跨类别时合并标签，首见时生成短名。"""
+    if not name or len(name) < 2:
+        return
+    if name in registry:
+        existing_labels, existing_shorts = registry[name]
+        existing_labels.add(label)
+        registry[name] = (existing_labels, existing_shorts)
+    else:
+        registry[name] = ({label}, _generate_short_names(name))
 
-    def _add(name, label):
-        if not name or len(name) < 2:
-            return
-        if name in registry:
-            existing_labels, existing_shorts = registry[name]
-            existing_labels.add(label)
-            registry[name] = (existing_labels, existing_shorts)
+
+def _load_registry_from_module(registry: dict, module_attr: str, field: str, label: str) -> None:
+    """从 genshin_knowledge_base 的知识库常量装载（惰性 import，异常整体忽略）。"""
+    try:
+        import genshin_knowledge_base as kb
+
+        for item in getattr(kb, module_attr):
+            _registry_add(registry, item.get(field, ""), label)
+    except Exception:
+        pass
+
+
+def _load_registry_from_json(registry: dict, filename: str, field: str, label: str,
+                             use_keys: bool = False) -> None:
+    """从 content_data 的 JSON 装载；use_keys=True 时取对象键名（如 NPC）。"""
+    try:
+        with open(os.path.join(CONTENT_DIR, filename), "r", encoding="utf-8") as f:
+            rows = json.load(f)
+        if use_keys:
+            for name in rows.keys():
+                _registry_add(registry, name, label)
         else:
-            registry[name] = ({label}, _generate_short_names(name))
-
-    # --- 武器 → C1 ---
-    try:
-        from genshin_knowledge_base import 武器知识库
-        for w in 武器知识库:
-            _add(w.get("武器名称", ""), "C1")
+            for item in rows:
+                _registry_add(registry, item.get(field, ""), label)
     except Exception:
         pass
 
-    # --- 圣遗物 → C1 ---
-    try:
-        from genshin_knowledge_base import 圣遗物知识库
-        for a in 圣遗物知识库:
-            _add(a.get("圣遗物名称", ""), "C1")
-    except Exception:
-        pass
 
-    # --- 素材 → C1 ---
-    try:
-        from genshin_knowledge_base import 素材知识库
-        for m in 素材知识库:
-            _add(m.get("素材名称", ""), "C1")
-    except Exception:
-        pass
-
-    mat_path = os.path.join(CONTENT_DIR, "materials.json")
-    try:
-        with open(mat_path, "r", encoding="utf-8") as f:
-            materials = json.load(f)
-        for m in materials:
-            _add(m.get("名称", ""), "C1")
-    except Exception:
-        pass
-
-    # --- 角色 → B ---
-    try:
-        from genshin_knowledge_base import 角色知识库
-        for c in 角色知识库:
-            _add(c.get("角色名称", ""), "B")
-    except Exception:
-        pass
-
-    # --- NPC → B ---
-    npcs_path = os.path.join(CONTENT_DIR, "npcs_processed.json")
-    if os.path.exists(npcs_path):
-        try:
-            with open(npcs_path, "r", encoding="utf-8") as f:
-                npcs = json.load(f)
-            for name in npcs.keys():
-                _add(name, "B")
-        except Exception:
-            pass
-
-    # --- 任务 → D ---
-    # 从 content_data/quests_*.json 提取任务标题
+def _load_registry_quests(registry: dict, label: str) -> None:
+    """从 content_data/quests_*.json 提取任务标题（跳过 quests_processed.json）。"""
     for fname in os.listdir(CONTENT_DIR):
         if not fname.startswith("quests_") or not fname.endswith(".json"):
             continue
@@ -405,107 +390,58 @@ def _get_entity_registry():
         if not isinstance(quests, list):
             continue
         for q in quests:
-            _add(q.get("title", ""), "D")
+            _registry_add(registry, q.get("title", ""), label)
 
-    # --- 书籍 → E ---
-    book_path = os.path.join(CONTENT_DIR, "books.json")
-    if os.path.exists(book_path):
-        try:
-            with open(book_path, "r", encoding="utf-8") as f:
-                books = json.load(f)
-            for b in books:
-                _add(b.get("title", ""), "E")
-        except Exception:
-            pass
 
-    # --- 怪物 → C2 ---
-    mon_path = os.path.join(CONTENT_DIR, "monsters.json")
-    if os.path.exists(mon_path):
-        try:
-            with open(mon_path, "r", encoding="utf-8") as f:
-                monsters = json.load(f)
-            for m in monsters:
-                _add(m.get("名称", ""), "C2")
-        except Exception:
-            pass
+def _load_registry_source(registry: dict, kind: str, key: str, field: str, label: str) -> None:
+    """按装载方式分派：module（知识库常量）/ json / json_keys（取键名）/ quests。"""
+    if kind == "module":
+        _load_registry_from_module(registry, key, field, label)
+    elif kind == "quests":
+        _load_registry_quests(registry, label)
+    elif kind == "json_keys":
+        _load_registry_from_json(registry, key, "", label, use_keys=True)
+    else:
+        _load_registry_from_json(registry, key, field, label)
 
-    # --- 采集物 → C2 ---
-    col_path = os.path.join(CONTENT_DIR, "collectibles.json")
-    if os.path.exists(col_path):
-        try:
-            with open(col_path, "r", encoding="utf-8") as f:
-                colls = json.load(f)
-            for c in colls:
-                _add(c.get("名称", ""), "C2")
-        except Exception:
-            pass
 
-    # --- 地区 → C2 ---
-    try:
-        from genshin_knowledge_base import 地区知识库
-        for r in 地区知识库:
-            _add(r.get("地区名称", ""), "C2")
-    except Exception:
-        pass
-
-    # --- 概念/组织 → C2 ---
-    con_path = os.path.join(CONTENT_DIR, "concepts.json")
-    if os.path.exists(con_path):
-        try:
-            with open(con_path, "r", encoding="utf-8") as f:
-                concepts = json.load(f)
-            for c in concepts:
-                _add(c.get("名称", ""), "C2")
-        except Exception:
-            pass
-
-    # --- 食谱 → C1 ---
-    rec_path = os.path.join(CONTENT_DIR, "recipes.json")
-    if os.path.exists(rec_path):
-        try:
-            with open(rec_path, "r", encoding="utf-8") as f:
-                recipes = json.load(f)
-            for r in recipes:
-                _add(r.get("名称", ""), "C1")
-        except Exception:
-            pass
-
-    # --- 食物 → C1 ---
-    food_path = os.path.join(CONTENT_DIR, "foods.json")
-    if os.path.exists(food_path):
-        try:
-            with open(food_path, "r", encoding="utf-8") as f:
-                foods = json.load(f)
-            for fd in foods:
-                _add(fd.get("名称", ""), "C1")
-        except Exception:
-            pass
-
-    # ---- 构建短名索引 ----
-    # 临时统计每个短名命中了多少实体
+def _build_shortname_index(registry: dict) -> dict:
+    """短名 → (实体名, 标签集)；只保留唯一命中的短名，歧义短名丢弃。"""
     shortname_counter = {}
     for name, (labels, shorts) in registry.items():
         for sn in shorts:
-            if sn not in shortname_counter:
-                shortname_counter[sn] = []
-            shortname_counter[sn].append((name, labels))
+            shortname_counter.setdefault(sn, []).append((name, labels))
+    return {sn: entries[0] for sn, entries in shortname_counter.items() if len(entries) == 1}
 
-    # 只保留唯一命中的短名（1 个实体），过滤掉歧义短名
-    shortname_index = {}
-    for sn, entries in shortname_counter.items():
-        if len(entries) == 1:
-            shortname_index[sn] = entries[0]  # (name, labels_set)
 
-    # ---- 构建去除括号后的精确索引 ----
-    exact_index_bracketless = {}
+def _build_bracketless_index(registry: dict) -> dict:
+    """去括号精确索引：仅在去括号名不与注册表冲突且首次出现时加入。"""
+    index = {}
     for name, (labels, _) in registry.items():
         clean = _strip_brackets(name)
         if clean and clean != name and len(clean) >= 3:
             # 只有当去除括号后的名字不与注册表中已有名字冲突时才加入
-            if clean not in registry:
-                existing = exact_index_bracketless.get(clean)
-                if existing is None:
-                    exact_index_bracketless[clean] = (name, labels)
+            if clean not in registry and index.get(clean) is None:
+                index[clean] = (name, labels)
+    return index
+
+
+def _get_entity_registry():
+    """Lazy-load: 构建实体名→标签映射 + 短名索引。
+    首次调用时扫描所有知识库数据源，后续走缓存。
+    """
+    global _entity_registry, _shortname_index, _exact_index_bracketless
+    if _entity_registry is not None:
+        return _entity_registry, _shortname_index, _exact_index_bracketless
+
+    # registry: name → (labels_set, [short_names])
+    # labels_set 是集合，同一实体名跨类别时合并标签（如"天空"同时是武器C1和地区C2）
+    registry = {}
+    for kind, key, field, label in _ENTITY_SOURCES:
+        _load_registry_source(registry, kind, key, field, label)
+
+    shortname_index = _build_shortname_index(registry)
+    exact_index_bracketless = _build_bracketless_index(registry)
 
     _entity_registry = registry
     _shortname_index = shortname_index
