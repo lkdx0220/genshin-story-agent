@@ -730,7 +730,7 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
                     snippet = text[:240].replace('\n', ' ').strip()
                 book_candidates.append((b["title"], snippet))
                 break
-    for i, (title, snippet) in enumerate(book_candidates[:5]):
+    for _i, (title, snippet) in enumerate(book_candidates[:5]):
         results.append({
             "id": f"book:{title}",
             "collection": "kb_books",
@@ -801,7 +801,7 @@ def _quest_chunk_map() -> Dict[str, list]:
     if _vector_store is not None:
         vectors, ids, docs = _vector_store._load("kb_quests_vec")
         _QUEST_VECTORS = vectors
-        for row, (doc_id, text) in enumerate(zip(ids, docs)):
+        for row, (doc_id, text) in enumerate(zip(ids, docs, strict=False)):
             m = _QUEST_CHUNK_RE.match(doc_id)
             if not m or not text:
                 continue
@@ -988,7 +988,7 @@ def kb_vector_search(query: str, collection: str = "", top_k: int = 5) -> str:
     if not results:
         return f"语义搜索未找到与「{query}」相关的内容。"
     lines = [f"===== 语义搜索「{query}」({len(results)}条结果) ====="]
-    for i, r in enumerate(results):
+    for _i, r in enumerate(results):
         # 从 id 中提取类型和标题信息
         doc_id = r.get("id", "")
         collection = r.get("collection", "")

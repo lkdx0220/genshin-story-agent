@@ -198,7 +198,7 @@ def _build_task_sections(tasks, maps, entities) -> List[PanoramaSection]:
         # 合并节：每条任务只带自己的正文与相关实体，地图文本每节共用一份。
         # 按字数切块而不是硬截断——超限时多开一节，避免把尾部任务整条丢掉。
         blocks, cur, cur_len = [], [], 0
-        for title, eid, content in tail:
+        for title, _eid, content in tail:
             block = f"----- 任务：{title} -----\n【任务全文】\n{content}"
             related_text = _task_related_entities(content, maps, entities)
             if related_text:
@@ -346,7 +346,7 @@ def _ordered_parallel(sections: List[PanoramaSection]) -> List[str]:
 
 def _assemble(sections: List[PanoramaSection], results: List[str], original_query: str) -> str:
     parts = [f"# {original_query}\n"]
-    for section, content in zip(sections, results):
+    for section, content in zip(sections, results, strict=False):
         parts.append(f"\n\n## {section.title}\n\n{content.strip()}")
     return "".join(parts).strip()
 
