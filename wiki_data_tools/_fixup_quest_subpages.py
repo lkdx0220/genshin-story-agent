@@ -168,7 +168,6 @@ def extract_dialogue_from_wikitext(wikitext):
     lines = text.split('\n')
     result = []
     in_table = False
-    in_template = False
     brace_depth = 0
 
     for line in lines:
@@ -180,10 +179,9 @@ def extract_dialogue_from_wikitext(wikitext):
         # 跟踪 {{ }} 深度
         brace_depth += stripped.count('{{') - stripped.count('}}')
         if brace_depth > 0:
-            in_template = True
             continue
         else:
-            in_template = False
+            pass
 
         # 跳过表格行
         if stripped.startswith('{|') or stripped.startswith('|}'):

@@ -169,7 +169,6 @@ def group_modules(modules):
     """按非标准模块名切分任务小节，返回 list[list[module]]。"""
     groups = []
     cur = []
-    seen_non_standard = False
     for m in modules:
         if not isinstance(m, dict):
             continue
@@ -179,7 +178,6 @@ def group_modules(modules):
             if cur:
                 groups.append(cur)
             cur = [m]
-            seen_non_standard = True
         elif cur:
             cur.append(m)
     if cur:

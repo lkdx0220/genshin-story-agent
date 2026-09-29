@@ -197,14 +197,11 @@ def parse_batch(batch_json_path):
     # 用正则提取每个 page：匹配 "PAGEID":{"pageid":N,"ns":0,"title":"TITLE","revisions":[{"slots":{"main":{..."*":"WIKITEXT"}}}}]}
     # 采用两步策略：先找 title，再找最近的 "*":" 来匹配 wikitext
     page_entries = {}
-    title_pattern = re.compile(r'"title":"((?:[^"\\]|\\.)*)"')
-    wikitext_pattern = re.compile(r'"\*":"((?:[^"\\]|\\.)*)"')
 
     # 更稳健的策略：匹配每个 page 块
     # 格式: "数字":{"pageid":...,"title":"名称",..."*":"内容"}}
     # 找到所有 page id + title 对，以及它们对应的 wikitext
     for m in re.finditer(r'"(\d+)":\{"pageid":\d+,"ns":0,"title":"((?:[^"\\]|\\.)*)"', raw_text):
-        pageid = m.group(1)
         title = m.group(2).replace('\\"', '"')
         # 解码 Unicode 转义序列（如 \u6ed1\u5934\u9b3c → 滑头鬼）
         title = re.sub(r'\\u([0-9a-fA-F]{4})', lambda x: chr(int(x.group(1), 16)), title)

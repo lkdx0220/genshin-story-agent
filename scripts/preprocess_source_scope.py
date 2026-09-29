@@ -47,7 +47,7 @@ PROJECT_DIR = SCRIPTS_DIR.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 sys.path.insert(0, str(PROJECT_DIR))
 
-from merge_crawler_corpus import _act_core, _normalize, _normalize_for_match  # noqa: E402
+from merge_crawler_corpus import _act_core, _normalize  # noqa: E402
 
 CONTENT_DIR = PROJECT_DIR / "content_data"
 DEFAULT_OUT_DIR = CONTENT_DIR / "source_scope"

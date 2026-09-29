@@ -5,7 +5,7 @@
 使用批量 revisions API（18 个角色/批），减少 API 调用次数避免 CDN 限流。
 """
 
-import os, sys, re, json, time, random, importlib.util, subprocess, tempfile, urllib.parse
+import os, re, json, time, random, importlib.util, subprocess, tempfile, urllib.parse
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)

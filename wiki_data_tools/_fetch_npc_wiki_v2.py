@@ -373,7 +373,6 @@ def cmd_process():
 
 
 def main():
-    import urllib.parse  # 用于 URL 编码
     if len(sys.argv) > 1:
         cmd = sys.argv[1]
         if cmd == '--process':
