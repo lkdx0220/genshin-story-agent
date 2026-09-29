@@ -2887,11 +2887,8 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
     return out, weak_ids
 
 
-def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, response=None):
-    """全景/综合题：代码直接加载相关任务+地图文本+实体档案全文，绕过普通截断与熔断。"""
-    if os.getenv("L3_ENABLED", "1") != "1":
-        # 演示站默认关闭全景旁路（L3_ENABLED=0）：L3 单次生成长、烧 token，留给持口令的自己人手动开启。
-        return None
+def _resolve_panoramic_scope(state, messages, iteration):
+    """全景题的范围判定：返回 (问题, 任务, 地图文本, 实体档案, 弱标记集)；不触发返回 None。"""
     original_query = state.get("user_query", "") or state.get("rewritten_query", "")
     if not _PANORAMIC_FULL_TEXT_RE.search(original_query):
         return None
@@ -2911,10 +2908,14 @@ def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, re
         return None
     matched_map_texts = _collect_graph_map_texts(graph, matched_tasks)
     task_texts = [_entry_story_text(e) or (e.full_text or "") for e in matched_tasks]
-    related_entities, _weak_entity_ids = _collect_related_entity_entries(
+    related_entities, weak_entity_ids = _collect_related_entity_entries(
         graph, matched_tasks, task_texts, matched_map_texts
     )
+    return original_query, matched_tasks, matched_map_texts, related_entities, weak_entity_ids
 
+
+def _build_panorama_evidence(matched_tasks, matched_map_texts, related_entities, weak_entity_ids) -> str:
+    """拼装全景证据包全文：任务全文（含顺序元数据）+ 相关地图文本 + 相关实体档案。"""
     parts = [
         _FULL_TEXT_HEADER,
         "检测到全景/综合类问题，以下为相关词条剧情文本（由代码确定性加载，不含玩法推荐模块）：",
@@ -2942,7 +2943,7 @@ def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, re
         parts.append("\n\n===== 相关角色/组织/圣遗物/地点剧情档案 =====")
         for entry in related_entities:
             title = entry.title
-            if entry.entry_id in _weak_entity_ids:
+            if entry.entry_id in weak_entity_ids:
                 # 仅图谱关联：与任务正文只有图链接、共现弱，输出规约要求至多一句带过。
                 title = f"{title} {L3_WEAK_ENTITY_TAG}"
             text = _entry_story_text(entry)
@@ -2952,8 +2953,12 @@ def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, re
                 f"\n----- {title} ({entry.entry_type}, ID {entry.entry_id}) "
                 f"共 {len(text)} 字 -----\n" + text
             )
+    return "\n".join(parts)
 
-    content = "\n".join(parts)
+
+def _trace_panorama_selection(state, iteration, matched_tasks, matched_map_texts,
+                              related_entities, content) -> None:
+    """打印 + trace：全景旁路选了哪些条目、证据包多大（排查 L3 的首选入口）。"""
     print(
         f"  -> [全景全文旁路] 任务={[e.entry_id for e in matched_tasks]} "
         f"地图={[e.entry_id for e in matched_map_texts]} "
@@ -2972,6 +2977,22 @@ def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, re
         "full_text_entity_ids": [e.entry_id for e in related_entities],
         "run_id": state.get("run_id"),
     })
+
+
+def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, response=None):
+    """全景/综合题：代码直接加载相关任务+地图文本+实体档案全文，绕过普通截断与熔断。"""
+    if os.getenv("L3_ENABLED", "1") != "1":
+        # 演示站默认关闭全景旁路（L3_ENABLED=0）：L3 单次生成长、烧 token，留给持口令的自己人手动开启。
+        return None
+    scope = _resolve_panoramic_scope(state, messages, iteration)
+    if scope is None:
+        return None
+    original_query, matched_tasks, matched_map_texts, related_entities, weak_entity_ids = scope
+    content = _build_panorama_evidence(
+        matched_tasks, matched_map_texts, related_entities, weak_entity_ids
+    )
+    _trace_panorama_selection(state, iteration, matched_tasks, matched_map_texts,
+                              related_entities, content)
     return {
         "messages": [ToolMessage(content=content, tool_call_id=f"call_full_panoramic_{iteration + 1}")],
         "execution_plan": f"【执行报告】\n用户问题回显：{original_query}\n用户意图：全景/综合梳理\n工具决策：代码确定性地加载相关词条全文。\n",
