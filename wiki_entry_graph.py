@@ -1153,7 +1153,7 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
         entry_type = "task"
         if not act and not chapter and row["title"].startswith("「") and row["title"].endswith("」"):
             entry_type = "activity"
-        filters = [f"来源/bwiki"]
+        filters = ["来源/bwiki"]
         if row["entry_type"]:
             filters.append(f"任务类型/{row['entry_type']}")
         graph.add(

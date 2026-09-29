@@ -1,0 +1,16 @@
+# ruff 配置（本地静态检查口径；DeepSec 与 SonarCloud 是另外两套，互不替代）。
+#
+# 口径：F（pyflakes）+ B（bugbear）。E/W 的纯风格规则不纳入，避免把噪声当信号。
+target-version = "py313"
+line-length = 120
+
+[lint]
+select = ["F", "B"]
+
+[lint.per-file-ignores]
+# 这两个模块是「兼容性再导出门面」：外部靠 `from genshin_story_agent import X`、
+# `from app.tools import X` 使用（实测消费者：genshin_story_web_api.py、
+# launcher.py、agent-trace-inspector 的 adapter）。F401 报的「imported but unused」
+# 正是这里的唯一用途，属于设计意图而不是死代码——不要为了消警告删掉它们。
+"genshin_story_agent.py" = ["F401"]
+"app/tools/__init__.py" = ["F401"]
