@@ -707,7 +707,9 @@ def _infer_region(filters: List[str]) -> str:
 def _infer_region_from_title(title: str) -> str:
     """地图文本标题常带【地区】后缀（如 蓝藻【奥古洛夫镇】），作为 region 兜底。"""
     m = re.search(r"【([^】]+)】\s*$", title or "")
-    return m.group(1) if m else ""
+    if not m:
+        return ""
+    return m.group(1)
 
 
 def _derive_title_aliases(title: str, region: str) -> List[str]:
