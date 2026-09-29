@@ -540,7 +540,26 @@ def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     print(f"【快速路径】第 {iteration + 1}/{MAX_FAST_ITERATIONS + 1} 轮")
     print("=" * 50)
 
-    # ---- 取消信号检查 ----
+    cancelled = _fast_agent_cancel_result(state)
+    if cancelled is not None:
+        return cancelled
+
+    messages, current_llm_with_tools = _fast_agent_prepare_messages(
+        state, messages, original_query, alias_notes
+    )
+
+    short_circuit = _fast_agent_code_shortcuts(messages, original_query, iteration)
+    if short_circuit is not None:
+        return short_circuit
+
+    if iteration >= MAX_FAST_ITERATIONS:
+        return _fast_agent_forced_answer(state, messages, iteration)
+
+    return _fast_agent_tool_round(state, messages, iteration, current_llm_with_tools)
+
+
+def _fast_agent_cancel_result(state):
+    """取消信号检查：命中则返回中断结果，未命中返回 None。"""
     run_id = state.get("run_id")
     cancel_event = _cancel_events.get(run_id) if run_id else None
     if cancel_event and cancel_event.is_set():
@@ -550,37 +569,43 @@ def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             "messages": [],
             "intent_labels": ["ALL"],
         }
+    return None
 
-    # 首轮：构建消息
-    if not messages:
-        # 使用全部工具
-        all_tools = _get_initial_tools()
-        current_llm_with_tools = plan_llm.bind_tools(all_tools)
 
-        system_content = AGENT_SYSTEM_PROMPT_FAST
+def _fast_agent_prepare_messages(state, messages, original_query, alias_notes):
+    """准备本轮消息：首轮构建系统提示与近期历史，后续轮次沿用已有消息。
 
-        if alias_notes:
-            system_content += alias_notes
+    两种情况都要拿全部工具并绑定到快速路径 LLM，返回 (messages, 带工具 LLM)。
+    """
+    all_tools = _get_initial_tools()
+    current_llm_with_tools = plan_llm.bind_tools(all_tools)
+    if messages:
+        return messages, current_llm_with_tools
 
-        # 注入对话摘要
-        conv_summary = state.get("conversation_summary", "")
-        if conv_summary:
-            system_content += f"\n\n## 之前的对话摘要\n{conv_summary}"
+    system_content = AGENT_SYSTEM_PROMPT_FAST
 
-        messages = [SystemMessage(content=system_content)]
+    if alias_notes:
+        system_content += alias_notes
 
-        # 注入最近 N 轮对话历史
-        conv_history = state.get("conversation_history") or []
-        for turn in conv_history[-RECENT_TURNS:]:
-            messages.append(HumanMessage(content=turn["user"]))
-            messages.append(AIMessage(content=turn["assistant"]))
+    # 注入对话摘要
+    conv_summary = state.get("conversation_summary", "")
+    if conv_summary:
+        system_content += f"\n\n## 之前的对话摘要\n{conv_summary}"
 
-        messages.append(HumanMessage(content=original_query))
-    else:
-        # 后续轮次：延用全部工具
-        all_tools = _get_initial_tools()
-        current_llm_with_tools = plan_llm.bind_tools(all_tools)
+    messages = [SystemMessage(content=system_content)]
 
+    # 注入最近 N 轮对话历史
+    conv_history = state.get("conversation_history") or []
+    for turn in conv_history[-RECENT_TURNS:]:
+        messages.append(HumanMessage(content=turn["user"]))
+        messages.append(AIMessage(content=turn["assistant"]))
+
+    messages.append(HumanMessage(content=original_query))
+    return messages, current_llm_with_tools
+
+
+def _fast_agent_code_shortcuts(messages, original_query, iteration):
+    """两条确定性直答短路：元数据直答、全部工具未找到；均未命中返回 None。"""
     # ---- 代码短路：元数据工具确定性直答 ----
     # 如果本轮只调用了结构化元数据工具，直接复述工具结果，不经过回答 LLM。
     direct_answer = _get_direct_metadata_answer(messages, original_query)
@@ -603,40 +628,45 @@ def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             "fast_iteration": iteration + 1,
             "intent_labels": ["ALL"],
         }
+    return None
 
-    # 已达最大轮次，强制生成回答（不带工具）
-    if iteration >= MAX_FAST_ITERATIONS:
-        print(f"  -> 已达最大快速轮次，强制生成回答")
-        # 剥离最后一条 AIMessage 的 tool_calls（工具未执行，防止 LLM 困惑）
-        for i in range(len(messages) - 1, -1, -1):
-            msg = messages[i]
-            if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
-                msg.tool_calls = []
-                msg.additional_kwargs = {}
-                break
-        current_llm = llm  # 不带工具绑定的 llm
+
+def _fast_agent_forced_answer(state, messages, iteration):
+    """已达最大轮次：剥离未执行的 tool_calls 后强制生成回答，空内容兜底为未收录。"""
+    print(f"  -> 已达最大快速轮次，强制生成回答")
+    # 剥离最后一条 AIMessage 的 tool_calls（工具未执行，防止 LLM 困惑）
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+            msg.tool_calls = []
+            msg.additional_kwargs = {}
+            break
+    current_llm = llm  # 不带工具绑定的 llm
+    try:
+        response = current_llm.invoke(messages)
+    except Exception as e:
+        print(f"  -> LLM 调用失败: {e}")
         try:
-            response = current_llm.invoke(messages)
-        except Exception as e:
-            print(f"  -> LLM 调用失败: {e}")
-            try:
-                response = llm_invoke_with_retry(messages)
-            except Exception:
-                response = AIMessage(content=f"抱歉，处理出错：{e}")
-        content = response.content if hasattr(response, 'content') else ''
-        # 空内容兜底：与下方正常收尾分支保持一致——工具已执行、模型却吐空串时，
-        # 不能把空串交给用户（前端会渲染成「（无回复）」）。
-        if not content or not content.strip():
-            print("  -> 强制回答返回空内容，使用未收录兜底")
-            trace_emit("fast_empty_fallback", {"iteration": iteration + 1, "run_id": state.get("run_id")})
-            content = "当前知识库未收录。"
-        return {
-            "messages": messages,
-            "final_response": content,
-            "fast_iteration": iteration + 1,
-            "intent_labels": ["ALL"],
-        }
+            response = llm_invoke_with_retry(messages)
+        except Exception:
+            response = AIMessage(content=f"抱歉，处理出错：{e}")
+    content = response.content if hasattr(response, 'content') else ''
+    # 空内容兜底：与下方正常收尾分支保持一致——工具已执行、模型却吐空串时，
+    # 不能把空串交给用户（前端会渲染成「（无回复）」）。
+    if not content or not content.strip():
+        print("  -> 强制回答返回空内容，使用未收录兜底")
+        trace_emit("fast_empty_fallback", {"iteration": iteration + 1, "run_id": state.get("run_id")})
+        content = "当前知识库未收录。"
+    return {
+        "messages": messages,
+        "final_response": content,
+        "fast_iteration": iteration + 1,
+        "intent_labels": ["ALL"],
+    }
 
+
+def _fast_agent_tool_round(state, messages, iteration, current_llm_with_tools):
+    """正常轮次：调用带工具的 LLM；有 tool_calls 交回循环，否则直接收尾返回。"""
     trace_emit("llm_start", {"role": "fast", "iteration": iteration + 1, "run_id": state.get("run_id"), "model": getattr(current_llm_with_tools, "model_name", None)})
     try:
         response = current_llm_with_tools.invoke(messages)
@@ -3984,16 +4014,45 @@ def _enforce_citation_grounding(content, messages, answer_messages, answer_llm, 
     """
     if response_mode != "found" or not content or not content.strip():
         return content
-    contexts = "\n".join(str(m.content or "") for m in messages if isinstance(m, ToolMessage))
+    contexts = _citation_contexts(messages)
     if not contexts.strip():
         return content
+    unverified, unverified_lines = _citation_collect_unverified(
+        content, contexts, _citation_exempt_normalized(original_query, answer_messages)
+    )
+    if not unverified and not unverified_lines:
+        return content
+    panoramic = _already_full_text_panoramic(messages)
+    _report_unverified_citation(run_id, unverified, unverified_lines, panoramic)
+    if panoramic:
+        return content
+
+    retry_content = _citation_retry_once(
+        answer_messages, answer_llm, contexts, unverified, unverified_lines, run_id
+    )
+    if retry_content:
+        return retry_content
+    return "当前知识库未收录。"
+
+
+def _citation_contexts(messages):
+    """拼接全部工具返回原文，作为引用核对的出处语料。"""
+    return "\n".join(str(m.content or "") for m in messages if isinstance(m, ToolMessage))
+
+
+def _citation_exempt_normalized(original_query, answer_messages):
+    """归一化「用户提问 + 系统提示」文本，用于豁免题面里出现过的词句。"""
     # 用户提问与系统提示里出现过的词句不算编造（实测误报：「引蝶之章」是题面里的任务名，
     # 而本次工具返回里恰好没有它，被当成查无出处的引用触发了一次无谓重试）。
-    exempt_normalized = _strip_for_cite(
+    return _strip_for_cite(
         original_query + "\n" + "\n".join(
             str(m.content or "") for m in answer_messages if isinstance(m, SystemMessage)
         )
     )
+
+
+def _citation_collect_unverified(content, contexts, exempt_normalized):
+    """收集查无出处的引号片段与引用段裸行（用户提问/系统提示里的词句豁免）。"""
     unverified = [
         q for q in _unverified_quotes(content, contexts)
         if _strip_for_cite(q) not in exempt_normalized
@@ -4001,9 +4060,11 @@ def _enforce_citation_grounding(content, messages, answer_messages, answer_llm, 
     unverified_lines = _unverified_dialogue_lines(
         content, contexts, exempt_normalized=exempt_normalized
     )
-    if not unverified and not unverified_lines:
-        return content
-    panoramic = _already_full_text_panoramic(messages)
+    return unverified, unverified_lines
+
+
+def _report_unverified_citation(run_id, unverified, unverified_lines, panoramic):
+    """打印并记录引用自检的未通过明细（全景题只记 trace）。"""
     print(
         f"  -> [引用自检] 查无出处：引号 {len(unverified)} 个、引用段裸行 {len(unverified_lines)} 行: "
         f"{(unverified + unverified_lines)[:5]}"
@@ -4015,9 +4076,14 @@ def _enforce_citation_grounding(content, messages, answer_messages, answer_llm, 
         "unverified_count": len(unverified) + len(unverified_lines),
         "panorama": panoramic,
     })
-    if panoramic:
-        return content
 
+
+def _citation_retry_once(answer_messages, answer_llm, contexts, unverified, unverified_lines, run_id):
+    """带未通过明细纠错重试一次。
+
+    重试内容仍有查无出处的内容（引号或引用段裸行），或重试无输出、抛异常时返回空串，
+    由调用方降级为「未收录」；通过则返回重写后的内容。
+    """
     retry_messages = list(answer_messages) + [SystemMessage(content=(
         "===== 引用自检（硬规则）=====\n"
         "上一版回答里以下内容在工具返回原文中找不到出处"
@@ -4034,28 +4100,28 @@ def _enforce_citation_grounding(content, messages, answer_messages, answer_llm, 
     except Exception as e:
         print(f"  -> [引用自检] 纠错重试失败: {type(e).__name__}: {e}")
         retry_content = ""
-    if retry_content:
-        left = _unverified_quotes(retry_content, contexts)
-        left_lines = _unverified_dialogue_lines(retry_content, contexts)
-        if not left and not left_lines:
-            print("  -> [引用自检] 纠错重试通过，引用全部有出处")
-            trace_emit("citation_check", {"run_id": run_id, "status": "retry_ok", "unverified_count": 0})
-            return retry_content
-        print(
-            f"  -> [引用自检] 重试后仍有 引号 {len(left)} 个 / 引用段裸行 {len(left_lines)} 行，"
-            "降级为未收录"
-        )
-        trace_emit("citation_check", {
-            "run_id": run_id,
-            "status": "downgraded",
-            "unverified": left[:20],
-            "unverified_lines": [x[:80] for x in left_lines[:20]],
-            "unverified_count": len(left) + len(left_lines),
-        })
-    else:
+    if not retry_content:
         print("  -> [引用自检] 重试无输出，降级为未收录")
         trace_emit("citation_check", {"run_id": run_id, "status": "downgraded_empty"})
-    return "当前知识库未收录。"
+        return ""
+    left = _unverified_quotes(retry_content, contexts)
+    left_lines = _unverified_dialogue_lines(retry_content, contexts)
+    if not left and not left_lines:
+        print("  -> [引用自检] 纠错重试通过，引用全部有出处")
+        trace_emit("citation_check", {"run_id": run_id, "status": "retry_ok", "unverified_count": 0})
+        return retry_content
+    print(
+        f"  -> [引用自检] 重试后仍有 引号 {len(left)} 个 / 引用段裸行 {len(left_lines)} 行，"
+        "降级为未收录"
+    )
+    trace_emit("citation_check", {
+        "run_id": run_id,
+        "status": "downgraded",
+        "unverified": left[:20],
+        "unverified_lines": [x[:80] for x in left_lines[:20]],
+        "unverified_count": len(left) + len(left_lines),
+    })
+    return ""
 
 
 def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
