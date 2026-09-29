@@ -909,6 +909,117 @@ def _quest_display_chunks(key: str, hit_docs: list, query_vec, budget: int) -> l
     return pieces
 
 
+def _relevance_setup(_vector_store) -> Tuple[str, object]:
+    """向量后端名 + 该后端的相关性阈值（未标定返回 None → 调用方 fail-open）。"""
+    backend = getattr(_vector_store, "embedding_backend", "") if _vector_store is not None else ""
+    return backend, _relevance_thresholds(backend)
+
+
+def _r0_named_guard(query: str) -> str:
+    """阶段 2 · R0：具名引用守卫（确定性，零 LLM）。
+
+    点名的专名全库查不到时返回拒答文案，否则返回空串。
+    """
+    if RELEVANCE_GATE < 2:
+        return ""
+    missing = _missing_named_quotes(query)
+    if not missing:
+        return ""
+    print(f"  -> [相关性闸门] R0 具名引用查无出处：{missing[0]}")
+    _trace_relevance("relevance_gate", {
+        "query": query, "verdict": "硬拒（R0）",
+        "missing_name": missing[0], "stage": RELEVANCE_GATE,
+    })
+    return f"混合检索未找到与「{missing[0]}」相关的内容。"
+
+
+def _hybrid_retrieve(query: str, top_k: int, _vector_store, min_sim: float) -> Tuple[list, list, list, list]:
+    """关键词路 + 向量路 + RRF 融合，返回 (kw_docs, vec_docs, vec_raw, merged)。"""
+    kw_docs = _keyword_search_docs(query, top_k=max(top_k, 15))
+    vec_docs = []
+    vec_raw = []
+    if _vector_store is not None:
+        vec_raw = _vector_store.search(query, top_k=max(top_k, 15), collection=None)
+        # 向量路质量过滤：低于最低相似度的弱召回直接丢弃，不进入 RRF。
+        vec_docs = [d for d in vec_raw if d.get("score", 0.0) >= min_sim]
+    merged = _rrf_fusion(kw_docs, vec_docs, k=60)
+    return kw_docs, vec_docs, vec_raw, merged
+
+
+def _relevance_signal(query: str, kw_docs: list, vec_raw: list, backend: str, conf) -> Tuple[str, float, float, str]:
+    """阶段 1 只记录、阶段 2 起据结论拒绝：返回 (判定, top1, 差值, 拒答文案或空串)。"""
+    if RELEVANCE_GATE < 1:
+        return "", 0.0, 0.0, ""
+    raw_scores = sorted((d.get("score", 0.0) for d in vec_raw), reverse=True)
+    top1 = raw_scores[0] if raw_scores else 0.0
+    top2 = raw_scores[1] if len(raw_scores) > 1 else None
+    delta = (top1 - top2) if top2 is not None else 0.0
+    verdict = _emit_relevance_signal(query, len(kw_docs), top1, top2, backend, conf, RELEVANCE_GATE)
+    if RELEVANCE_GATE >= 2 and verdict.startswith("硬拒"):
+        print(f"  -> [相关性闸门] {verdict}，直接拒答：{query}")
+        return verdict, top1, delta, f"混合检索未找到与「{query}」相关的内容。"
+    return verdict, top1, delta, ""
+
+
+def _quest_query_vector(query: str, kw_docs: list, vec_docs: list, chunk_map: dict, _vector_store):
+    """任务内挑代表 chunk 需要查询向量：只在结果里真的有任务条目时才算一次。"""
+    if _vector_store is None or not any(_get_doc_key(d) in chunk_map for d in kw_docs + vec_docs):
+        return None
+    from kb_vector_store import get_embedder
+
+    return get_embedder(_vector_store.embedding_backend).embed_single(query)
+
+
+def _hybrid_hit_lines(order: int, key: str, kw_docs: list, vec_docs: list,
+                      chunk_map: dict, query_vec, expand_budget: int) -> Tuple[list, int]:
+    """单条命中的展示块：标题行 + 正文（任务条目按 chunk 补代表内容）。返回 (行列表, 剩余预算)。"""
+    # 从关键词结果中找
+    kw_match = [d for d in kw_docs if _get_doc_key(d) == key]
+    vec_match = [d for d in vec_docs if _get_doc_key(d) == key] if vec_docs else []
+    hit_docs = kw_match + vec_match
+    if not hit_docs:
+        return [], expand_budget
+    tags = []
+    if kw_match:
+        tags.append("关键词")
+    if vec_match:
+        tags.append("向量")
+    tag_str = "+".join(tags)
+
+    region = TITLE_REGISTRY.get(key, {}).get("region", "")
+    head = hit_docs[0]
+    collection = head.get("collection", "")
+    category = head.get("category", "")
+    attrs = []
+    if category:
+        attrs.append(category)
+    if region:
+        attrs.append(f"任务地区：{region}")
+    attr_str = f"（{'，'.join(attrs)}）" if attrs else ""
+    score_str = f" 相似度:{vec_match[0].get('score', 0):.4f}" if not kw_match else ""
+    lines = [f"\n【{key}】{attr_str}({collection}) [{tag_str}]{score_str}"]
+
+    # 任务条目：已命中的正文（关键词片段 / 向量 chunk）之外，再按 chunk 序号就近补齐同任务
+    # 其余 chunk；补齐只给 RRF 靠前的任务，且受单次检索总预算约束
+    is_quest = key in chunk_map and any(
+        _QUEST_CHUNK_RE.match(str(d.get("id", ""))) for d in hit_docs
+    )
+    if is_quest:
+        if order < _QUEST_EXPAND_TOP_KEYS:
+            budget = min(_QUEST_SHOW_MAX_CHARS, expand_budget)
+            shown = _quest_display_chunks(key, hit_docs, query_vec, budget)
+            expand_budget -= sum(len(text) for _, text in shown)
+        else:
+            shown = _quest_display_chunks(key, hit_docs, query_vec, 0)
+    else:
+        shown = [("", head.get("document", "")[:_DISPLAY_MAX_CHARS])]
+
+    for label, text in shown:
+        # 关键词路长文档片段最多约 3x400 字，展示上限放宽，避免 R3 类后部关键信息被截断
+        lines.append(f"  [{label}] {text}" if label else f"  {text}")
+    return lines, expand_budget
+
+
 @tool
 def hybrid_search(query: str, top_k: int = 10) -> str:
     """混合检索：同时执行关键词匹配和语义搜索，自动融合排序。大多数内容搜索场景的默认工具。
@@ -917,50 +1028,22 @@ def hybrid_search(query: str, top_k: int = 10) -> str:
     # 延迟导入避免循环依赖（_vector_store 在 data.py 顶层初始化）
     from app.data import _vector_store
 
-    _backend = getattr(_vector_store, "embedding_backend", "") if _vector_store is not None else ""
-    _conf = _relevance_thresholds(_backend)
-    _verdict = ""
-    _top1 = 0.0
-    _delta = 0.0
+    _backend, _conf = _relevance_setup(_vector_store)
 
-    # 阶段 2 · R0：具名引用守卫（确定性，零 LLM）——点名的专名全库查不到就直接拒答
-    if RELEVANCE_GATE >= 2:
-        _missing = _missing_named_quotes(query)
-        if _missing:
-            print(f"  -> [相关性闸门] R0 具名引用查无出处：{_missing[0]}")
-            _trace_relevance("relevance_gate", {
-                "query": query, "verdict": "硬拒（R0）",
-                "missing_name": _missing[0], "stage": RELEVANCE_GATE,
-            })
-            return f"混合检索未找到与「{_missing[0]}」相关的内容。"
+    refusal = _r0_named_guard(query)
+    if refusal:
+        return refusal
 
-    # 关键词路
-    kw_docs = _keyword_search_docs(query, top_k=max(top_k, 15))
-    # 向量路：仅搜索当前有效集合；阶段 2 起用按后端标定的下限（未标定则退回常量）
+    # 关键词路 + 向量路：阶段 2 起用按后端标定的下限（未标定则退回常量）
     _min_sim = VECTOR_MIN_SIMILARITY
     if RELEVANCE_GATE >= 2 and _conf:
         _min_sim = _conf["rrf_min"]
-    vec_docs = []
-    vec_raw = []
-    if _vector_store is not None:
-        vec_raw = _vector_store.search(query, top_k=max(top_k, 15), collection=None)
-        # 向量路质量过滤：低于最低相似度的弱召回直接丢弃，不进入 RRF。
-        vec_docs = [d for d in vec_raw if d.get("score", 0.0) >= _min_sim]
-
-    # RRF 融合
-    merged = _rrf_fusion(kw_docs, vec_docs, k=60)
+    kw_docs, vec_docs, vec_raw, merged = _hybrid_retrieve(query, top_k, _vector_store, _min_sim)
 
     # 相关性信号：阶段 1 只记录（不改输出），阶段 2 起据结论拒绝与标注
-    if RELEVANCE_GATE >= 1:
-        raw_scores = sorted((d.get("score", 0.0) for d in vec_raw), reverse=True)
-        _top1 = raw_scores[0] if raw_scores else 0.0
-        _top2 = raw_scores[1] if len(raw_scores) > 1 else None
-        _delta = (_top1 - _top2) if _top2 is not None else 0.0
-        _verdict = _emit_relevance_signal(query, len(kw_docs), _top1, _top2, _backend,
-                                          _conf, RELEVANCE_GATE)
-        if RELEVANCE_GATE >= 2 and _verdict.startswith("硬拒"):
-            print(f"  -> [相关性闸门] {_verdict}，直接拒答：{query}")
-            return f"混合检索未找到与「{query}」相关的内容。"
+    _verdict, _top1, _delta, refusal = _relevance_signal(query, kw_docs, vec_raw, _backend, _conf)
+    if refusal:
+        return refusal
 
     # 取 top_k 结果
     top_keys = [key for key, _ in merged[:top_k]]
@@ -969,57 +1052,12 @@ def hybrid_search(query: str, top_k: int = 10) -> str:
     lines = [f"\n===== 混合检索「{query}」({len(top_keys)}条结果) ====="]
     chunk_map = _quest_chunk_map()
     expand_budget = _QUEST_EXPAND_TOTAL_CHARS
-    # 任务内挑代表 chunk 需要查询向量：只在结果里真的有任务条目时才算一次
-    query_vec = None
-    if _vector_store is not None and any(_get_doc_key(d) in chunk_map for d in kw_docs + vec_docs):
-        from kb_vector_store import get_embedder
-
-        query_vec = get_embedder(_vector_store.embedding_backend).embed_single(query)
+    query_vec = _quest_query_vector(query, kw_docs, vec_docs, chunk_map, _vector_store)
     for order, key in enumerate(top_keys):
-        # 从关键词结果中找
-        kw_match = [d for d in kw_docs if _get_doc_key(d) == key]
-        vec_match = [d for d in vec_docs if _get_doc_key(d) == key] if vec_docs else []
-        hit_docs = kw_match + vec_match
-        if not hit_docs:
-            continue
-        tags = []
-        if kw_match:
-            tags.append("关键词")
-        if vec_match:
-            tags.append("向量")
-        tag_str = "+".join(tags)
-
-        region = TITLE_REGISTRY.get(key, {}).get("region", "")
-        head = hit_docs[0]
-        collection = head.get("collection", "")
-        category = head.get("category", "")
-        attrs = []
-        if category:
-            attrs.append(category)
-        if region:
-            attrs.append(f"任务地区：{region}")
-        attr_str = f"（{'，'.join(attrs)}）" if attrs else ""
-        score_str = f" 相似度:{vec_match[0].get('score', 0):.4f}" if not kw_match else ""
-        lines.append(f"\n【{key}】{attr_str}({collection}) [{tag_str}]{score_str}")
-
-        # 任务条目：已命中的正文（关键词片段 / 向量 chunk）之外，再按 chunk 序号就近补齐同任务
-        # 其余 chunk；补齐只给 RRF 靠前的任务，且受单次检索总预算约束
-        is_quest = key in chunk_map and any(
-            _QUEST_CHUNK_RE.match(str(d.get("id", ""))) for d in hit_docs
+        block, expand_budget = _hybrid_hit_lines(
+            order, key, kw_docs, vec_docs, chunk_map, query_vec, expand_budget
         )
-        if is_quest:
-            if order < _QUEST_EXPAND_TOP_KEYS:
-                budget = min(_QUEST_SHOW_MAX_CHARS, expand_budget)
-                shown = _quest_display_chunks(key, hit_docs, query_vec, budget)
-                expand_budget -= sum(len(text) for _, text in shown)
-            else:
-                shown = _quest_display_chunks(key, hit_docs, query_vec, 0)
-        else:
-            shown = [("", head.get("document", "")[:_DISPLAY_MAX_CHARS])]
-
-        for label, text in shown:
-            # 关键词路长文档片段最多约 3x400 字，展示上限放宽，避免 R3 类后部关键信息被截断
-            lines.append(f"  [{label}] {text}" if label else f"  {text}")
+        lines.extend(block)
 
     if not top_keys:
         return f"混合检索未找到与「{query}」相关的内容。"
