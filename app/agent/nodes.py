@@ -3083,6 +3083,137 @@ def _attempted_search_all_queries(messages):
                         queries.add(str(value))
     return queries
 
+def _recovery_search_all_payload(state, failed_name: str, iteration: int) -> dict:
+    """阶段 1 的返回载荷：强制用 search_all 全局检索该任务名。"""
+    content = (
+        "【执行报告】\n"
+        f"用户问题回显：{state.get('user_query', '')}\n"
+        "用户意图：任务名全局检索\n"
+        f"工具决策：任务查询对「{failed_name}」未命中，按硬规则先调用 search_all 全局检索，"
+        "确认知识库中是否真的不存在，避免直接跳到其他任务/角色。\n"
+        "【工具调用】\n"
+        f'[{{"tool": "search_all", "args": {{"query": "{failed_name}"}}}}]'
+    )
+    tool_call = {
+        "name": "search_all",
+        "args": {"query": failed_name},
+        "id": f"call_recovery_search_{iteration + 1}",
+        "type": "tool_call",
+    }
+    trace_emit("plan", {
+        "iteration": iteration + 1,
+        "execution_plan": content[:500],
+        "tool_call_names": ["search_all"],
+        "tool_call_source": "auto_recovery_search",
+        "run_id": state.get("run_id"),
+    })
+    return {
+        "messages": [AIMessage(content=content, tool_calls=[tool_call])],
+        "execution_plan": content,
+        "iteration": iteration + 1,
+        "intent_labels": state.get("intent_labels", []),
+    }
+
+
+def _recovery_stage1(state, messages, latest, iteration):
+    """阶段 1：任务查询未命中 → 先 search_all 全局检索；不适用返回 None。"""
+    failed_name = _tool_call_arg_value(
+        messages, getattr(latest, "tool_call_id", ""),
+        ("name", "quest_name", "query"),
+    )
+    if not failed_name:
+        failed_name = state.get("user_query", "")
+    if not failed_name:
+        return None
+    if failed_name in _attempted_search_all_queries(messages):
+        return None
+    return _recovery_search_all_payload(state, failed_name, iteration)
+
+
+def _recovery_original_name(messages, latest, name_by_call_id):
+    """阶段 2 前置：取本次全局检索之前最近一次任务查询失败的原任务名。
+
+    返回 (原任务名, 最近一次任务查询失败消息或 None)。
+    LLM 可能先直接 search_all 而不是先 query_quest；此时以本次 search_all 的查询词作为原任务名。
+    """
+    latest_index = None
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i] is latest:
+            latest_index = i
+            break
+    if latest_index is None:
+        return "", None
+    prev_failure = None
+    for i in range(latest_index - 1, -1, -1):
+        msg = messages[i]
+        if not isinstance(msg, ToolMessage):
+            continue
+        name = _tool_name_of(msg, name_by_call_id)
+        if name in ("query_quest", "load_quest_content") and _is_not_found(msg):
+            prev_failure = msg
+            break
+        # 只认最近的任务查询失败；若中间已有其他成功结果，说明 LLM 已转向其他路径，不强制纠正
+        if _is_not_found(msg) or name in ("search_all",):
+            continue
+        break
+    if prev_failure is not None:
+        original_name = _tool_call_arg_value(
+            messages, getattr(prev_failure, "tool_call_id", ""),
+            ("name", "quest_name", "query"),
+        )
+    else:
+        original_name = _tool_call_arg_value(
+            messages, getattr(latest, "tool_call_id", ""),
+            ("query",),
+        )
+    return original_name, prev_failure
+
+
+def _recovery_typo_payload(state, messages, original_name, prev_failure, name_by_call_id, iteration):
+    """阶段 2 的返回载荷：相似名候选 → 用同一任务查询工具重试一次；不适用返回 None。"""
+    attempted = _attempted_task_names(messages)
+    candidates = find_similar_quest_names(original_name, top_n=1)
+    if not candidates:
+        return None
+    corrected = candidates[0]
+    if corrected == original_name or corrected in attempted:
+        return None
+    retry_tool = _tool_name_of(prev_failure, name_by_call_id) or "query_quest"
+    if retry_tool not in ("query_quest", "load_quest_content"):
+        retry_tool = "query_quest"
+    if retry_tool == "load_quest_content":
+        retry_args = {"quest_name": corrected}
+    else:
+        retry_args = {"name": corrected}
+    content = (
+        "【执行报告】\n"
+        f"用户问题回显：{state.get('user_query', '')}\n"
+        "用户意图：任务名疑似错别字纠正\n"
+        f"工具决策：search_all 对「{original_name}」也无结果，按相似度识别疑似正确名称「{corrected}」，"
+        "用同一任务查询工具重试一次。\n"
+        "【工具调用】\n"
+        f'[{{"tool": "{retry_tool}", "args": {json.dumps(retry_args, ensure_ascii=False)}}}]'
+    )
+    tool_call = {
+        "name": retry_tool,
+        "args": retry_args,
+        "id": f"call_recovery_typo_{iteration + 1}",
+        "type": "tool_call",
+    }
+    trace_emit("plan", {
+        "iteration": iteration + 1,
+        "execution_plan": content[:500],
+        "tool_call_names": [retry_tool],
+        "tool_call_source": "auto_recovery_typo",
+        "run_id": state.get("run_id"),
+    })
+    return {
+        "messages": [AIMessage(content=content, tool_calls=[tool_call])],
+        "execution_plan": content,
+        "iteration": iteration + 1,
+        "intent_labels": state.get("intent_labels", []),
+    }
+
 
 def _maybe_auto_task_recovery(state, messages, routed_tools, iteration):
     """任务未命中后的确定性恢复：先全局检索，再无结果则相似名纠错。
@@ -3101,124 +3232,16 @@ def _maybe_auto_task_recovery(state, messages, routed_tools, iteration):
 
     # 阶段1：任务查询未命中 → 强制先 search_all 全局检索
     if latest_name in ("query_quest", "load_quest_content") and _is_not_found(latest):
-        failed_name = _tool_call_arg_value(
-            messages, getattr(latest, "tool_call_id", ""),
-            ("name", "quest_name", "query"),
-        )
-        if not failed_name:
-            failed_name = state.get("user_query", "")
-        if not failed_name:
-            return None
-        if failed_name in _attempted_search_all_queries(messages):
-            return None
-        content = (
-            "【执行报告】\n"
-            f"用户问题回显：{state.get('user_query', '')}\n"
-            "用户意图：任务名全局检索\n"
-            f"工具决策：任务查询对「{failed_name}」未命中，按硬规则先调用 search_all 全局检索，"
-            "确认知识库中是否真的不存在，避免直接跳到其他任务/角色。\n"
-            "【工具调用】\n"
-            f'[{{"tool": "search_all", "args": {{"query": "{failed_name}"}}}}]'
-        )
-        tool_call = {
-            "name": "search_all",
-            "args": {"query": failed_name},
-            "id": f"call_recovery_search_{iteration + 1}",
-            "type": "tool_call",
-        }
-        trace_emit("plan", {
-            "iteration": iteration + 1,
-            "execution_plan": content[:500],
-            "tool_call_names": ["search_all"],
-            "tool_call_source": "auto_recovery_search",
-            "run_id": state.get("run_id"),
-        })
-        return {
-            "messages": [AIMessage(content=content, tool_calls=[tool_call])],
-            "execution_plan": content,
-            "iteration": iteration + 1,
-            "intent_labels": state.get("intent_labels", []),
-        }
+        return _recovery_stage1(state, messages, latest, iteration)
 
     # 阶段2：search_all 也无结果 → 进入疑似错别字纠正（相似名候选，代码层执行）
     if latest_name == "search_all" and _is_not_found(latest):
-        # 找到这次全局检索之前最近的一次任务未命中
-        latest_index = None
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i] is latest:
-                latest_index = i
-                break
-        if latest_index is None:
-            return None
-        prev_failure = None
-        for i in range(latest_index - 1, -1, -1):
-            msg = messages[i]
-            if not isinstance(msg, ToolMessage):
-                continue
-            name = _tool_name_of(msg, name_by_call_id)
-            if name in ("query_quest", "load_quest_content") and _is_not_found(msg):
-                prev_failure = msg
-                break
-            # 只认最近的任务查询失败；若中间已有其他成功结果，说明 LLM 已转向其他路径，不强制纠正
-            if _is_not_found(msg) or name in ("search_all",):
-                continue
-            break
-        if prev_failure is not None:
-            original_name = _tool_call_arg_value(
-                messages, getattr(prev_failure, "tool_call_id", ""),
-                ("name", "quest_name", "query"),
-            )
-        else:
-            # LLM 可能先直接 search_all 而不是先 query_quest；
-            # 此时以本次 search_all 的查询词作为原任务名，仍走同一套相似名纠正。
-            original_name = _tool_call_arg_value(
-                messages, getattr(latest, "tool_call_id", ""),
-                ("query",),
-            )
+        original_name, prev_failure = _recovery_original_name(messages, latest, name_by_call_id)
         if not original_name:
             return None
-        attempted = _attempted_task_names(messages)
-        candidates = find_similar_quest_names(original_name, top_n=1)
-        if not candidates:
-            return None
-        corrected = candidates[0]
-        if corrected == original_name or corrected in attempted:
-            return None
-        retry_tool = _tool_name_of(prev_failure, name_by_call_id) or "query_quest"
-        if retry_tool not in ("query_quest", "load_quest_content"):
-            retry_tool = "query_quest"
-        if retry_tool == "load_quest_content":
-            retry_args = {"quest_name": corrected}
-        else:
-            retry_args = {"name": corrected}
-        content = (
-            "【执行报告】\n"
-            f"用户问题回显：{state.get('user_query', '')}\n"
-            "用户意图：任务名疑似错别字纠正\n"
-            f"工具决策：search_all 对「{original_name}」也无结果，按相似度识别疑似正确名称「{corrected}」，"
-            "用同一任务查询工具重试一次。\n"
-            "【工具调用】\n"
-            f'[{{"tool": "{retry_tool}", "args": {json.dumps(retry_args, ensure_ascii=False)}}}]'
+        return _recovery_typo_payload(
+            state, messages, original_name, prev_failure, name_by_call_id, iteration
         )
-        tool_call = {
-            "name": retry_tool,
-            "args": retry_args,
-            "id": f"call_recovery_typo_{iteration + 1}",
-            "type": "tool_call",
-        }
-        trace_emit("plan", {
-            "iteration": iteration + 1,
-            "execution_plan": content[:500],
-            "tool_call_names": [retry_tool],
-            "tool_call_source": "auto_recovery_typo",
-            "run_id": state.get("run_id"),
-        })
-        return {
-            "messages": [AIMessage(content=content, tool_calls=[tool_call])],
-            "execution_plan": content,
-            "iteration": iteration + 1,
-            "intent_labels": state.get("intent_labels", []),
-        }
 
     return None
 
@@ -3231,6 +3254,7 @@ def _maybe_auto_task_recovery(state, messages, routed_tools, iteration):
 _IDENTITY_TAIL_RE = re.compile(
     r"(?:是谁|指谁|是什么人|是哪位|是什么角色)[？?吗嘛呢啊呀。！!、，\s]*$"
 )
+
 
 
 def _parse_alias_mappings(alias_notes: str) -> List[Tuple[str, str]]:
