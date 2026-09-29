@@ -552,6 +552,133 @@ def _snippet_around(text: str, keyword: str, width: int = 300) -> str:
 
 
 # ====== 世界/组织背景补充检索工具（不在初始工具集中，搜索碰壁后才暴露） ======
+
+def _world_npc_hay(name, npc, fields: tuple) -> str:
+    """NPC 匹配文本：名字 + 指定字段值；非 dict 时字段位留空（与原口径一致，含分隔空格）。"""
+    parts = [str(name)]
+    for key in fields:
+        parts.append(str(npc.get(key, "")) if isinstance(npc, dict) else "")
+    return " ".join(parts)
+
+
+def _world_npc_formatted(name, npc):
+    """NPC 多行展示：组织/种族/职业/地区任一存在才输出；非 dict 返回 None。"""
+    if not isinstance(npc, dict):
+        return None
+    org = npc.get("org") or npc.get("所属组织") or npc.get("org_race") or ""
+    race = npc.get("race") or npc.get("种族") or ""
+    occupation = npc.get("occupation") or npc.get("职业") or ""
+    region = npc.get("region") or npc.get("所在国家") or ""
+    lines = [f"【{name}】"]
+    if org:
+        lines.append(f"所属组织: {org}")
+    if race:
+        lines.append(f"种族: {race}")
+    if occupation:
+        lines.append(f"职业: {occupation}")
+    if region:
+        lines.append(f"地区: {region}")
+    return chr(10).join(lines)
+
+
+def _world_weapon_snippets(query: str) -> list:
+    """武器故事：名称/简介/武器故事任一含 query，则取武器故事四周片段。"""
+    hits = []
+    for wpn in 武器知识库:
+        if not isinstance(wpn, dict):
+            continue
+        weapon_hay = " ".join([
+            str(wpn.get("武器名称", "")),
+            str(wpn.get("简介", "")),
+            str(wpn.get("武器故事", "")),
+        ])
+        if query in weapon_hay:
+            story = str(wpn.get("武器故事", ""))
+            hits.append(
+                "【武器】" + str(wpn.get("武器名称", "")) + chr(10)
+                + _snippet_around(story, query, 400)
+            )
+    return hits
+
+
+def _world_artifact_snippets(query: str) -> list:
+    """圣遗物部位故事：逐个部位故事查 query，命中即取该部位片段。"""
+    hits = []
+    for art in 圣遗物知识库:
+        if not isinstance(art, dict):
+            continue
+        stories = art.get("部位故事", {})
+        if isinstance(stories, dict):
+            for key, val in stories.items():
+                if query in str(val):
+                    hits.append(
+                        "【圣遗物】" + str(art.get("圣遗物名称", "")) + " · " + str(key) + chr(10)
+                        + _snippet_around(str(val), query, 400)
+                    )
+    return hits
+
+
+def _world_book_snippets(query: str) -> list:
+    """书籍：标题/正文任一含 query，则取正文四周片段。"""
+    hits = []
+    for book in _load_content_json("books"):
+        if not isinstance(book, dict):
+            continue
+        book_hay = " ".join([
+            str(book.get("title", "")),
+            str(book.get("text", "")),
+        ])
+        if query in book_hay:
+            hits.append(
+                "【书籍】" + str(book.get("title", "")) + chr(10)
+                + _snippet_around(str(book.get("text", "")), query, 400)
+            )
+    return hits
+
+
+def _world_npc_hits_from_data(query: str) -> list:
+    """npcs_processed.json（_npcs_data）：名字/组织/种族/职业字段命中即收集。"""
+    hits = []
+    for name, npc in _npcs_data.items():
+        text = _world_npc_hay(name, npc, ("org", "所属组织", "org_race", "职业", "occupation"))
+        if query not in text:
+            continue
+        fmt = _world_npc_formatted(name, npc)
+        if fmt:
+            hits.append(fmt)
+    return hits
+
+
+def _world_npc_hits_from_wiki(query: str, existing: list) -> list:
+    """npcs_wiki_details.json（含更完整 org_race）：与 existing 去重后收集；文件缺失/损坏视为无数据。"""
+    wiki_path = os.path.join(CONTENT_DIR, "npcs_wiki_details.json")
+    if not os.path.exists(wiki_path):
+        return []
+    try:
+        with open(wiki_path, "r", encoding="utf-8") as f:
+            wiki_npcs = json.load(f)
+    except Exception:
+        wiki_npcs = {}
+    if not isinstance(wiki_npcs, dict):
+        return []
+    hits = []
+    for name, npc in wiki_npcs.items():
+        text = _world_npc_hay(name, npc, ("org_race", "origin", "region"))
+        if query not in text:
+            continue
+        fmt = _world_npc_formatted(name, npc)
+        if fmt and fmt not in existing and fmt not in hits:
+            hits.append(fmt)
+    return hits
+
+
+def _world_npc_hits(query: str) -> list:
+    """NPC/组织命中清单：先 npcs_processed，再接 wiki 明细（同名同格式去重）。"""
+    hits = _world_npc_hits_from_data(query)
+    hits.extend(_world_npc_hits_from_wiki(query, hits))
+    return hits
+
+
 @tool
 def search_world(query: str) -> str:
     """搜索世界观设定与组织/NPC背景（lore.json + NPC所属组织）。
@@ -567,102 +694,12 @@ def search_world(query: str) -> str:
         results.append(lore_text)
 
     # 2) 武器故事 / 圣遗物故事 / 书籍正文（卢契烬等组织名常出现在这些长文本里）
-    for wpn in 武器知识库:
-        if not isinstance(wpn, dict):
-            continue
-        weapon_hay = " ".join([
-            str(wpn.get("武器名称", "")),
-            str(wpn.get("简介", "")),
-            str(wpn.get("武器故事", "")),
-        ])
-        if query in weapon_hay:
-            story = str(wpn.get("武器故事", ""))
-            results.append(
-                "【武器】" + str(wpn.get("武器名称", "")) + chr(10)
-                + _snippet_around(story, query, 400)
-            )
-
-    for art in 圣遗物知识库:
-        if not isinstance(art, dict):
-            continue
-        stories = art.get("部位故事", {})
-        if isinstance(stories, dict):
-            for key, val in stories.items():
-                if query in str(val):
-                    results.append(
-                        "【圣遗物】" + str(art.get("圣遗物名称", "")) + " · " + str(key) + chr(10)
-                        + _snippet_around(str(val), query, 400)
-                    )
-
-    for book in _load_content_json("books"):
-        if not isinstance(book, dict):
-            continue
-        book_hay = " ".join([
-            str(book.get("title", "")),
-            str(book.get("text", "")),
-        ])
-        if query in book_hay:
-            results.append(
-                "【书籍】" + str(book.get("title", "")) + chr(10)
-                + _snippet_around(str(book.get("text", "")), query, 400)
-            )
+    results.extend(_world_weapon_snippets(query))
+    results.extend(_world_artifact_snippets(query))
+    results.extend(_world_book_snippets(query))
 
     # 3) NPC / 组织字段
-    def _npc_formatted(name, npc):
-        if not isinstance(npc, dict):
-            return None
-        org = npc.get("org") or npc.get("所属组织") or npc.get("org_race") or ""
-        race = npc.get("race") or npc.get("种族") or ""
-        occupation = npc.get("occupation") or npc.get("职业") or ""
-        region = npc.get("region") or npc.get("所在国家") or ""
-        lines = [f"【{name}】"]
-        if org:
-            lines.append(f"所属组织: {org}")
-        if race:
-            lines.append(f"种族: {race}")
-        if occupation:
-            lines.append(f"职业: {occupation}")
-        if region:
-            lines.append(f"地区: {region}")
-        return chr(10).join(lines)
-
-    npc_hits = []
-    # 3) npcs_processed.json（已加载到 _npcs_data）
-    for name, npc in _npcs_data.items():
-        text = " ".join([
-            str(name),
-            str(npc.get("org", "")) if isinstance(npc, dict) else "",
-            str(npc.get("所属组织", "")) if isinstance(npc, dict) else "",
-            str(npc.get("org_race", "")) if isinstance(npc, dict) else "",
-            str(npc.get("职业", "")) if isinstance(npc, dict) else "",
-            str(npc.get("occupation", "")) if isinstance(npc, dict) else "",
-        ])
-        if query in text:
-            fmt = _npc_formatted(name, npc)
-            if fmt:
-                npc_hits.append(fmt)
-
-    # 4) npcs_wiki_details.json（含更完整的 org_race）
-    wiki_path = os.path.join(CONTENT_DIR, "npcs_wiki_details.json")
-    if os.path.exists(wiki_path):
-        try:
-            with open(wiki_path, "r", encoding="utf-8") as f:
-                wiki_npcs = json.load(f)
-        except Exception:
-            wiki_npcs = {}
-        if isinstance(wiki_npcs, dict):
-            for name, npc in wiki_npcs.items():
-                text = " ".join([
-                    str(name),
-                    str(npc.get("org_race", "")) if isinstance(npc, dict) else "",
-                    str(npc.get("origin", "")) if isinstance(npc, dict) else "",
-                    str(npc.get("region", "")) if isinstance(npc, dict) else "",
-                ])
-                if query in text:
-                    fmt = _npc_formatted(name, npc)
-                    if fmt and fmt not in npc_hits:
-                        npc_hits.append(fmt)
-
+    npc_hits = _world_npc_hits(query)
     if npc_hits:
         results.append("相关组织/NPC：" + chr(10) + chr(10).join(npc_hits[:20]))
 
