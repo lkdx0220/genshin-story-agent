@@ -1824,16 +1824,11 @@ def _graph_aux(graph):
     return cached
 
 
-def _task_title_aliases(entry, region_vocab=None):
-    """生成任务标题的匹配别名：结构性派生 + 词条自带别名（爬取元数据）。
+def _structural_task_aliases(title: str, region: str) -> set:
+    """结构性派生的标题别名（不引入任何主题关键词）。
 
-    结构性处理不引入任何主题关键词：地区前缀取自 entry.region；
-    「幕名」取自标题书名号；“系列·子任务”按 · 拆系列；第X幕后缀剥离。
-    词条自带别名只做长度/地区词表/幕号噪声过滤，不判定来源可信度。
+    地区前缀取自 region；「幕名」取自标题书名号；“系列·子任务”按 · 拆系列；第X幕后缀剥离。
     """
-    title = (entry.title or "").strip().replace("\xa0", " ")
-    region = (entry.region or "").strip()
-    region_vocab = region_vocab or set()
     aliases = {title}
 
     # 去掉“地区 + 空格”前缀，例如“至冬 在生命的寓所” -> “在生命的寓所”。
@@ -1862,23 +1857,52 @@ def _task_title_aliases(entry, region_vocab=None):
             aliases.add(part)
     # 标题里的幕名/说明本身就是别名。
     aliases.update(_TASK_BRACKET_RE.findall(title))
-    # 词条自带别名（B站章节/幕/子任务名称等）。
+    return aliases
+
+
+def _declared_task_aliases(entry, region_vocab) -> list:
+    """词条自带别名（B站章节/幕/子任务名称等）：只做长度/地区词表/幕号噪声过滤。
+
+    返回 list 而不是 set：插入顺序要与旧实现一致，避免改变最终别名表的迭代顺序。
+    """
+    out = []
     for alias in (entry.aliases or []):
         alias = (alias or "").strip().replace("\xa0", " ")
         if len(alias) < 3 or alias in region_vocab or _TASK_ALIAS_NOISE_RE.match(alias):
             continue
-        aliases.add(alias)
+        out.append(alias)
+    return out
 
+
+def _filter_task_aliases(aliases, title: str) -> list:
+    """统一噪声/长度过滤：幕号与序尾噪声对结构性别名同样生效。
+
+    “古老的颜色·第三幕”按 · 拆分会析出裸“第三幕”，不拦就会误命中任何提到“第三幕”的问题。
+    """
     out = []
     for alias in aliases:
         alias = alias.strip()
-        # 幕号/序尾噪声必须对结构性别名同样生效：
-        # “古老的颜色·第三幕”按 · 拆分会析出裸“第三幕”，不拦就会误命中任何提到“第三幕”的问题。
         if _TASK_ALIAS_NOISE_RE.match(alias):
             continue
         if len(alias) >= 3 or (len(alias) == 2 and alias == title):
             out.append(alias)
     return out
+
+
+def _task_title_aliases(entry, region_vocab=None):
+    """生成任务标题的匹配别名：结构性派生 + 词条自带别名（爬取元数据）。
+
+    结构性处理不引入任何主题关键词：地区前缀取自 entry.region；
+    「幕名」取自标题书名号；“系列·子任务”按 · 拆系列；第X幕后缀剥离。
+    词条自带别名只做长度/地区词表/幕号噪声过滤，不判定来源可信度。
+    """
+    title = (entry.title or "").strip().replace("\xa0", " ")
+    region = (entry.region or "").strip()
+    region_vocab = region_vocab or set()
+    aliases = _structural_task_aliases(title, region)
+    for alias in _declared_task_aliases(entry, region_vocab):
+        aliases.add(alias)
+    return _filter_task_aliases(aliases, title)
 
 
 def _task_meta_fields(entry):
