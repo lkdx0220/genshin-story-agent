@@ -19,29 +19,43 @@ from app.formatters import (
 )
 from app.retrieval import _expand_query_with_aliases, _rerank
 
+def _quest_files(sorted_by_activity: bool = False) -> list:
+    """任务类原始文件列表。
 
-@tool
-def search_activity(keyword: str, activity_name: str = "") -> str:
-    """搜索活动剧情中的对话内容。当用户提到具体活动名（如\"风花的呼吸\"、\"海灯节\"）时，优先用此工具代替 search_all。
-    keyword: 要在活动剧情中搜索的关键词（如角色名、概念、台词片段）
-    activity_name: 活动名称（可选）。提供后只搜索该活动相关页面；不提供则搜索所有活动类内容。"""
+    sorted_by_activity=True 时把活动文件排前面（search_activity 原文口径）；
+    默认保持 os.listdir 原始顺序（find_first_mention 依赖此顺序的最后排序稳定性）。
+    """
+    files = [f for f in os.listdir(CONTENT_DIR) if f.startswith("quests_") and f.endswith(".json")]
+    if sorted_by_activity:
+        files.sort(key=lambda f: (0 if "活动" in f else 1, f))
+    return files
+
+
+def _load_quest_list(filename: str) -> list:
+    """读单个 quests_*.json，失败或非列表返回空列表。"""
+    try:
+        with open(os.path.join(CONTENT_DIR, filename), "r", encoding="utf-8") as f:
+            quests = json.load(f)
+    except Exception:
+        return []
+    return quests if isinstance(quests, list) else []
+
+
+def _activity_snippet(text: str, matched_term: str) -> str:
+    """用匹配到的词定位片段（前 80、后 120 字）。"""
+    first_kw = matched_term.split()[0]
+    idx = text.find(first_kw)
+    start = max(0, idx - 80)
+    end = min(len(text), idx + len(matched_term) + 120)
+    return text[start:end].replace('\n', ' ').strip()
+
+
+def _activity_matches(keyword: str, activity_name: str) -> list:
+    """扫活动/任务文件，返回 [{title, category, snippet}]。"""
     results = []
-    # 收集所有 quests 文件
-    quest_files = [f for f in os.listdir(CONTENT_DIR) if f.startswith("quests_") and f.endswith(".json")]
-    # 活动文件优先排在前面
-    quest_files.sort(key=lambda f: (0 if "活动" in f else 1, f))
-
     search_terms = _expand_query_with_aliases(keyword)
-
-    for filename in quest_files:
-        try:
-            with open(os.path.join(CONTENT_DIR, filename), "r", encoding="utf-8") as f:
-                quests = json.load(f)
-        except Exception:
-            continue
-        if not isinstance(quests, list):
-            continue
-
+    for filename in _quest_files(sorted_by_activity=True):
+        quests = _load_quest_list(filename)
         for q in quests:
             text = q.get("text", "")
             # 用所有搜索词（含别名）尝试匹配
@@ -63,17 +77,42 @@ def search_activity(keyword: str, activity_name: str = "") -> str:
                 if activity_name not in title and activity_name not in meta_text and activity_name not in category:
                     continue
 
-            # 用匹配到的词定位片段
-            first_kw = matched_term.split()[0]
-            idx = text.find(first_kw)
-            start = max(0, idx - 80)
-            end = min(len(text), idx + len(matched_term) + 120)
-            snippet = text[start:end].replace('\n', ' ').strip()
             results.append({
                 "title": q["title"],
                 "category": q.get("category", ""),
-                "snippet": snippet,
+                "snippet": _activity_snippet(text, matched_term),
             })
+    return results
+
+
+def _rerank_or_all(keyword: str, docs: list, results: list, top_n: int = 10) -> list:
+    """Reranker 重排：rerank 不可用（None）取前 top_n，返回空则结果为空。"""
+    reranked = _rerank(keyword, docs, top_n=top_n)
+    if reranked is None:
+        return results[:top_n]
+    if reranked:
+        return [results[i] for i in reranked]
+    return []
+
+
+def _render_activity_results(keyword: str, activity_name: str, total: int, ordered: list) -> str:
+    """渲染活动搜索结果。"""
+    lines = [
+        f"\n===== 活动剧情搜索「{keyword}」"
+        + (f"（{activity_name}）" if activity_name else "")
+        + f" ({total}条候选，取前{len(ordered)}条) ====="
+    ]
+    for r in ordered:
+        lines.append(f"\n【{r['title']}】（{r['category']}）\n  片段: ...{r['snippet']}...")
+    return "\n".join(lines)
+
+
+@tool
+def search_activity(keyword: str, activity_name: str = "") -> str:
+    """搜索活动剧情中的对话内容。当用户提到具体活动名（如\"风花的呼吸\"、\"海灯节\"）时，优先用此工具代替 search_all。
+    keyword: 要在活动剧情中搜索的关键词（如角色名、概念、台词片段）
+    activity_name: 活动名称（可选）。提供后只搜索该活动相关页面；不提供则搜索所有活动类内容。"""
+    results = _activity_matches(keyword, activity_name)
 
     if not results:
         hint = f"（限定活动「{activity_name}」）" if activity_name else ""
@@ -83,18 +122,76 @@ def search_activity(keyword: str, activity_name: str = "") -> str:
 
     # Reranker 重排序
     rerank_docs = [f"【{r['title']}】{r['snippet']}" for r in results]
-    reranked = _rerank(keyword, rerank_docs, top_n=10)
-    if reranked is None:
-        ordered = results[:10]
-    elif reranked:
-        ordered = [results[i] for i in reranked]
-    else:
-        ordered = []
+    ordered = _rerank_or_all(keyword, rerank_docs, results, top_n=10)
+    return _render_activity_results(keyword, activity_name, len(results), ordered)
 
-    lines = [f"\n===== 活动剧情搜索「{keyword}」" + (f"（{activity_name}）" if activity_name else "") + f" ({len(results)}条候选，取前{len(ordered)}条) ====="]
-    for r in ordered:
-        lines.append(f"\n【{r['title']}】（{r['category']}）\n  片段: ...{r['snippet']}...")
-    return "\n".join(lines)
+
+def _mention_version(metadata: dict) -> tuple:
+    """(排序用版本号, 原始版本字符串)；解析失败记 999.0。"""
+    version_str = metadata.get("所属版本", "")
+    try:
+        version = float(version_str) if version_str else 999.0
+    except ValueError:
+        version = 999.0
+    return version, version_str
+
+
+def _mention_scan(keyword: str, type_priority: dict) -> list:
+    """扫全部任务文件（保持 os.listdir 顺序），收集所有提及，供后续按版本排序。"""
+    all_matches = []
+    for filename in _quest_files():
+        if filename == "quests_processed.json":
+            continue
+        for q in _load_quest_list(filename):
+            text = q.get("text", "")
+            if not _match_all_in(keyword, text):
+                continue
+            category = q.get("category", "")
+            metadata = q.get("metadata", {})
+            version, version_str = _mention_version(metadata)
+            # 多词时用第一个词定位
+            first_kw = keyword.split()[0]
+            idx = text.find(first_kw)
+            start = max(0, idx - 100)
+            end = min(len(text), idx + len(keyword) + 100)
+            snippet = text[start:end].replace('\n', ' ').strip()
+            speaker_match = re.search(r'\*「?([^」\n：]{1,10})」?：', text[max(0, idx-200):idx+50])
+            all_matches.append({
+                "title": q["title"], "category": category,
+                "version": version, "version_str": version_str,
+                "priority": type_priority.get(category, 99),
+                "speaker": speaker_match.group(1) if speaker_match else "未知",
+                "snippet": snippet,
+                "chapter_name": metadata.get("chapter_name", ""),
+                "act_name": metadata.get("act_name", ""),
+            })
+    return all_matches
+
+
+def _render_first_mention(first: dict, total: int, others: list) -> str:
+    """渲染首次提及（章/幕层级 + 说话角色 + 其他提及位置）。"""
+    result = "\n【首次提及位置】\n"
+    # 构建层级信息（章/幕）
+    hierarchy_parts = []
+    if first.get("chapter_name") and first["chapter_name"] != "开场动画":
+        hierarchy_parts.append(first["chapter_name"])
+    if first.get("act_name"):
+        hierarchy_parts.append(first["act_name"])
+    if first.get("chapter_name") == "开场动画":
+        hierarchy_parts.append("开场动画")
+    hierarchy_str = "，".join(hierarchy_parts) + "，" if hierarchy_parts else ""
+    if first['version_str']:
+        result += f"任务: {first['title']}（{first['category']}，{hierarchy_str}版本 {first['version_str']}）\n"
+    else:
+        result += f"任务: {first['title']}（{first['category']}）\n"
+    result += f"说话角色: {first['speaker']}\n"
+    result += f"原文片段: 「...{first['snippet']}...」\n"
+    if total > 1:
+        result += f"\n其他提及位置（共{total}处）:\n"
+        for m in others:
+            v = f"（版本 {m['version_str']}）" if m['version_str'] else ""
+            result += f"  - {m['title']}（{m['category']}）{v}\n"
+    return result
 
 
 @tool
@@ -105,70 +202,12 @@ def find_first_mention(keyword: str) -> str:
     """
     print(f"[工具] 查找首次提及: {keyword}")
     type_priority = {"魔神任务": 1, "传说任务": 2, "世界任务": 3, "部族纪闻": 4, "邀约事件": 5}
-    all_matches = []
-    for filename in os.listdir(CONTENT_DIR):
-        if not filename.startswith("quests_") or not filename.endswith(".json"):
-            continue
-        if filename == "quests_processed.json":
-            continue
-        try:
-            with open(os.path.join(CONTENT_DIR, filename), "r", encoding="utf-8") as f:
-                quests = json.load(f)
-        except Exception:
-            continue
-        if not isinstance(quests, list):
-            continue
-        for q in quests:
-            text = q.get("text", "")
-            if not _match_all_in(keyword, text):
-                continue
-            category = q.get("category", "")
-            priority = type_priority.get(category, 99)
-            metadata = q.get("metadata", {})
-            version_str = metadata.get("所属版本", "")
-            try:
-                version = float(version_str) if version_str else 999.0
-            except ValueError:
-                version = 999.0
-            chapter_name = metadata.get("chapter_name", "")
-            act_name = metadata.get("act_name", "")
-            # 多词时用第一个词定位
-            first_kw = keyword.split()[0]
-            idx = text.find(first_kw)
-            start = max(0, idx - 100)
-            end = min(len(text), idx + len(keyword) + 100)
-            snippet = text[start:end].replace('\n', ' ').strip()
-            speaker_match = re.search(r'\*「?([^」\n：]{1,10})」?：', text[max(0, idx-200):idx+50])
-            speaker = speaker_match.group(1) if speaker_match else "未知"
-            all_matches.append({
-                "title": q["title"], "category": category,
-                "version": version, "version_str": version_str,
-                "priority": priority, "speaker": speaker, "snippet": snippet,
-                "chapter_name": chapter_name, "act_name": act_name,
-            })
+    all_matches = _mention_scan(keyword, type_priority)
     if not all_matches:
         return f"未在任务剧情中找到「{keyword}」的提及。"
     all_matches.sort(key=lambda x: (x["version"], x["priority"]))
     first = all_matches[0]
-    result = f"\n【首次提及位置】\n"
-    # 构建层级信息（章/幕）
-    hierarchy_parts = []
-    if first.get("chapter_name") and first["chapter_name"] != "开场动画":
-        hierarchy_parts.append(first["chapter_name"])
-    if first.get("act_name"):
-        hierarchy_parts.append(first["act_name"])
-    if first.get("chapter_name") == "开场动画":
-        hierarchy_parts.append("开场动画")
-    hierarchy_str = "，".join(hierarchy_parts) + "，" if hierarchy_parts else ""
-    result += f"任务: {first['title']}（{first['category']}，{hierarchy_str}版本 {first['version_str']}）\n" if first['version_str'] else f"任务: {first['title']}（{first['category']}）\n"
-    result += f"说话角色: {first['speaker']}\n"
-    result += f"原文片段: 「...{first['snippet']}...」\n"
-    if len(all_matches) > 1:
-        result += f"\n其他提及位置（共{len(all_matches)}处）:\n"
-        for m in all_matches[1:6]:
-            v = f"（版本 {m['version_str']}）" if m['version_str'] else ""
-            result += f"  - {m['title']}（{m['category']}）{v}\n"
-    return result
+    return _render_first_mention(first, len(all_matches), all_matches[1:6])
 
 
 # ====== 全局检索工具（任务未命中后的确定性兜底）======
