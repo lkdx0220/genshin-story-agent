@@ -200,6 +200,98 @@ _aliases_sorted_for_legendary = None  # [alias, ...] 按长度降序
 _pseudo_legendary_map = None          # {戏称: (活动名, 备注)} 如 "兹白传说任务"→("奔霄颂玉轮", "2026年海灯节")
 _pseudo_aliases_sorted = None         # [戏称, ...] 按长度降序
 
+# 传说任务章节列表的两种行格式（模块级常量，避免每行重复编译）
+_LEGENDARY_LINE_RE = re.compile(r'^(.+?)[：:,，]\s*(.+)$')
+# 提取戏称关键词: "被戏称为是兹白传说任务" → 兹白传说任务
+_PSEUDO_ALIAS_RE = re.compile(r'被戏称为(?:是)?(.+?)(?:（.+）)?$')
+
+
+def _legendary_txt_path() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "传说任务章节列表.txt")
+
+
+def _register_pseudo(pseudo_map: dict, alias: str, name: str, detail: str) -> None:
+    """登记戏称别名；detail 括号内的简称也指向同一 (name, detail)。
+
+    如「胡桃传说任务第二幕（胡桃传说任务2）」要把括号里的简称一并登记。
+    """
+    pseudo_map[alias] = (name, detail)
+    bracket_match = re.search(r'（(.+?)）', detail)
+    if bracket_match:
+        pseudo_map[bracket_match.group(1).strip()] = (name, detail)
+
+
+def _parse_pseudo_line(line: str, pseudo_map: dict) -> bool:
+    """处理「版本活动/不是传说任务」行；返回该行是否已被消费。"""
+    if not any(kw in line for kw in ["版本活动", "不是传说任务"]):
+        return False
+    # 检查是否包含"被戏称为"
+    if "被戏称为" in line:
+        m = _LEGENDARY_LINE_RE.match(line)
+        if m:
+            activity_name = m.group(1).strip()
+            remark = m.group(2).strip()
+            pm = _PSEUDO_ALIAS_RE.search(remark)
+            if pm:
+                _register_pseudo(pseudo_map, pm.group(1).strip(), activity_name, remark)
+    return True
+
+
+def _parse_legendary_line(line: str, quest_map: dict, pseudo_map: dict) -> None:
+    """处理普通行：登记 角色→章节；备注含「被戏称为」的判为伪传说任务，不入角色表。"""
+    m = _LEGENDARY_LINE_RE.match(line)
+    if not m:
+        return
+    chapter = m.group(1).strip()
+    character = m.group(2).strip()
+    # 如果备注中包含"被戏称为"，这是伪传说任务
+    if "被戏称为" in character:
+        pm = _PSEUDO_ALIAS_RE.search(character)
+        if pm:
+            _register_pseudo(pseudo_map, pm.group(1).strip(), chapter, character)
+        return
+    if len(character) > 10 or not character:
+        return
+    quest_map[character] = chapter
+
+
+def _parse_legendary_txt(txt_path: str, quest_map: dict, pseudo_map: dict) -> None:
+    """逐行解析传说任务章节列表。"""
+    with open(txt_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if _parse_pseudo_line(line, pseudo_map):
+                continue
+            _parse_legendary_line(line, quest_map, pseudo_map)
+
+
+def _build_alias_to_legendary(quest_map: dict, pseudo_map: dict) -> Tuple[dict, list]:
+    """构建反向 别名→(角色, 章节) 映射与按长度倒序的别名表；缺别名表时降级为空。"""
+    try:
+        from character_aliases import CHARACTER_ALIASES
+
+        alias_map = {}
+        for canonical, aliases in CHARACTER_ALIASES.items():
+            if canonical not in quest_map:
+                continue
+            chapter = quest_map[canonical]
+            for alias in aliases:
+                clean = alias.strip().replace("「", "").replace("」", "")
+                if len(clean) < 2:
+                    continue
+                if clean not in alias_map:
+                    alias_map[clean] = (canonical, chapter)
+        aliases_sorted = sorted(alias_map.keys(), key=len, reverse=True)
+    except ImportError:
+        print("[传说任务映射] 无法导入 character_aliases，跳过别名锚定")
+        return {}, []
+    print(f"[传说任务映射] 已构建: {len(quest_map)} 个角色→章节 + "
+          f"{len(alias_map)} 个反向别名 + "
+          f"{len(pseudo_map)} 个戏称活动映射")
+    return alias_map, aliases_sorted
+
 
 def _get_legendary_quest_map():
     """解析传说任务章节列表，构建角色名→章节名的映射。
@@ -210,7 +302,7 @@ def _get_legendary_quest_map():
     if _legendary_quest_map is not None:
         return _legendary_quest_map
 
-    txt_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "传说任务章节列表.txt")
+    txt_path = _legendary_txt_path()
     _legendary_quest_map = {}
     _pseudo_legendary_map = {}
 
@@ -221,79 +313,13 @@ def _get_legendary_quest_map():
         _pseudo_aliases_sorted = []
         return _legendary_quest_map
 
-    # 匹配 "活动名：备注"
-    pattern = re.compile(r'^(.+?)[：:,，]\s*(.+)$')
-    # 提取戏称关键词: "被戏称为是兹白传说任务" → 兹白传说任务
-    pseudo_pattern = re.compile(r'被戏称为(?:是)?(.+?)(?:（.+）)?$')
-
-    with open(txt_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            if any(kw in line for kw in ["版本活动", "不是传说任务"]):
-                # 检查是否包含"被戏称为"
-                if "被戏称为" in line:
-                    m = pattern.match(line)
-                    if m:
-                        activity_name = m.group(1).strip()
-                        remark = m.group(2).strip()
-                        # 从备注中提取戏称别名
-                        pm = pseudo_pattern.search(remark)
-                        if pm:
-                            pseudo_alias = pm.group(1).strip()
-                            _pseudo_legendary_map[pseudo_alias] = (activity_name, remark)
-                            # 括号内的简称也加入，如 "胡桃传说任务第二幕（胡桃传说任务2）"
-                            bracket_match = re.search(r'（(.+?)）', remark)
-                            if bracket_match:
-                                short_alias = bracket_match.group(1).strip()
-                                _pseudo_legendary_map[short_alias] = (activity_name, remark)
-                continue
-            m = pattern.match(line)
-            if m:
-                chapter = m.group(1).strip()
-                character = m.group(2).strip()
-                # 如果备注中包含"被戏称为"，这是伪传说任务
-                if "被戏称为" in character:
-                    pm = pseudo_pattern.search(character)
-                    if pm:
-                        pseudo_alias = pm.group(1).strip()
-                        _pseudo_legendary_map[pseudo_alias] = (chapter, character)
-                        bracket_match = re.search(r'（(.+?)）', character)
-                        if bracket_match:
-                            short_alias = bracket_match.group(1).strip()
-                            _pseudo_legendary_map[short_alias] = (chapter, character)
-                    continue
-                if len(character) > 10 or not character:
-                    continue
-                _legendary_quest_map[character] = chapter
-
+    _parse_legendary_txt(txt_path, _legendary_quest_map, _pseudo_legendary_map)
     _pseudo_aliases_sorted = sorted(_pseudo_legendary_map.keys(), key=len, reverse=True)
 
     # ---- 构建反向别名→章节映射 ----
-    try:
-        from character_aliases import CHARACTER_ALIASES
-        _alias_to_legendary_map = {}
-        for canonical, aliases in CHARACTER_ALIASES.items():
-            if canonical not in _legendary_quest_map:
-                continue
-            chapter = _legendary_quest_map[canonical]
-            for alias in aliases:
-                clean = alias.strip().replace("「", "").replace("」", "")
-                if len(clean) < 2:
-                    continue
-                if clean not in _alias_to_legendary_map:
-                    _alias_to_legendary_map[clean] = (canonical, chapter)
-        _aliases_sorted_for_legendary = sorted(
-            _alias_to_legendary_map.keys(), key=len, reverse=True
-        )
-        print(f"[传说任务映射] 已构建: {len(_legendary_quest_map)} 个角色→章节 + "
-              f"{len(_alias_to_legendary_map)} 个反向别名 + "
-              f"{len(_pseudo_legendary_map)} 个戏称活动映射")
-    except ImportError:
-        print("[传说任务映射] 无法导入 character_aliases，跳过别名锚定")
-        _alias_to_legendary_map = {}
-        _aliases_sorted_for_legendary = []
+    _alias_to_legendary_map, _aliases_sorted_for_legendary = _build_alias_to_legendary(
+        _legendary_quest_map, _pseudo_legendary_map
+    )
 
     return _legendary_quest_map
 
