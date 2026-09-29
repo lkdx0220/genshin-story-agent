@@ -1694,42 +1694,51 @@ _CHAPTER_PREFIX_RE = re.compile(r"^(第[一二三四五六七八九十百0-9]+�
 _GRAPH_AUX_CACHE = {}
 
 
-def _graph_aux(graph):
-    """按图缓存：地区词表 + 任务名索引 + 章→地区归属（供“主线/字段链”定位使用）。"""
-    cached = _GRAPH_AUX_CACHE.get(id(graph))
-    if cached is not None:
-        return cached
-    cached = {
-        "region": set(), "names": {}, "chapters": {}, "chapter_region": {},
-        "series_children": {}, "series_parent": {},
-    }
-    _GRAPH_AUX_CACHE[id(graph)] = cached
+def _graph_aux_region_vocab(graph) -> set:
+    """地区词表：所有词条 region 字段的去重集合。"""
+    region_vocab = set()
     for entry in graph.entries.values():
         region = (entry.region or "").strip()
         if region:
-            cached["region"].add(region)
+            region_vocab.add(region)
+    return region_vocab
+
+
+def _graph_aux_task_names(graph, region_vocab) -> Tuple[dict, dict]:
+    """任务名索引（标题/别名/书名号内容 → entry_id 列表）+ 章前缀分组。
+
+    主线归属按“章前缀”分组：米游社 region 记的是“任务发生地”，不是剧情归属
+    （空月之歌序奏「归途」发生地在纳塔、第二章 序幕「振袖秋风问红叶」发生在璃月），
+    所以不能直接拿 region 筛“X主线”。
+    """
+    names_index: dict = {}
+    chapters: dict = {}
     for entry in graph.entries.values():
         if entry.entry_type != "task":
             continue
-        # 主线归属按“章前缀”分组：米游社 region 记的是“任务发生地”，不是剧情归属
-        # （空月之歌序奏「归途」发生地在纳塔、第二章 序幕「振袖秋风问红叶」发生在璃月），
-        # 所以不能直接拿 region 筛“X主线”。
         m = _CHAPTER_PREFIX_RE.match((entry.title or "").replace("\xa0", " ").strip())
         if m:
-            cached["chapters"].setdefault(m.group(1), []).append(entry)
+            chapters.setdefault(m.group(1), []).append(entry)
         names = {(entry.title or "").strip()}
         names.update((a or "").strip() for a in (entry.aliases or []))
         names.update(_TASK_BRACKET_RE.findall(entry.title or ""))
         names.discard("")
         for name in names:
             # 幕号/序尾这类结构词会把整章任务带进来，必须排除。
-            if len(name) < 4 or name in cached["region"] or _TASK_ALIAS_NOISE_RE.match(name):
+            if len(name) < 4 or name in region_vocab or _TASK_ALIAS_NOISE_RE.match(name):
                 continue
-            cached["names"].setdefault(name, []).append(entry.entry_id)
-    # 章 → 地区：取该章幕级任务发生地的严格多数派；平票不认领。
-    # 只在“有地区标注”的幕之间投票：米游社漏标某一幕时（如 第七章 第一幕「无神怜爱的雪国」
-    # 没有任务区域字段），把空标注算进分母会让整章认领失败；空标注不算票也不占分母。
-    for chapter, entries in cached["chapters"].items():
+            names_index.setdefault(name, []).append(entry.entry_id)
+    return names_index, chapters
+
+
+def _graph_aux_chapter_regions(chapters: dict) -> dict:
+    """章 → 地区：取该章幕级任务发生地的严格多数派；平票不认领。
+
+    只在“有地区标注”的幕之间投票：米游社漏标某一幕时（如 第七章 第一幕「无神怜爱的雪国」
+    没有任务区域字段），把空标注算进分母会让整章认领失败；空标注不算票也不占分母。
+    """
+    chapter_region = {}
+    for chapter, entries in chapters.items():
         counter = {}
         for entry in entries:
             region = (entry.region or "").strip()
@@ -1740,10 +1749,15 @@ def _graph_aux(graph):
             continue
         region, count = max(counter.items(), key=lambda kv: (kv[1], kv[0]))
         if count * 2 > labeled:
-            cached["chapter_region"][chapter] = region
-    # 系列页索引：米游社把这些任务写成「合集页 + 子页」两层，B 站词条的「系列任务」
-    # 字段又常常没填，父子关系只能靠别名（「荒落之城的记述人  昔时演算阵列之处」）
-    # 和标题前缀（「龙选者的旅迹 第一章…」）还原。
+            chapter_region[chapter] = region
+    return chapter_region
+
+
+def _graph_aux_series_links(graph) -> Tuple[dict, dict]:
+    """系列页索引：米游社把这些任务写成「合集页 + 子页」两层，B 站词条的「系列任务」
+    字段又常常没填，父子关系只能靠别名（「荒落之城的记述人  昔时演算阵列之处」）
+    和标题前缀（「龙选者的旅迹 第一章…」）还原。
+    """
     title_to_entry = {}
     for entry in graph.entries.values():
         if entry.entry_type != "task":
@@ -1771,8 +1785,23 @@ def _graph_aux(graph):
                 continue
             series_children.setdefault(parent.entry_id, []).append(entry.entry_id)
             series_parent.setdefault(entry.entry_id, []).append(parent.entry_id)
-    cached["series_children"] = series_children
-    cached["series_parent"] = series_parent
+    return series_children, series_parent
+
+
+def _graph_aux(graph):
+    """按图缓存：地区词表 + 任务名索引 + 章→地区归属（供“主线/字段链”定位使用）。"""
+    cached = _GRAPH_AUX_CACHE.get(id(graph))
+    if cached is not None:
+        return cached
+    cached = {
+        "region": set(), "names": {}, "chapters": {}, "chapter_region": {},
+        "series_children": {}, "series_parent": {},
+    }
+    _GRAPH_AUX_CACHE[id(graph)] = cached
+    cached["region"] = _graph_aux_region_vocab(graph)
+    cached["names"], cached["chapters"] = _graph_aux_task_names(graph, cached["region"])
+    cached["chapter_region"] = _graph_aux_chapter_regions(cached["chapters"])
+    cached["series_children"], cached["series_parent"] = _graph_aux_series_links(graph)
     return cached
 
 
