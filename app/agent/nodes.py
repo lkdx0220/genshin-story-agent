@@ -3004,7 +3004,8 @@ def _get_pure_alias_identity_matches(state: GenshinAdvisorState) -> List[Tuple[s
     # 不能按纯别名身份直答，否则会漏答并跳过必要的检索。
     # 这是保守策略：宁可多走一次工具，也不允许直答只覆盖一半。
     story = re.sub(_IDENTITY_TAIL_RE, "", text)
-    chunks = re.split(r"[和与、及跟同还有以及]|分别|都|同时|也|还", story)
+    # 字符类里已含「还」，末尾不再重复该分支（S5855 冗余分支）
+    chunks = re.split(r"[和与、及跟同还有以及]|分别|都|同时|也", story)
     for chunk in chunks:
         chunk = chunk.strip(" 　「」『』“”‘’'\"，,。！!？?：:、")
         if not chunk:
