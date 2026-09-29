@@ -13,7 +13,7 @@ import math
 import json
 import requests
 from collections import Counter
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
@@ -540,10 +540,11 @@ def _build_quest_snippet(text: str, words: list, first_word: str, matched_term: 
     return text[start:end].replace('\n', ' ').strip()
 
 
-def _keyword_search_docs(query: str, top_k: int = 15) -> list:
-    """关键词路：搜索任务内容、世界观设定、书籍正文。
-    返回格式与向量结果统一：[{id, collection, document, category}]。"""
-    results = []
+def _keyword_search_terms(query: str) -> Tuple[List[str], List[str]]:
+    """把查询扩成关键词路用的检索词表（别名展开 + 去疑问词 + 拆词 + 停用词过滤）。
+
+    返回 (search_terms, query_tokens)；search_terms 为空表示关键词路应直接返回空。
+    """
     search_terms = _expand_query_with_aliases(query)
     # 对中文自然语言查询做二次拆词：去掉疑问词后，用单个/组合关键词兜底，
     # 否则“深渊是什么 提瓦特 本质”这类无空格整句会漏掉“深渊的本质”原文。
@@ -562,11 +563,11 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
     # 过滤纯停用词/疑问词构成的检索词；没有有效内容词时关键词路直接返回空，
     # 避免“的/人/是”这类常见字把大量无关结果送进 RRF。
     search_terms = [t for t in search_terms if t and not _is_stopword_term(t)]
-    if not search_terms:
-        return []
+    return search_terms, query_tokens
 
 
-    # --- 任务内容关键词搜索 ---
+def _collect_quest_candidates(search_terms: List[str], query_tokens: List[str]) -> List[tuple]:
+    """扫 content_data/quests_*.json 收集命中候选（上限 1000 条），返回 (标题, 分类, 片段)。"""
     quest_candidates = []
     seen_candidates = set()
     for filename in os.listdir(CONTENT_DIR):
@@ -601,14 +602,19 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
             if dedup_key not in seen_candidates:
                 seen_candidates.add(dedup_key)
                 quest_candidates.append((q["title"], q.get("category", ""), snippet))
+    return quest_candidates
 
+
+def _quest_keyword_results(query: str, candidates: List[tuple], top_k: int) -> List[dict]:
+    """任务候选重排序：转成检索结果（rerank 失败时退化为按原顺序取前 top_k）。"""
+    results: List[dict] = []
     # Reranker 重排序
-    if quest_candidates:
-        rerank_docs = [f"【{c[0]}】{c[2]}" for c in quest_candidates]
-        reranked = _rerank(query, rerank_docs, top_n=min(top_k, len(quest_candidates)))
+    if candidates:
+        rerank_docs = [f"【{c[0]}】{c[2]}" for c in candidates]
+        reranked = _rerank(query, rerank_docs, top_n=min(top_k, len(candidates)))
         if reranked is None:
             # 候选太少或 rerank 失败：按原逻辑取前 top_k
-            for c in quest_candidates[:top_k]:
+            for c in candidates[:top_k]:
                 results.append({
                     "id": f"quest:{c[0]}:chunk:0",
                     "collection": "kb_quests_keyword",
@@ -617,7 +623,7 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
                 })
         elif reranked:
             for idx in reranked:
-                c = quest_candidates[idx]
+                c = candidates[idx]
                 results.append({
                     "id": f"quest:{c[0]}:chunk:0",
                     "collection": "kb_quests_keyword",
@@ -625,94 +631,121 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
                     "category": c[1],
                 })
         # else: rerank 已执行但所有候选低于阈值，关键词路不输出弱结果
+    return results
 
-    # --- 世界观设定搜索 ---
+
+def _lore_query_terms(query: str) -> List[str]:
+    """世界观检索用的查询变体：整句 + 去尾字（"清籁岛有什么内容" → 去 1~2 字）。"""
+    terms = [query]
+    if len(query) >= 3:
+        terms.append(query[:-1])
+    if len(query) >= 4:
+        terms.append(query[:-2])
+    return terms
+
+
+def _collect_lore_candidates(lore: list, terms: List[str], query: str) -> Tuple[List[dict], set]:
+    """扫 lore.json 收集候选条目，同时标出「标题被精确命中」的条目名。
+
+    标题也算命中源：地图文本类条目的地区/子区域名只写在标题里
+    （如"地图文本/稻妻 / 清籁岛"），正文只有碎片内容，只比正文会导致按名检索不到。
+    反向匹配用来接住"地图文本中稻妻的清籁岛"这类无空格整句。
+    """
+    lore_candidates = []
+    seen_lore = set()
+    lore_exact_titles = set()
+    for entry in lore:
+        title = entry["title"]
+        text = entry["text"]
+        if not any(term in title or term in text for term in terms):
+            leaf = title.rsplit("/", 1)[-1].strip()
+            if len(leaf) < 2 or leaf not in query:
+                continue
+            lore_exact_titles.add(title)
+        eid = title + text[:40]
+        if eid in seen_lore:
+            continue
+        seen_lore.add(eid)
+        lore_candidates.append(entry)
+        if any(term == title or term == title.rsplit("/", 1)[-1].strip() for term in terms):
+            lore_exact_titles.add(title)
+    return lore_candidates, lore_exact_titles
+
+
+def _lore_snippet(text: str, terms: List[str]) -> str:
+    """长文档 snippet 定位：从搜索词出现位置截窗口。
+
+    避免至冬(81871字)等长文本只返回开头的目录结构，关键原文被截掉。
+    """
+    best_pos = -1
+    for term in terms:
+        idx = text.find(term)
+        if idx >= 0:
+            best_pos = idx
+            break
+    if best_pos >= 0:
+        start = max(0, best_pos - 120)
+        end = min(len(text), best_pos + 480)
+        return text[start:end].replace('\n', ' ').strip()
+    return text[:480].replace('\n', ' ').strip()
+
+
+def _lore_keyword_results(query: str) -> Tuple[List[dict], set]:
+    """世界观设定搜索：返回 (结果, 标题被精确命中的条目名集合)。"""
+    results: List[dict] = []
     lore_path = os.path.join(CONTENT_DIR, "lore.json")
-    if os.path.exists(lore_path):
-        try:
-            with open(lore_path, "r", encoding="utf-8") as f:
-                lore = json.load(f)
-        except Exception:
-            lore = []
-        if lore:
-            lore_candidates = []
-            seen_lore = set()
-            # 标题末段与检索词完全相等的条目（用户问的就是这个条目名），
-            # 单独标记并在融合前提到关键词路最前面。
-            lore_exact_titles = set()
-            lore_terms = [query]
-            if len(query) >= 3:
-                lore_terms.append(query[:-1])
-            if len(query) >= 4:
-                lore_terms.append(query[:-2])
-            for entry in lore:
-                title = entry["title"]
-                text = entry["text"]
-                # 标题也算命中源：地图文本类条目的地区/子区域名只写在标题里
-                # （如"地图文本/稻妻 / 清籁岛"），正文只有碎片内容，
-                # 只比正文会导致按名检索不到。
-                if not any(term in title or term in text for term in lore_terms):
-                    # 反向匹配：条目名本身出现在查询里。中文查询无空格，
-                    # "地图文本中稻妻的清籁岛"这类整句靠正向子串永远比不上。
-                    leaf = title.rsplit("/", 1)[-1].strip()
-                    if len(leaf) < 2 or leaf not in query:
-                        continue
-                    lore_exact_titles.add(title)
-                eid = title + text[:40]
-                if eid in seen_lore:
-                    continue
-                seen_lore.add(eid)
-                lore_candidates.append(entry)
-                if any(term == title or term == title.rsplit("/", 1)[-1].strip()
-                       for term in lore_terms):
-                    lore_exact_titles.add(title)
-            if lore_candidates:
-                # 精确命中条目名的先锁定名额，不参与 rerank 竞争：
-                # 否则地名/名词查询里它们会被“正文顺带提到”的长条目挤掉。
-                exact = [c for c in lore_candidates if c["title"] in lore_exact_titles][:5]
-                rest = [c for c in lore_candidates if c["title"] not in lore_exact_titles]
-                budget = 5 - len(exact)
-                reranked = None
-                if budget > 0 and rest:
-                    rerank_docs = [f"【{c['title']}】{c['text']}" for c in rest]
-                    reranked = _rerank(query, rerank_docs, top_n=min(budget, len(rest)))
-                if reranked is None:
-                    ordered = exact + rest[:budget]
-                elif reranked:
-                    ordered = exact + [rest[i] for i in reranked]
-                else:
-                    ordered = exact
-                for c in ordered:
-                    text = c["text"]
-                    # 长文档 snippet 定位：找到搜索词出现位置，从该位置截取窗口
-                    # 避免至冬(81871字)等长文本只返回开头的目录结构，关键原文被截掉
-                    best_pos = -1
-                    for term in lore_terms:
-                        idx = text.find(term)
-                        if idx >= 0:
-                            best_pos = idx
-                            break
-                    if best_pos >= 0:
-                        start = max(0, best_pos - 120)
-                        end = min(len(text), best_pos + 480)
-                        snippet = text[start:end].replace('\n', ' ').strip()
-                    else:
-                        snippet = text[:480].replace('\n', ' ').strip()
-                    results.append({
-                        "id": f"lore:{c['title']}",
-                        "collection": "kb_lore",
-                        "document": snippet,
-                    })
+    if not os.path.exists(lore_path):
+        return results, set()
+    try:
+        with open(lore_path, "r", encoding="utf-8") as f:
+            lore = json.load(f)
+    except Exception:
+        lore = []
+    if not lore:
+        return results, set()
 
-                # 精确标题命中前置：这些条目的名字就是用户问的对象，
-                # 优先级高于“正文顺带提到”的任务片段。
-                if lore_exact_titles:
-                    head = [r for r in results if r["id"][len("lore:"):] in lore_exact_titles]
-                    if head:
-                        head_ids = {r["id"] for r in head}
-                        results = head + [r for r in results if r["id"] not in head_ids]
+    terms = _lore_query_terms(query)
+    lore_candidates, lore_exact_titles = _collect_lore_candidates(lore, terms, query)
+    if not lore_candidates:
+        return results, set()
 
-    # --- 书籍正文搜索 ---
+    # 精确命中条目名的先锁定名额，不参与 rerank 竞争：
+    # 否则地名/名词查询里它们会被“正文顺带提到”的长条目挤掉。
+    exact = [c for c in lore_candidates if c["title"] in lore_exact_titles][:5]
+    rest = [c for c in lore_candidates if c["title"] not in lore_exact_titles]
+    budget = 5 - len(exact)
+    reranked = None
+    if budget > 0 and rest:
+        rerank_docs = [f"【{c['title']}】{c['text']}" for c in rest]
+        reranked = _rerank(query, rerank_docs, top_n=min(budget, len(rest)))
+    if reranked is None:
+        ordered = exact + rest[:budget]
+    elif reranked:
+        ordered = exact + [rest[i] for i in reranked]
+    else:
+        ordered = exact
+    for c in ordered:
+        results.append({
+            "id": f"lore:{c['title']}",
+            "collection": "kb_lore",
+            "document": _lore_snippet(c["text"], terms),
+        })
+    return results, lore_exact_titles
+
+
+def _promote_exact_titles(results: List[dict], exact_titles: set) -> List[dict]:
+    """精确命中条目名的结果前置：条目名就是用户问的对象，优先级高于“正文顺带提到”的片段。"""
+    if not exact_titles:
+        return results
+    head = [r for r in results if r["id"][len("lore:"):] in exact_titles]
+    if not head:
+        return results
+    head_ids = {r["id"] for r in head}
+    return head + [r for r in results if r["id"] not in head_ids]
+
+
+def _book_keyword_results(search_terms: List[str]) -> List[dict]:
+    """书籍正文关键词搜索：标题或正文命中即入候选，最多取前 5 本。"""
     books = _load_content_json("books")
     book_candidates = []
     for b in books:
@@ -730,48 +763,72 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
                     snippet = text[:240].replace('\n', ' ').strip()
                 book_candidates.append((b["title"], snippet))
                 break
-    for _i, (title, snippet) in enumerate(book_candidates[:5]):
+    results: List[dict] = []
+    for title, snippet in book_candidates[:5]:
         results.append({
             "id": f"book:{title}",
             "collection": "kb_books",
             "document": snippet,
         })
+    return results
 
-    # --- 概念/组织/设定搜索 ---
-    # concepts.json 包含 64 个具体概念（教令院、七星、愚人众、神之眼等）
-    # 删除 query_concept 工具后，这些数据通过 hybrid_search 的关键词路检索
+
+def _concept_keyword_results(search_terms: List[str]) -> List[dict]:
+    """概念/组织/设定搜索：concepts.json 含教令院、七星、愚人众、神之眼等具体概念。
+
+    删除 query_concept 工具后，这些数据通过 hybrid_search 的关键词路检索。
+    """
     concepts = _load_content_json("concepts")
-    if concepts:
-        concept_candidates = []
-        seen_concepts = set()
-        for term in search_terms:
-            for c in concepts:
-                name = c.get("名称", "")
-                body = c.get("正文", "")
-                sections = c.get("章节", {})
-                section_titles = " ".join(sections.keys()) if sections else ""
-                full_text = name + " " + body + " " + section_titles
-                if _match_all_in(term, full_text):
-                    cid = name + body[:40]
-                    if cid not in seen_concepts:
-                        seen_concepts.add(cid)
-                        # 构建摘要：名称 + 正文 / 章节预览
-                        info = f"【{name}】（{c.get('类型', '?')}）"
-                        if body:
-                            info += f"\n{body[:400]}"
-                        elif sections:
-                            for sec_name in list(sections.keys())[:3]:
-                                sec_text = sections[sec_name][:200]
-                                if sec_text.strip():
-                                    info += f"\n[{sec_name}]: {sec_text}"
-                        concept_candidates.append((name, info))
-        for name, info in concept_candidates[:3]:
-            results.append({
-                "id": f"concept:{name}",
-                "collection": "kb_concepts",
-                "document": info,
-            })
+    results: List[dict] = []
+    if not concepts:
+        return results
+    concept_candidates = []
+    seen_concepts = set()
+    for term in search_terms:
+        for c in concepts:
+            name = c.get("名称", "")
+            body = c.get("正文", "")
+            sections = c.get("章节", {})
+            section_titles = " ".join(sections.keys()) if sections else ""
+            full_text = name + " " + body + " " + section_titles
+            if _match_all_in(term, full_text):
+                cid = name + body[:40]
+                if cid not in seen_concepts:
+                    seen_concepts.add(cid)
+                    # 构建摘要：名称 + 正文 / 章节预览
+                    info = f"【{name}】（{c.get('类型', '?')}）"
+                    if body:
+                        info += f"\n{body[:400]}"
+                    elif sections:
+                        for sec_name in list(sections.keys())[:3]:
+                            sec_text = sections[sec_name][:200]
+                            if sec_text.strip():
+                                info += f"\n[{sec_name}]: {sec_text}"
+                    concept_candidates.append((name, info))
+    for name, info in concept_candidates[:3]:
+        results.append({
+            "id": f"concept:{name}",
+            "collection": "kb_concepts",
+            "document": info,
+        })
+    return results
 
+
+def _keyword_search_docs(query: str, top_k: int = 15) -> list:
+    """关键词路：搜索任务内容、世界观设定、书籍正文、概念设定。
+
+    结果顺序即优先级：任务 → 世界观（精确命中条目名的前置）→ 书籍 → 概念。
+    返回格式与向量结果统一：[{id, collection, document, category}]。
+    """
+    search_terms, query_tokens = _keyword_search_terms(query)
+    if not search_terms:
+        return []
+    candidates = _collect_quest_candidates(search_terms, query_tokens)
+    results = _quest_keyword_results(query, candidates, top_k)
+    lore_results, lore_exact_titles = _lore_keyword_results(query)
+    results = _promote_exact_titles(results + lore_results, lore_exact_titles)
+    results += _book_keyword_results(search_terms)
+    results += _concept_keyword_results(search_terms)
     return results
 
 
