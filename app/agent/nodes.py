@@ -86,11 +86,115 @@ def _summarize_conversation(existing_summary: str, turns: List[Dict[str, str]]) 
 
 
 # ====== 别名检测节点 ======
+def _alias_span_covered(pos: int, alias_len: int, covered_spans) -> bool:
+    """该位置是否已被更长的已接受别名覆盖（防止子串重复判断）。"""
+    return any(s <= pos and pos + alias_len <= e for s, e in covered_spans)
+
+
+def _alias_scan(sanitized: str, match_text: str) -> Tuple[list, list, list, list]:
+    """扫描全部别名候选。
+
+    自映射（别名=规范名）与独立词命中直接记录；复合命中攒起来交给批量 AI 沙箱判断。
+    返回 (alias_notes_parts, alias_pairs, covered_spans, compound_candidates)。
+    """
+    alias_notes_parts = []  # 收集别名说明，最终拼接为系统消息补充
+    alias_pairs = []        # 结构化别名映射 [(别名, 规范名)]，供下游确定性身份直答使用
+    covered_spans = []      # 已接受别名覆盖的 (start, end) 区间，防止子串重复判断
+    compound_candidates = []  # 批量待判断候选 (alias, canonical, context, pos, span)
+
+    for alias in ALIASES_SORTED:
+        pos = match_text.find(alias)
+        if pos < 0:
+            continue
+
+        canonical = ALIAS_MAP[alias]
+        span = (pos, pos + len(alias))
+        # 已经被更长的已接受别名覆盖，子串不再判断
+        if _alias_span_covered(pos, len(alias), covered_spans):
+            continue
+
+        # 自映射（别名=规范名）：确定性标注，不需要 LLM 判断，保留原有 alias_notes 行为
+        if canonical == alias:
+            print(f"  [检测到] '{alias}' → '{canonical}'")
+            alias_notes_parts.append(f'"{alias}" 指 {canonical}')
+            alias_pairs.append((alias, canonical))
+            covered_spans.append(span)
+            continue
+
+        if _is_compound_hit(sanitized, alias, pos):
+            # 复合词命中，延迟到循环结束后统一批量判断
+            ctx_start = max(0, pos - 8)
+            ctx_end = min(len(sanitized), pos + len(alias) + 8)
+            compound_candidates.append((alias, canonical, sanitized[ctx_start:ctx_end], pos, span))
+        else:
+            # 独立词命中，直接记录映射
+            print(f"  [检测到] '{alias}' → '{canonical}'")
+            alias_notes_parts.append(f'"{alias}" 指 {canonical}')
+            alias_pairs.append((alias, canonical))
+            covered_spans.append(span)
+    return alias_notes_parts, alias_pairs, covered_spans, compound_candidates
+
+
+def _alias_judge_compounds(compound_candidates, covered_spans, alias_notes_parts, alias_pairs) -> Tuple[float, int]:
+    """批量 AI 沙箱判断复合命中候选，接受的写入 alias_notes/alias_pairs。
+
+    返回 (批量耗时ms, 候选数)；无候选时返回 (0.0, 0)。
+    """
+    if not compound_candidates:
+        return 0.0, 0
+    batch_candidates = [(a, c, ctx) for a, c, ctx, _pos, _span in compound_candidates]
+    t_batch = time.perf_counter()
+    batch_results = _judge_alias_sandbox_batch(batch_candidates)
+    batch_duration_ms = (time.perf_counter() - t_batch) * 1000
+    for (alias, canonical, context, pos, span), accepted in zip(compound_candidates, batch_results, strict=False):
+        if not accepted:
+            print(f"  [AI判定] '{alias}' 在上下文中不是角色别名，保留原样 (上下文: \"{context}\")")
+            continue
+        # 批量内仍按最长优先处理：若已被更长的已接受别名覆盖，跳过子串
+        if _alias_span_covered(pos, len(alias), covered_spans):
+            continue
+        print(f"  [AI判定] '{alias}' → '{canonical}' (上下文: \"{context}\")")
+        alias_notes_parts.append(f'"{alias}" 指 {canonical}')
+        alias_pairs.append((alias, canonical))
+        covered_spans.append(span)
+    return batch_duration_ms, len(compound_candidates)
+
+
+def _build_alias_notes(alias_notes_parts) -> str:
+    """拼装 [别名标注] 系统消息补充；无别名时返回空串。"""
+    if not alias_notes_parts:
+        print(f"  -> 未检测到别名")
+        return ""
+
+    # 代码加固：多实体强制注入 —— 如果检测到多个别名/实体，明确列出并强制要求全部回答
+    multi_entity_note = ""
+    if len(alias_notes_parts) >= 2:
+        entity_list = "、".join(f"「{p}」" for p in alias_notes_parts)
+        multi_entity_note = (
+            f"\n[强制要求] 用户问题包含 {len(alias_notes_parts)} 个实体：{entity_list}。"
+            f"你的回答必须覆盖以上全部 {len(alias_notes_parts)} 个实体，严禁只回答其中一部分。"
+            f"如果某个实体的信息在工具返回中暂缺，也必须先说明已知部分，再对缺失部分说明\"当前知识库未收录\"。\n"
+        )
+
+    # 注意：alias_notes 的展示格式为 `"X" 指 Y`，是 alias_pairs 的文本化；
+    # 下游 `_parse_alias_mappings` 也依赖此格式作为回退解析，修改时必须同步两者。
+    alias_notes = f"""
+[别名标注]
+以下词汇在用户问题中被检测为角色别名，映射关系如下：
+{chr(10).join(f"- {p}" for p in alias_notes_parts)}
+
+这些映射用于帮助你理解用户意图和规范名。
+- 纯身份查询（「XX是谁/指谁」）：代码会根据别名标注直接回答映射关系，不需要由你决定是否调工具。
+- 行为/故事/属性/对比查询：必须调用工具检索剧情内容，不得仅凭别名标注回答。
+- 行为提问必须从 load_quest_content 或 hybrid_search 提取具体动作，不得仅凭人物传记概括。
+- 涉及别名但不是纯身份查询时（例如「岩王帝君的故事」），可调用 query_character(规范名) 获取更丰富信息。
+{multi_entity_note}"""
+    print(f"  -> 已标注 {len(alias_notes_parts)} 个别名映射，原文保持不变")
+    return alias_notes
+
 
 def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
     t_start = time.perf_counter()
-    batch_duration_ms = 0.0
-    batch_candidate_count = 0
     user_query = state.get("user_query", "")
     # 供导出器区分“进程启动/知识库加载”与真正的 rewrite_query 阶段耗时。
     trace_emit("rewrite_start", {"run_id": state.get("run_id")})
@@ -109,95 +213,16 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 1) 自映射（规范名=别名）确定性标注，不浪费 LLM 判断，保留 alias_notes 行为；
     # 2) 已接受的长别名覆盖的区间，其子串不再单独判断（如“雷电将军”已命中则“将军”跳过）；
     # 3) 剩余需要 AI 沙箱判断的复合命中合并为一次批量调用，避免逐个串行。
-    alias_notes_parts = []  # 收集别名说明，最终拼接为系统消息补充
-    alias_pairs = []        # 结构化别名映射 [(别名, 规范名)]，供下游确定性身份直答使用
-    covered_spans = []      # 已接受别名覆盖的 (start, end) 区间，防止子串重复判断
-
-    compound_candidates = []  # 批量待判断候选 (alias, canonical, context, pos, span)
-
     # ·/- 归一化：用户常用 "-" 代替 "·"（如 "芙宁娜-德-枫丹"），统一转为 "·" 后再匹配
     match_text = sanitized.replace('-', '·')
-
-    for alias in ALIASES_SORTED:
-        pos = match_text.find(alias)
-        if pos < 0:
-            continue
-
-        canonical = ALIAS_MAP[alias]
-        span = (pos, pos + len(alias))
-        # 已经被更长的已接受别名覆盖，子串不再判断
-        if any(s <= pos and pos + len(alias) <= e for s, e in covered_spans):
-            continue
-
-        # 自映射（别名=规范名）：确定性标注，不需要 LLM 判断，保留原有 alias_notes 行为
-        if canonical == alias:
-            print(f"  [检测到] '{alias}' → '{canonical}'")
-            alias_notes_parts.append(f'"{alias}" 指 {canonical}')
-            alias_pairs.append((alias, canonical))
-            covered_spans.append(span)
-            continue
-
-        if _is_compound_hit(sanitized, alias, pos):
-            # 复合词命中，延迟到循环结束后统一批量判断
-            ctx_start = max(0, pos - 8)
-            ctx_end = min(len(sanitized), pos + len(alias) + 8)
-            context = sanitized[ctx_start:ctx_end]
-            # 暂存：alias, canonical, context, pos, span
-            compound_candidates.append((alias, canonical, context, pos, span))
-        else:
-            # 独立词命中，直接记录映射
-            print(f"  [检测到] '{alias}' → '{canonical}'")
-            alias_notes_parts.append(f'"{alias}" 指 {canonical}')
-            alias_pairs.append((alias, canonical))
-            covered_spans.append(span)
+    alias_notes_parts, alias_pairs, covered_spans, compound_candidates = _alias_scan(sanitized, match_text)
 
     # 批量 AI 沙箱判断：一次调用处理所有复合命中候选
-    if compound_candidates:
-        batch_candidate_count = len(compound_candidates)
-        batch_candidates = [(a, c, ctx) for a, c, ctx, _pos, _span in compound_candidates]
-        t_batch = time.perf_counter()
-        batch_results = _judge_alias_sandbox_batch(batch_candidates)
-        batch_duration_ms = (time.perf_counter() - t_batch) * 1000
-        for (alias, canonical, context, pos, span), accepted in zip(compound_candidates, batch_results, strict=False):
-            if not accepted:
-                print(f"  [AI判定] '{alias}' 在上下文中不是角色别名，保留原样 (上下文: \"{context}\")")
-                continue
-            # 批量内仍按最长优先处理：若已被更长的已接受别名覆盖，跳过子串
-            if any(s <= pos and pos + len(alias) <= e for s, e in covered_spans):
-                continue
-            print(f"  [AI判定] '{alias}' → '{canonical}' (上下文: \"{context}\")")
-            alias_notes_parts.append(f'"{alias}" 指 {canonical}')
-            alias_pairs.append((alias, canonical))
-            covered_spans.append(span)
+    batch_duration_ms, batch_candidate_count = _alias_judge_compounds(
+        compound_candidates, covered_spans, alias_notes_parts, alias_pairs
+    )
 
-    if alias_notes_parts:
-        # 代码加固：多实体强制注入 —— 如果检测到多个别名/实体，明确列出并强制要求全部回答
-        multi_entity_note = ""
-        if len(alias_notes_parts) >= 2:
-            entity_list = "、".join(f"「{p}」" for p in alias_notes_parts)
-            multi_entity_note = (
-                f"\n[强制要求] 用户问题包含 {len(alias_notes_parts)} 个实体：{entity_list}。"
-                f"你的回答必须覆盖以上全部 {len(alias_notes_parts)} 个实体，严禁只回答其中一部分。"
-                f"如果某个实体的信息在工具返回中暂缺，也必须先说明已知部分，再对缺失部分说明\"当前知识库未收录\"。\n"
-            )
-
-        # 注意：alias_notes 的展示格式为 `"X" 指 Y`，是 alias_pairs 的文本化；
-        # 下游 `_parse_alias_mappings` 也依赖此格式作为回退解析，修改时必须同步两者。
-        alias_notes = f"""
-[别名标注]
-以下词汇在用户问题中被检测为角色别名，映射关系如下：
-{chr(10).join(f"- {p}" for p in alias_notes_parts)}
-
-这些映射用于帮助你理解用户意图和规范名。
-- 纯身份查询（「XX是谁/指谁」）：代码会根据别名标注直接回答映射关系，不需要由你决定是否调工具。
-- 行为/故事/属性/对比查询：必须调用工具检索剧情内容，不得仅凭别名标注回答。
-- 行为提问必须从 load_quest_content 或 hybrid_search 提取具体动作，不得仅凭人物传记概括。
-- 涉及别名但不是纯身份查询时（例如「岩王帝君的故事」），可调用 query_character(规范名) 获取更丰富信息。
-{multi_entity_note}"""
-        print(f"  -> 已标注 {len(alias_notes_parts)} 个别名映射，原文保持不变")
-    else:
-        alias_notes = ""
-        print(f"  -> 未检测到别名")
+    alias_notes = _build_alias_notes(alias_notes_parts)
 
     # rewritten_query 保持原样，不再做文本替换
     total_duration_ms = (time.perf_counter() - t_start) * 1000
@@ -219,8 +244,6 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
     })
     return {"rewritten_query": sanitized, "alias_notes": alias_notes, "alias_pairs": alias_pairs or None}
 
-
-# ====== 查询分类器（L1 / L2 判断）======
 
 ASSESS_PROMPT = """你是原神剧情助手的查询分类器。你的唯一任务是判断用户问题属于哪种类型。
 
