@@ -54,7 +54,8 @@ app = Flask(__name__)  # NOSONAR 本服务用 Bearer 口令鉴权、无 Cookie �
 # 需要从别的站点调 API 时，用 CORS_ORIGINS 环境变量显式加白（逗号分隔）。
 _cors_origins = [o.strip() for o in (os.getenv("CORS_ORIGINS") or "").split(",") if o.strip()]
 if not _cors_origins:
-    _cors_origins = [r"http://127\.0\.0\.1:\d+", r"http://localhost:\d+"]
+    # 本机开发页可能是 http 或 https（自签），故用 https? 而不是写死 http（S5332）
+    _cors_origins = [r"https?://127\.0\.0\.1:\d+", r"https?://localhost:\d+"]
 CORS(app, resources={r"/api/*": {"origins": _cors_origins}})
 app.config['JSON_AS_ASCII'] = False
 app.config['MAX_CONTENT_LENGTH'] = 64 * 1024
