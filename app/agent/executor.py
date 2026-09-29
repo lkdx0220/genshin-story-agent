@@ -51,27 +51,121 @@ def _previous_tool_results(messages) -> dict:
     return out
 
 
+def _cancel_response(run_id):
+    """取消信号已置位时返回中断结果；否则返回 None。"""
+    cancel_event = _cancel_events.get(run_id) if run_id else None
+    if cancel_event and cancel_event.is_set():
+        print("  -> [取消] 工具执行前收到中断信号")
+        # 设置 final_response，route_after_tools 会路由到 answer_agent
+        return {"messages": [], "final_response": "[回答已中断] 当前任务已被用户终止。"}
+    return None
+
+
+def _last_tool_calls(messages):
+    """定位最后一条 AIMessage 的 tool_calls；前置条件不满足时返回 (False, None)。"""
+    if not messages:
+        return False, None
+    last_msg = messages[-1]
+    if not isinstance(last_msg, AIMessage) or not hasattr(last_msg, 'tool_calls'):
+        return False, None
+    return True, last_msg.tool_calls
+
+
+def _args_brief(tool_args) -> dict:
+    """把参数中的长值截断为 100 字摘要，避免日志与进度事件过大。"""
+    brief = {}
+    for k, v in tool_args.items():
+        s = str(v)
+        brief[k] = s[:100] + "..." if len(s) > 100 else s
+    return brief
+
+
+def _duplicate_result(tool_name: str, cached: str) -> str:
+    """重复调用守卫的返回文案：说明本次已跳过，并附上次返回摘要。"""
+    digest = f"上次返回摘要：{cached[:200]}" if cached else "上次返回见上文工具结果。"
+    return (
+        f"[系统提示] 与上一次完全相同的调用（{tool_name}，参数一致）已执行过，本次不重复执行。"
+        f"{digest} 请基于已有结果继续，不要重复调用同一工具与相同参数。"
+    )
+
+
+def _intercept_result(tool_name: str) -> str:
+    """熔断截断的返回文案。"""
+    return (
+        f"[系统拦截] 全文/溯源熔断已触发：本轮已有 load_ 或 find_first_mention 成功返回内容，"
+        f"当前工具 {tool_name} 被截断。请停止搜索，结束规划阶段，让回答阶段基于已加载的文本生成答案。"
+    )
+
+
+def _is_meltdown_intercept(meltdown_triggered: bool, tool_name: str) -> bool:
+    """熔断已触发且当前工具不在豁免名单时，需要截断。"""
+    return meltdown_triggered and tool_name not in MELTDOWN_TRIGGER_TOOLS
+
+
+def _invoke_tool(tool_name: str, tool_args):
+    """执行单个工具；异常统一转成「工具执行出错」文案返回。"""
+    try:
+        result = _tool_node.tools_by_name[tool_name].invoke(tool_args)
+    except Exception as e:
+        result = f"工具执行出错: {e}"
+        print(f"    -> 错误: {e}")
+    return result
+
+
+def _log_tool_result(result_str: str) -> None:
+    """打印工具返回的长度与摘要（超过 300 字只打印前 300 字）。"""
+    result_len = len(result_str)
+    if result_len > 300:
+        print(f"    -> 返回: {result_len}字 | {result_str[:300]}...")
+    else:
+        print(f"    -> 返回: {result_len}字 | {result_str}")
+
+
+def _is_meltdown_success(tool_name: str, result_str: str) -> bool:
+    """触发类工具返回了真实内容（非「未找到」类）即视为熔断成功。"""
+    if tool_name not in MELTDOWN_TRIGGER_TOOLS:
+        return False
+    return not any(kw in result_str for kw in ("未找到", "未收录", "无匹配"))
+
+
+def _tool_trace_status(result_str: str) -> str:
+    """按返回文本归类 trace 状态：error / not_found / success。"""
+    stripped = result_str.lstrip()
+    if stripped.startswith("工具执行出错"):
+        return "error"
+    if any(stripped.startswith(kw) for kw in ("未找到", "未收录", "不存在", "无匹配", "No match", "not found")):
+        return "not_found"
+    return "success"
+
+
+def _trace_tool_end(tool_name, tc_id, run_id, status: str, result_str: str, meltdown_trigger: bool) -> None:
+    """上报单条 tool_end trace 事件（字段与顺序同原实现）。"""
+    trace_emit("tool_end", {
+        "tool": tool_name,
+        "tool_call_id": tc_id,
+        "run_id": run_id,
+        "status": status,
+        "result_preview": result_str[:500],
+        "result_length": len(result_str),
+        "meltdown_trigger": meltdown_trigger,
+    })
+
+
 def tool_executor(state):
     """执行工具调用并记录输入/输出日志。
     代码加固：熔断截断——同轮内已有 load_*/find_first_mention 成功返回后，
     后续非触发类工具调用被截断，强制 Plan Agent 进入回答阶段。"""
     # ---- 取消信号检查 ----
     run_id = state.get("run_id")
-    cancel_event = _cancel_events.get(run_id) if run_id else None
-    if cancel_event and cancel_event.is_set():
-        print("  -> [取消] 工具执行前收到中断信号")
-        # 设置 final_response，route_after_tools 会路由到 answer_agent
-        return {"messages": [], "final_response": "[回答已中断] 当前任务已被用户终止。"}
+    cancelled = _cancel_response(run_id)
+    if cancelled is not None:
+        return cancelled
 
     messages = state.get("messages", [])
-    if not messages:
+    found, tool_calls = _last_tool_calls(messages)
+    if not found:
         return {}
 
-    last_msg = messages[-1]
-    if not isinstance(last_msg, AIMessage) or not hasattr(last_msg, 'tool_calls'):
-        return {}
-
-    tool_calls = last_msg.tool_calls
     tool_messages = []
 
     meltdown_triggered = False  # 本轮是否已有熔断触发工具成功返回
@@ -90,31 +184,16 @@ def tool_executor(state):
         signature = _tool_call_signature(tool_name, tool_args)
         if signature in seen_signatures:
             cached = prev_results.get(signature, "")
-            digest = f"上次返回摘要：{cached[:200]}" if cached else "上次返回见上文工具结果。"
-            result_str = (
-                f"[系统提示] 与上一次完全相同的调用（{tool_name}，参数一致）已执行过，本次不重复执行。"
-                f"{digest} 请基于已有结果继续，不要重复调用同一工具与相同参数。"
-            )
+            result_str = _duplicate_result(tool_name, cached)
             print(f"    -> [重复调用] {tool_name} 同参数已调用过，跳过执行")
             tool_messages.append(ToolMessage(content=result_str, tool_call_id=tc_id))
-            trace_emit("tool_end", {
-                "tool": tool_name,
-                "tool_call_id": tc_id,
-                "run_id": run_id,
-                "status": "duplicate_skipped",
-                "result_preview": result_str[:500],
-                "result_length": len(result_str),
-                "meltdown_trigger": False,
-            })
+            _trace_tool_end(tool_name, tc_id, run_id, "duplicate_skipped", result_str, False)
             _emit_progress("tool_end", {"tool": tool_name, "result_len": len(result_str)})
             continue
         seen_signatures.add(signature)
 
         # 日志：输入（精简 args 中过长的值）
-        args_brief = {}
-        for k, v in tool_args.items():
-            s = str(v)
-            args_brief[k] = s[:100] + "..." if len(s) > 100 else s
+        args_brief = _args_brief(tool_args)
         print(f"  [工具] {tool_name}({json.dumps(args_brief, ensure_ascii=False)})")
 
         # 向 Web 前端推送进度
@@ -131,67 +210,33 @@ def tool_executor(state):
         # ---- 代码加固 1：熔断截断 ----
         # 同轮内允许多个 load_/find_first_mention 并行执行（如对比分析需加载两个任务）
         # 只拦截非触发类工具（如 hybrid_search、query_character 等）
-        if meltdown_triggered and tool_name not in MELTDOWN_TRIGGER_TOOLS:
-            result_str = (
-                f"[系统拦截] 全文/溯源熔断已触发：本轮已有 load_ 或 find_first_mention 成功返回内容，"
-                f"当前工具 {tool_name} 被截断。请停止搜索，结束规划阶段，让回答阶段基于已加载的文本生成答案。"
-            )
+        if _is_meltdown_intercept(meltdown_triggered, tool_name):
+            result_str = _intercept_result(tool_name)
             print(f"    -> [熔断截断] {tool_name} 被拦截")
             tool_messages.append(ToolMessage(content=result_str, tool_call_id=tc_id))
-            trace_emit("tool_end", {
-                "tool": tool_name,
-                "tool_call_id": tc_id,
-                "run_id": run_id,
-                "status": "intercepted",
-                "result_preview": result_str[:500],
-                "result_length": len(result_str),
-                "meltdown_trigger": False,
-            })
+            _trace_tool_end(tool_name, tc_id, run_id, "intercepted", result_str, False)
             continue
 
         # 执行工具
-        try:
-            result = _tool_node.tools_by_name[tool_name].invoke(tool_args)
-        except Exception as e:
-            result = f"工具执行出错: {e}"
-            print(f"    -> 错误: {e}")
+        result = _invoke_tool(tool_name, tool_args)
 
         # 日志：结果摘要
         result_str = str(result)
-        result_len = len(result_str)
-        if result_len > 300:
-            print(f"    -> 返回: {result_len}字 | {result_str[:300]}...")
-        else:
-            print(f"    -> 返回: {result_len}字 | {result_str}")
+        _log_tool_result(result_str)
 
         # 检查是否触发熔断（成功返回内容，非"未找到"）
-        if tool_name in MELTDOWN_TRIGGER_TOOLS:
-            is_success = not any(kw in result_str for kw in ("未找到", "未收录", "无匹配"))
-            if is_success:
-                meltdown_triggered = True
-                print(f"    -> [熔断] {tool_name} 成功返回，本轮后续非加载类工具将被截断")
+        if _is_meltdown_success(tool_name, result_str):
+            meltdown_triggered = True
+            print(f"    -> [熔断] {tool_name} 成功返回，本轮后续非加载类工具将被截断")
 
         tool_messages.append(ToolMessage(content=result_str, tool_call_id=tc_id))
 
         # 结构化 Trace 事件（默认关闭）
-        stripped = result_str.lstrip()
-        if stripped.startswith("工具执行出错"):
-            trace_status = "error"
-        elif any(stripped.startswith(kw) for kw in ("未找到", "未收录", "不存在", "无匹配", "No match", "not found")):
-            trace_status = "not_found"
-        else:
-            trace_status = "success"
-        trace_emit("tool_end", {
-            "tool": tool_name,
-            "tool_call_id": tc_id,
-            "run_id": run_id,
-            "status": trace_status,
-            "result_preview": result_str[:500],
-            "result_length": len(result_str),
-            "meltdown_trigger": (
-                tool_name in MELTDOWN_TRIGGER_TOOLS and trace_status == "success"
-            ),
-        })
+        trace_status = _tool_trace_status(result_str)
+        _trace_tool_end(
+            tool_name, tc_id, run_id, trace_status, result_str,
+            tool_name in MELTDOWN_TRIGGER_TOOLS and trace_status == "success",
+        )
 
         # 向 Web 前端推送工具完成
         _emit_progress("tool_end", {"tool": tool_name, "result_len": len(result_str)})
