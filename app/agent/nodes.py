@@ -1226,6 +1226,106 @@ _CONCEPT_DIMENSION_MARKERS = {
 _ENTITY_INDEX = None
 
 
+def _index_characters() -> set:
+    """角色索引：角色名称 + 称号 + NPC 名称。"""
+    names = set()
+    for entry in 角色知识库:
+        if not isinstance(entry, dict):
+            continue
+        name = _normalize_for_match(str(entry.get("角色名称", "") or ""))
+        if name:
+            names.add(name)
+        for title in str(entry.get("称号", "") or "").split("/"):
+            title = _normalize_for_match(title.strip())
+            if title:
+                names.add(title)
+    for npc_name in _npcs_data:
+        name = _normalize_for_match(str(npc_name))
+        if name:
+            names.add(name)
+    return names
+
+
+def _index_quests() -> set:
+    """任务索引：TITLE_REGISTRY + 任务知识库的任务名称/系列任务/所属角色。"""
+    names = set()
+    for title in TITLE_REGISTRY:
+        name = _normalize_for_match(str(title))
+        if name:
+            names.add(name)
+    for entry in 任务知识库:
+        if not isinstance(entry, dict):
+            continue
+        name = _normalize_for_match(str(entry.get("任务名称") or entry.get("title") or ""))
+        if name:
+            names.add(name)
+        for part in str(entry.get("系列任务") or "").replace("，", ",").split(","):
+            part = _normalize_for_match(part.strip())
+            if part:
+                names.add(part)
+        owner = _normalize_for_match(str(entry.get("所属角色") or ""))
+        if owner:
+            names.add(owner)
+    return names
+
+
+def _index_regions() -> set:
+    """地区索引。"""
+    names = set()
+    for entry in 地区知识库:
+        if isinstance(entry, dict):
+            name = _normalize_for_match(str(entry.get("地区名称", "") or ""))
+            if name:
+                names.add(name)
+    return names
+
+
+def _index_books() -> set:
+    """书籍索引：books.json 的 title 与 metadata.书籍名。"""
+    names = set()
+    for item in _load_content_json("books"):
+        if not isinstance(item, dict):
+            continue
+        for key in ("title",):
+            name = _normalize_for_match(str(item.get(key, "") or ""))
+            if name:
+                names.add(name)
+        meta = item.get("metadata") or {}
+        if isinstance(meta, dict):
+            name = _normalize_for_match(str(meta.get("书籍名", "") or ""))
+            if name:
+                names.add(name)
+    return names
+
+
+def _index_items() -> set:
+    """具体物品索引：武器/圣遗物/素材知识库 + content_data 的怪物/材料/采集物/食谱/食物。"""
+    names = set()
+    for entry in 武器知识库:
+        if isinstance(entry, dict):
+            name = _normalize_for_match(str(entry.get("武器名称", "") or ""))
+            if name:
+                names.add(name)
+    for entry in 圣遗物知识库:
+        if isinstance(entry, dict):
+            name = _normalize_for_match(str(entry.get("圣遗物名称", "") or ""))
+            if name:
+                names.add(name)
+    for entry in 素材知识库:
+        if isinstance(entry, dict):
+            name = _normalize_for_match(str(entry.get("素材名称", "") or ""))
+            if name:
+                names.add(name)
+    for file_key in ("monsters", "materials", "collectibles", "recipes", "foods"):
+        for item in _load_content_json(file_key):
+            if not isinstance(item, dict):
+                continue
+            name = _normalize_for_match(str(item.get("名称", "") or ""))
+            if name:
+                names.add(name)
+    return names
+
+
 def _ensure_entity_index() -> dict:
     """懒构建精确实体索引，用于把角色/任务/书籍/地区/具体物品排除出概念守卫。
 
@@ -1236,95 +1336,14 @@ def _ensure_entity_index() -> dict:
     if _ENTITY_INDEX is not None:
         return _ENTITY_INDEX
 
-    index = {
-        "character": set(),
-        "quest": set(),
-        "region": set(),
-        "book": set(),
-        "item": set(),
+    # 五个分类各自独立收集；全部成功后才写缓存（与旧实现一致：中途异常不留下半成品缓存）。
+    _ENTITY_INDEX = {
+        "character": _index_characters(),
+        "quest": _index_quests(),
+        "region": _index_regions(),
+        "book": _index_books(),
+        "item": _index_items(),
     }
-
-    # 角色：角色名称 + 称号 + NPC 名称
-    for entry in 角色知识库:
-        if not isinstance(entry, dict):
-            continue
-        name = _normalize_for_match(str(entry.get("角色名称", "") or ""))
-        if name:
-            index["character"].add(name)
-        for title in str(entry.get("称号", "") or "").split("/"):
-            title = _normalize_for_match(title.strip())
-            if title:
-                index["character"].add(title)
-    for npc_name in _npcs_data:
-        name = _normalize_for_match(str(npc_name))
-        if name:
-            index["character"].add(name)
-
-    # 任务：TITLE_REGISTRY + 任务知识库的任务名称/系列任务/所属角色
-    for title in TITLE_REGISTRY:
-        name = _normalize_for_match(str(title))
-        if name:
-            index["quest"].add(name)
-    for entry in 任务知识库:
-        if not isinstance(entry, dict):
-            continue
-        name = _normalize_for_match(str(entry.get("任务名称") or entry.get("title") or ""))
-        if name:
-            index["quest"].add(name)
-        for part in str(entry.get("系列任务") or "").replace("，", ",").split(","):
-            part = _normalize_for_match(part.strip())
-            if part:
-                index["quest"].add(part)
-        owner = _normalize_for_match(str(entry.get("所属角色") or ""))
-        if owner:
-            index["quest"].add(owner)
-
-    # 地区
-    for entry in 地区知识库:
-        if isinstance(entry, dict):
-            name = _normalize_for_match(str(entry.get("地区名称", "") or ""))
-            if name:
-                index["region"].add(name)
-
-    # 书籍：books.json 的 title 与 metadata.书籍名
-    for item in _load_content_json("books"):
-        if not isinstance(item, dict):
-            continue
-        for key in ("title",):
-            name = _normalize_for_match(str(item.get(key, "") or ""))
-            if name:
-                index["book"].add(name)
-        meta = item.get("metadata") or {}
-        if isinstance(meta, dict):
-            name = _normalize_for_match(str(meta.get("书籍名", "") or ""))
-            if name:
-                index["book"].add(name)
-
-    # 具体物品：武器/圣遗物/素材知识库 + content_data 中的怪物/材料/采集物/食谱/食物
-    for entry in 武器知识库:
-        if isinstance(entry, dict):
-            name = _normalize_for_match(str(entry.get("武器名称", "") or ""))
-            if name:
-                index["item"].add(name)
-    for entry in 圣遗物知识库:
-        if isinstance(entry, dict):
-            name = _normalize_for_match(str(entry.get("圣遗物名称", "") or ""))
-            if name:
-                index["item"].add(name)
-    for entry in 素材知识库:
-        if isinstance(entry, dict):
-            name = _normalize_for_match(str(entry.get("素材名称", "") or ""))
-            if name:
-                index["item"].add(name)
-    for file_key in ("monsters", "materials", "collectibles", "recipes", "foods"):
-        for item in _load_content_json(file_key):
-            if not isinstance(item, dict):
-                continue
-            name = _normalize_for_match(str(item.get("名称", "") or ""))
-            if name:
-                index["item"].add(name)
-
-    _ENTITY_INDEX = index
     return _ENTITY_INDEX
 
 
