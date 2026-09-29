@@ -286,6 +286,31 @@ def query_weapon(name: str) -> str:
 def query_quest(name: str) -> str:
     """查询传说任务/世界任务信息。name: 任务名称或角色名。
     返回时自动按系列任务（章节名）分组。显示所属角色，区分主角视角与客串出场。"""
+    name_variants = _resolve_quest_name_variants(name)
+
+    # 戏称映射：先正常搜索真实传说/世界任务；只有确实没有真实结果时才返回戏称活动，
+    # 避免像胡桃这种既有真实传说任务（引蝶之章/奈何蝶飞去）又有玩家戏称活动的角色被误导。
+    matched_fake = _match_fake_legend_quest(name_variants)
+
+    # 部族纪闻映射：该角色的部族纪闻可能未全部关联角色名，需按章节名补全
+    matched_tribal = _match_tribal_chronicle(name_variants)
+    results, is_tribal, seen = _collect_matched_quests(name_variants, matched_tribal)
+
+    if results:
+        series_groups, standalone = _group_and_complete_series(results, seen)
+        print(f"[工具] 查询任务: {name}")
+        return _format_quest_results(name, is_tribal, series_groups, standalone)
+    # 真实传说/世界任务全部未命中时，才降级为玩家戏称的“版本活动”
+    if matched_fake:
+        fake_text = _format_fake_legend_results(name, matched_fake)
+        if fake_text is not None:
+            return fake_text
+
+    return f"未找到任务「{name}」的信息。"
+
+
+def _resolve_quest_name_variants(name: str):
+    """生成任务名的全部检索变体：原文、去“传说任务”后缀、别名规范名与互为别名的写法。"""
     # 获取名字的所有变体（瓦雷莎/瓦蕾莎等异体字问题）
     name_variants = {name}
     if "传说任务" in name:
@@ -298,26 +323,35 @@ def query_quest(name: str) -> str:
         if canon in name_variants or alias in name_variants:
             name_variants.add(alias)
             name_variants.add(canon)
+    return name_variants
 
 
-    # 戏称映射：先正常搜索真实传说/世界任务；只有确实没有真实结果时才返回戏称活动，
-    # 避免像胡桃这种既有真实传说任务（引蝶之章/奈何蝶飞去）又有玩家戏称活动的角色被误导。
-    matched_fake = None
+def _match_fake_legend_quest(name_variants):
+    """在变体集合中查找戏称映射命中的版本活动名；未命中返回 None。"""
     for v in name_variants:
         if v in FAKE_LEGEND_QUESTS:
-            matched_fake = FAKE_LEGEND_QUESTS[v]
-            break
+            return FAKE_LEGEND_QUESTS[v]
+    return None
 
 
-    # 部族纪闻映射：该角色的部族纪闻可能未全部关联角色名，需按章节名补全
+def _match_tribal_chronicle(name_variants):
+    """在变体集合中查找部族纪闻映射命中的章节名；未命中返回 None。"""
+    for v in name_variants:
+        if v in TRIBAL_CHRONICLES:
+            return TRIBAL_CHRONICLES[v]
+    return None
+
+
+def _collect_matched_quests(name_variants, matched_tribal):
+    """按变体检索任务知识库，返回 (命中任务列表, 是否部族纪闻分支, 已命中任务名集合)。
+
+    部族纪闻分支先按章节名前缀纳入该章节全部子任务；主检索按任务名/关联角色/系列任务
+    做包含匹配，并用 seen 去重，避免同一任务重复入列。两条路径共用同一个 seen 集合，
+    该集合同样要交给后续“同系列补齐”继续去重，故一并返回。
+    """
     is_tribal = False
     results = []
     seen = set()
-    matched_tribal = None
-    for v in name_variants:
-        if v in TRIBAL_CHRONICLES:
-            matched_tribal = TRIBAL_CHRONICLES[v]
-            break
     if matched_tribal:
         for q in 任务知识库:
             if q.get("系列任务", "").startswith(matched_tribal):
@@ -336,74 +370,81 @@ def query_quest(name: str) -> str:
         if matched:
             results.append(q)
             seen.add(q.get("任务名称", ""))
-    if results:
-        # 按系列任务（完整"章节,幕名"）分组，区分同一章节下的多幕
-        series_groups = {}  # {"章节,幕名": [任务列表]}
-        standalone = []
-        for q in results:
-            series = q.get("系列任务", "")
-            if series:
-                if series not in series_groups:
-                    series_groups[series] = []
-                series_groups[series].append(q)
-            else:
-                standalone.append(q)
-
-        lines = []
-        if is_tribal:
-            lines.append(f"注意：「{name}」没有专属传说任务，以下为其所在的部族纪闻：")
-            lines.append("-" * 40)
-
-        # 补全：同一系列任务下，纳入所有子任务（包括元数据缺失的孤立条目）
-        all_series = set(series_groups.keys())
-        if all_series:
-            for q in 任务知识库:
-                s = q.get("系列任务", "")
-                if s and s in all_series and q.get("任务名称") not in seen:
-                    series_groups[s].append(q)
-                    seen.add(q.get("任务名称", ""))
-
-        for series, quests in series_groups.items():
-            owner = quests[0].get("所属角色", "")
-            is_main = (owner == name)  # 搜索角色等于所属角色=主角视角
-
-            parts = series.split(",")
-            chapter = parts[0].strip()
-            act_name = parts[1].strip() if len(parts) > 1 else ""
-            qtype = quests[0].get("任务类型", "")
-            tag = " 【主角】" if is_main else " 【客串出场】"
-            lines.append(f"\n【{chapter}】{qtype}{tag}")
-            if owner:
-                lines.append(f"所属角色: {owner}")
-            if act_name:
-                lines.append(f"幕: {act_name}")
-            lines.append(f"子任务({len(quests)}个): " + " | ".join(q["任务名称"] for q in quests))
-            lines.append("-" * 40)
-
-        for q in standalone:
-            lines.append(f"\n【{q['任务名称']}】")
-            lines.append(f"类型: {q.get('任务类型')}  |  关联角色: {q.get('关联角色')}")
-            owner = q.get("所属角色", "")
-            if owner:
-                lines.append(f"所属角色: {owner}")
-            lines.append(f"简介: {q.get('简介', '暂无')}")
-            lines.append("-" * 40)
-
-        print(f"[工具] 查询任务: {name}")
-        return "\n".join(lines)
-    # 真实传说/世界任务全部未命中时，才降级为玩家戏称的“版本活动”
-    if matched_fake:
-        activity_results = [q for q in 任务知识库 if matched_fake in q.get("任务名称", "")]
-        if activity_results:
-            lines = [f"注意：「{name}」没有传说任务，以下是被戏称为「{name}传说任务」的版本活动："]
-            for q in activity_results:
-                lines.append(f"\n【{q['任务名称']}】版本活动")
-                lines.append(f"简介: {q.get('简介', '暂无')}")
-            print(f"[工具] 查询任务(戏称映射): {name} → {matched_fake}")
-            return "\n".join(lines)
+    return results, is_tribal, seen
 
 
-    return f"未找到任务「{name}」的信息。"
+def _group_and_complete_series(results, seen):
+    """按“系列任务”把命中结果分组，并补齐同系列下元数据缺失的孤立子任务。"""
+    # 按系列任务（完整"章节,幕名"）分组，区分同一章节下的多幕
+    series_groups = {}  # {"章节,幕名": [任务列表]}
+    standalone = []
+    for q in results:
+        series = q.get("系列任务", "")
+        if series:
+            if series not in series_groups:
+                series_groups[series] = []
+            series_groups[series].append(q)
+        else:
+            standalone.append(q)
+
+    # 补全：同一系列任务下，纳入所有子任务（包括元数据缺失的孤立条目）
+    all_series = set(series_groups.keys())
+    if all_series:
+        for q in 任务知识库:
+            s = q.get("系列任务", "")
+            if s and s in all_series and q.get("任务名称") not in seen:
+                series_groups[s].append(q)
+                seen.add(q.get("任务名称", ""))
+    return series_groups, standalone
+
+
+def _format_quest_results(name, is_tribal, series_groups, standalone):
+    """把分组后的任务渲染为工具返回文本（含部族纪闻提示、主角/客串标记与子任务清单）。"""
+    lines = []
+    if is_tribal:
+        lines.append(f"注意：「{name}」没有专属传说任务，以下为其所在的部族纪闻：")
+        lines.append("-" * 40)
+
+    for series, quests in series_groups.items():
+        owner = quests[0].get("所属角色", "")
+        is_main = (owner == name)  # 搜索角色等于所属角色=主角视角
+
+        parts = series.split(",")
+        chapter = parts[0].strip()
+        act_name = parts[1].strip() if len(parts) > 1 else ""
+        qtype = quests[0].get("任务类型", "")
+        tag = " 【主角】" if is_main else " 【客串出场】"
+        lines.append(f"\n【{chapter}】{qtype}{tag}")
+        if owner:
+            lines.append(f"所属角色: {owner}")
+        if act_name:
+            lines.append(f"幕: {act_name}")
+        lines.append(f"子任务({len(quests)}个): " + " | ".join(q["任务名称"] for q in quests))
+        lines.append("-" * 40)
+
+    for q in standalone:
+        lines.append(f"\n【{q['任务名称']}】")
+        lines.append(f"类型: {q.get('任务类型')}  |  关联角色: {q.get('关联角色')}")
+        owner = q.get("所属角色", "")
+        if owner:
+            lines.append(f"所属角色: {owner}")
+        lines.append(f"简介: {q.get('简介', '暂无')}")
+        lines.append("-" * 40)
+
+    return "\n".join(lines)
+
+
+def _format_fake_legend_results(name, matched_fake):
+    """戏称降级分支：渲染被玩家戏称为该角色传说任务的版本活动；无命中返回 None。"""
+    activity_results = [q for q in 任务知识库 if matched_fake in q.get("任务名称", "")]
+    if not activity_results:
+        return None
+    lines = [f"注意：「{name}」没有传说任务，以下是被戏称为「{name}传说任务」的版本活动："]
+    for q in activity_results:
+        lines.append(f"\n【{q['任务名称']}】版本活动")
+        lines.append(f"简介: {q.get('简介', '暂无')}")
+    print(f"[工具] 查询任务(戏称映射): {name} → {matched_fake}")
+    return "\n".join(lines)
 
 # 简单同音字组表：用于短名/同音错别字的保守纠错。
 # 只收录常见任务/章节用字，后续遇到真实漏网再补充。
