@@ -822,6 +822,7 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
 
         # ---- 步骤2：根据意图动态绑定工具 ----
         routed_tools = get_tools_for_intent(intent_labels, _tools_by_name)
+        routed_tools = _maybe_add_entity_graph_tool(original_query, routed_tools)
         tool_names = [t.name for t in routed_tools]
         print(f"  [路由] 注入工具({len(routed_tools)}个): {tool_names}")
         trace_emit("route", {
@@ -870,6 +871,7 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         routed_tools = _get_initial_tools()
         if intent_labels:
             routed_tools = get_tools_for_intent(intent_labels, _tools_by_name)
+        routed_tools = _maybe_add_entity_graph_tool(original_query, routed_tools)
         # 搜索碰壁后补充暴露 search_world（lore/NPC组织），初始不暴露。
         had_search_world = any(
             getattr(t, "name", "") == "search_world" for t in routed_tools
@@ -899,6 +901,11 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     graph_map_auto = _maybe_auto_graph_map_texts(state, messages, routed_tools, iteration)
     if graph_map_auto is not None:
         return graph_map_auto
+
+    # wiki 图：题面点名的设定页/组织页确定性补全（挂载点A）。
+    entity_auto = _maybe_auto_entity_entry(state, messages, routed_tools, iteration)
+    if entity_auto is not None:
+        return entity_auto
 
     # 概念三视图补位（挂载点A）：任务恢复链未介入时，检查已有工具结果是否覆盖三个维度。
     concept_auto = _maybe_auto_concept_dimension(state, messages, routed_tools, iteration, intent_labels=intent_labels)
@@ -983,6 +990,13 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     )
     if graph_map_auto is not None:
         return graph_map_auto
+
+    # wiki 图：题面点名的设定页/组织页确定性补全（挂载点B）。
+    entity_auto = _maybe_auto_entity_entry(
+        state, messages, routed_tools, iteration, response=response,
+    )
+    if entity_auto is not None:
+        return entity_auto
 
     # 概念三视图补位（挂载点B）：LLM 本轮没出任何工具调用且想进入回答阶段，
     # 先检查概念维度是否齐；不齐则代码直接补发，Planner 不能提前收工。
@@ -1612,6 +1626,12 @@ _MAP_TEXT_QUESTION_RE = re.compile(
 # 结论：地图候选缺少相关性信号，只能在 P2（检索兜底）/P3（图谱补链）里治本，见 _l3_paper/PROGRESS-L3试卷制作.md。
 _GRAPH_MAP_MAX_ENTRIES = 8
 
+# 「设定页/组织页」确定性补全：这两类词条只存在于词条图，向量语料里没有对应集合
+# （story_chapter 32 条/15.1 万字、organization 27 条/10.7 万字），hybrid_search 永远检索不到。
+# CX3 事故：问「霜月之子」的职责与行事方式，圣嗣计划/高墙/血脉选育那段取不回来。
+_AUTO_ENTITY_TYPES = ("story_chapter", "organization")
+_AUTO_ENTITY_MAX = 2
+
 
 def _load_wiki_graph_cached():
     """懒加载本地 wiki 链接图；加载失败返回 None（本守卫不介入）。"""
@@ -2223,6 +2243,126 @@ def _has_loaded_task_text(messages):
         if tool_name in ("load_quest_content", "wiki_graph_get") and not _is_not_found(msg):
             return True
     return False
+
+
+def _auto_entity_index(graph):
+    """按图缓存：{标题: entry}，只收向量语料没有对应集合的设定页/组织页。"""
+    aux = _graph_aux(graph)
+    cached = aux.get("auto_entities")
+    if cached is not None:
+        return cached
+    index = {}
+    for entry in graph.entries.values():
+        if entry.entry_type not in _AUTO_ENTITY_TYPES:
+            continue
+        title = (entry.title or "").strip()
+        if len(title) < 2:
+            continue
+        index.setdefault(title, entry)
+    aux["auto_entities"] = index
+    return index
+
+
+def _probe_for_entity_match(text: str) -> str:
+    """题面去掉引号/书名号/空白，用于与词条标题逐字匹配。"""
+    return re.sub(r"[\s「」『』《》〈〉“”\"'（）()\[\]【】]", "", text or "")
+
+
+def _maybe_add_entity_graph_tool(query: str, routed_tools):
+    """题面点名「设定页/组织页」词条时，补挂 wiki_graph_get。
+
+    这类词条（story_chapter/organization）只存在于词条图，向量语料没有对应集合，
+    常规检索永远取不到；不把工具挂进来，确定性补全钩子就无法介入（CX3 事故）。
+    与 _maybe_add_dead_end_search_world 同思路：只在题面确实点名时补，不给所有题挂图工具。
+    """
+    if not query:
+        return routed_tools
+    if any(getattr(t, "name", "") == "wiki_graph_get" for t in routed_tools):
+        return routed_tools
+    tool = _tools_by_name.get("wiki_graph_get")
+    if tool is None:
+        return routed_tools
+    graph = _load_wiki_graph_cached()
+    if not graph:
+        return routed_tools
+    probe = _probe_for_entity_match(query)
+    if not probe:
+        return routed_tools
+    for title in _auto_entity_index(graph):
+        if title in probe:
+            print(f"  [路由] 题面点名设定页/组织页「{title}」，补挂 wiki_graph_get")
+            return list(routed_tools) + [tool]
+    return routed_tools
+
+
+def _maybe_auto_entity_entry(state, messages, routed_tools, iteration, response=None):
+    """题面点名「设定页/组织页」时的确定性补全；返回 None 表示无需介入。
+
+    这类词条只在词条图里（向量语料没有对应集合），hybrid_search 检索不到，
+    只能走 wiki_graph_get。不补的话模型会一本正经地回答"知识库未收录该组织"。
+    """
+    original_query = state.get("user_query", "") or state.get("rewritten_query", "")
+    if not original_query:
+        return None
+    tool_names = {getattr(t, "name", str(t)) for t in routed_tools}
+    if "wiki_graph_get" not in tool_names:
+        return None
+    if iteration + 1 >= MAX_AGENT_ITERATIONS:
+        return None
+    # 挂载点A：必须已有工具返回，避免抢 Planner 首轮决策（与地图补全一致）。
+    if response is None and _last_tool_message(messages) is None:
+        return None
+
+    graph = _load_wiki_graph_cached()
+    if not graph:
+        return None
+    index = _auto_entity_index(graph)
+    if not index:
+        return None
+    probe = _probe_for_entity_match(original_query)
+    if not probe:
+        return None
+
+    attempted = _attempted_wiki_get_ids(messages)
+    calls = []
+    for title, entry in index.items():
+        if entry.entry_id in attempted or title not in probe:
+            continue
+        calls.append((entry.entry_id, title))
+        if len(calls) >= _AUTO_ENTITY_MAX:
+            break
+    if not calls:
+        return None
+
+    tool_calls = []
+    content_parts = [
+        "【执行报告】",
+        f"用户问题回显：{original_query}",
+        "用户意图：了解题面点名的组织/设定的设定页内容",
+        "工具决策：问题点名的词条属于「设定页/组织页」，这类页面不在常规检索语料里，"
+        "系统确定性补全 wiki 链接图（不传 focus，保留该页开头正文与内部链接）：",
+    ]
+    for i, (entry_id, title) in enumerate(calls, 1):
+        tool_calls.append({
+            "name": "wiki_graph_get",
+            "args": {"entry_id": entry_id},
+            "id": f"call_auto_entity_{entry_id}_{iteration + 1}",
+            "type": "tool_call",
+        })
+        content_parts.append(f"{i}. 读取词条 {entry_id} 《{title}》")
+    content = "\n".join(content_parts)
+    print(f"  -> [词条补全] {[t for _, t in calls]}（设定页/组织页：向量语料无对应集合，确定性补全）")
+    trace_emit("auto_entity_get", {
+        "run_id": state.get("run_id"),
+        "entries": [eid for eid, _ in calls],
+        "titles": [t for _, t in calls],
+    })
+    return {
+        "messages": [AIMessage(content=content, tool_calls=tool_calls)],
+        "execution_plan": content,
+        "iteration": iteration + 1,
+        "intent_labels": state.get("intent_labels", []),
+    }
 
 
 def _maybe_auto_graph_map_texts(state, messages, routed_tools, iteration, response=None):
