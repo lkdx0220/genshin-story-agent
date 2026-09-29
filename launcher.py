@@ -78,7 +78,7 @@ def main():
         pass
     else:
         # 5000 端口被占用，尝试杀掉旧进程
-        print(f"[启动器] 检测到旧实例占用端口 5000，尝试清理...")
+        print("[启动器] 检测到旧实例占用端口 5000，尝试清理...")
         try:
             _shutdown_old_server(5000)
             time.sleep(1)
@@ -126,7 +126,8 @@ def main():
 
     chat_url = f"{BASE_URL}/chat"
 
-    window = webview.create_window(
+    # 保留 window 引用：pywebview 需要窗口对象存活到 webview.start()（GUI 行为无法自动化验证，故不删赋值）
+    window = webview.create_window(  # noqa: F841
         title="原神剧情助手 - 提瓦特档案馆",
         url=chat_url,
         width=1100,

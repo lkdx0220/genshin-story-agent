@@ -99,7 +99,25 @@ def list_all_quest_series() -> str:
 
     _emit_progress("tool_start", {"tool": "list_all_quest_series", "message": "正在生成全角色任务目录..."})
 
-    # 按所属角色分组：角色名 → {系列任务: [子任务列表]}
+    char_map, standalone_series = _collect_quest_series_map()
+    lines = _build_quest_series_lines(char_map, standalone_series)
+
+    result = "\n".join(lines)
+    _quest_series_cache = result
+    _quest_series_cache_time = now
+
+    print("[工具] 全角色任务目录（已生成）")
+    return result
+
+
+def _collect_quest_series_map():
+    """扫描任务知识库，按所属角色聚合传说任务的系列结构。
+
+    返回 (char_map, standalone_series)：
+    - char_map: 角色名 → {系列任务: [子任务名列表]}
+    - standalone_series: 无所属角色的系列任务条目列表
+    只收录“传说任务”，活动剧情/其他类型不在此列出。
+    """
     char_map: dict = {}
     standalone_series = []  # 无所属角色的系列任务
 
@@ -134,9 +152,13 @@ def list_all_quest_series() -> str:
                     "type": task_type,
                     "tasks": [task_name],
                 })
+    return char_map, standalone_series
 
+
+def _build_quest_series_lines(char_map, standalone_series):
+    """把聚合结果渲染为全角色任务目录文本行。"""
     lines = []
-    lines.append(f"===== 全角色任务目录 =====\n")
+    lines.append("===== 全角色任务目录 =====\n")
 
     # 有角色的传说任务（按角色名排序）
     for owner in sorted(char_map.keys()):
@@ -166,13 +188,7 @@ def list_all_quest_series() -> str:
 
     lines.append(f"共 {len(char_map)} 位角色，{sum(len(v) for v in char_map.values())} 章。")
     lines.append("如需查看任意角色的子任务详情，请使用 query_quest(角色名)。")
-
-    result = "\n".join(lines)
-    _quest_series_cache = result
-    _quest_series_cache_time = now
-
-    print("[工具] 全角色任务目录（已生成）")
-    return result
+    return lines
 
 
 # ====== 各类目录缓存（统一 TTL 24h） ======
@@ -243,7 +259,7 @@ def list_all_lore_entries() -> str:
 
     _emit_progress("tool_start", {"tool": "list_all_lore_entries", "message": "正在生成世界观目录..."})
 
-    lines = [f"===== 世界观条目目录 =====\n"]
+    lines = ["===== 世界观条目目录 =====\n"]
 
     # 地区
     lines.append(f"【地区】（{len(地区知识库)} 个）")
@@ -282,7 +298,7 @@ def list_all_weapons_and_artifacts() -> str:
 
     _emit_progress("tool_start", {"tool": "list_all_weapons_and_artifacts", "message": "正在生成武器/圣遗物目录..."})
 
-    lines = [f"===== 武器 & 圣遗物目录 =====\n"]
+    lines = ["===== 武器 & 圣遗物目录 =====\n"]
 
     lines.append(f"【武器】（{len(武器知识库)} 把）")
     by_type = {}
@@ -322,7 +338,7 @@ def list_all_game_items() -> str:
 
     _emit_progress("tool_start", {"tool": "list_all_game_items", "message": "正在生成游戏物品目录..."})
 
-    lines = [f"===== 游戏物品目录 =====\n"]
+    lines = ["===== 游戏物品目录 =====\n"]
     total = 0
 
     # 怪物

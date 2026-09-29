@@ -20,6 +20,118 @@ from app.formatters import (
 )
 from character_aliases import ALIAS_MAP, resolve_aliases
 
+_VOICE_PROFILE_PATH = os.path.join(CONTENT_DIR, "character_voices.json")
+_VOICE_RELATION_PATH = os.path.join(CONTENT_DIR, "voice_relations.json")
+_voice_profile_cache = None
+_voice_relation_cache = None
+
+
+def _load_voice_profiles():
+    global _voice_profile_cache
+    if _voice_profile_cache is None:
+        try:
+            with open(_VOICE_PROFILE_PATH, "r", encoding="utf-8") as f:
+                _voice_profile_cache = json.load(f)
+        except Exception:
+            _voice_profile_cache = {"characters": {}}
+    return _voice_profile_cache
+
+
+def _load_voice_relations():
+    global _voice_relation_cache
+    if _voice_relation_cache is None:
+        try:
+            with open(_VOICE_RELATION_PATH, "r", encoding="utf-8") as f:
+                _voice_relation_cache = json.load(f)
+        except Exception:
+            _voice_relation_cache = {"edges": []}
+    return _voice_relation_cache
+
+
+def _voice_norm(s):
+    if not s:
+        return ""
+    s = s.strip().strip("「」『』《》\"' ")
+    return re.sub(r"\s+", "", s)
+
+
+def _voice_alias_set(raw):
+    if not raw:
+        return set()
+    keys = {raw.strip()}
+    for c in resolve_aliases(raw):
+        if c:
+            keys.add(c.strip())
+    canon = ALIAS_MAP.get(raw.strip())
+    if canon:
+        keys.add(canon)
+    return {_voice_norm(k) for k in keys if _voice_norm(k)}
+
+
+def _voice_match(edge_value, query):
+    return bool(_voice_alias_set(edge_value) & _voice_alias_set(query))
+
+
+def _voice_coverage_message(name):
+    return (f"「{name}」没有可用的语音档案或评价记录。"
+            f"语音档案目前仅覆盖可操控角色；NPC 自身没有语音档案。")
+
+
+def _format_voice_profile(name):
+    item = (_load_voice_profiles().get("characters") or {}).get(name)
+    if not item:
+        return _voice_coverage_message(name)
+    lines = [f"\n{'='*50}", f"【{name}】语音档案（汉语）"]
+    profile = item.get("profile") or []
+    if profile:
+        lines.append("\n档案类语音:")
+        for row in profile:
+            lines.append(f"  [{row.get('line_name','')}] {row.get('content','')}")
+    situation = item.get("situation") or []
+    if situation:
+        lines.append(f"\n情境/其他语音: 共 {len(situation)} 条（未展开）")
+    lines.append(f"\n关系语音: 本角色评价过 {item.get('outgoing_relation_count',0)} 个对象；"
+                 f"被 {item.get('incoming_relation_count',0)} 个对象评价过。")
+    lines.append("如需查询具体评价，请使用 query_voice_relation(speaker=..., target=...)。")
+    lines.append(f"{'='*50}")
+    return "\n".join(lines)
+
+
+def _format_voice_edges(edges, speaker="", target=""):
+    if not edges:
+        return "未找到相关的语音评价。"
+    total = len(edges)
+    if total > 80:
+        edges = edges[:80]
+    lines = [f"\n{'='*50}"]
+    if speaker and target:
+        lines.append(f"【{speaker} → {target}】语音评价")
+        for e in edges:
+            lines.append(f"  [{e.get('line_name','')}] {e.get('content','')}")
+    elif speaker:
+        lines.append(f"【{speaker}】评价过的对象")
+        grouped = {}
+        for e in edges:
+            grouped.setdefault(e.get("target", ""), []).append(e)
+        for t, rows in grouped.items():
+            lines.append(f"\n→ {t}（{len(rows)} 条）")
+            for e in rows:
+                lines.append(f"  [{e.get('line_name','')}] {e.get('content','')}")
+    else:
+        lines.append(f"【{target}】收到的语音评价")
+        grouped = {}
+        for e in edges:
+            grouped.setdefault(e.get("speaker", ""), []).append(e)
+        for s, rows in grouped.items():
+            lines.append(f"\n← {s}（{len(rows)} 条）")
+            for e in rows:
+                lines.append(f"  [{e.get('line_name','')}] {e.get('content','')}")
+    if total > 80:
+        lines.append(f"\n（共 {total} 条，仅展示前 80 条）")
+    lines.append(f"{'='*50}")
+    return "\n".join(lines)
+
+
 
 # 戏称映射：角色名 → 被戏称为该角色传说任务的版本活动
 FAKE_LEGEND_QUESTS = {
@@ -45,9 +157,10 @@ TRIBAL_CHRONICLES = {
 
 
 @tool
-def query_character(name: str) -> str:
-    """查询原神角色详细信息。name: 角色名称或常用别名（如\"胡桃\"、\"钟离\"、\"散兵\"）"""
-    # 别名反向展开：散兵 → 流浪者，确保社区常用名能查到规范名资料
+def query_character(name: str, section: str = "") -> str:
+    """查询原神角色详细信息。section 可选，填“语音”时返回角色语音档案。name: 角色名称或常用别名。"""
+    section = (section or "").strip()
+    voice_mode = section in ("语音", "voice", "语音档案", "档案")
     candidates = []
     seen = set()
     for candidate in resolve_aliases(name):
@@ -55,22 +168,50 @@ def query_character(name: str) -> str:
         if c and c not in seen:
             seen.add(c)
             candidates.append(c)
-    # 原始 name 放在最前，保持精确匹配优先级
     candidates = [name] + [c for c in candidates if c != name]
 
     for candidate in candidates:
         for role in 角色知识库:
             if candidate in role.get("角色名称", "") or candidate in role.get("称号", ""):
                 print(f"[工具] 查询角色: {name} -> {candidate}")
+                if voice_mode:
+                    return _format_voice_profile(role["角色名称"])
                 return _format_role_info(role)
 
-        # 兜底：查 NPC 数据
         npc = _npcs_data.get(candidate)
         if npc:
             print(f"[工具] 查询NPC: {name} -> {candidate}")
+            if voice_mode:
+                return _voice_coverage_message(candidate)
             return _format_npc_info(candidate, npc)
 
+    if voice_mode:
+        return _voice_coverage_message(name)
     return f"未找到角色「{name}」的信息。知识库还在完善中，建议前往 Bilibili Wiki 查看。"
+
+
+@tool
+def query_voice_relation(speaker: str = "", target: str = "") -> str:
+    """查询角色语音评价关系。speaker: 评价者；target: 被评价者。两者至少填一个，可只填一个做列表查询。"""
+    speaker = (speaker or "").strip()
+    target = (target or "").strip()
+    if not speaker and not target:
+        return "请至少提供 speaker 或 target 参数。"
+    edges = _load_voice_relations().get("edges") or []
+    matched = []
+    for e in edges:
+        if speaker and not _voice_match(e.get("speaker", ""), speaker):
+            continue
+        if target and not _voice_match(e.get("target", ""), target):
+            continue
+        matched.append(e)
+    if not matched:
+        if speaker and target:
+            return f"没有找到「{speaker}」评价「{target}」的语音记录。"
+        if speaker:
+            return f"没有找到「{speaker}」的语音评价记录。{_voice_coverage_message(speaker)}"
+        return f"没有找到评价「{target}」的语音记录。{_voice_coverage_message(target)}"
+    return _format_voice_edges(matched, speaker, target)
 
 
 @tool
@@ -145,6 +286,31 @@ def query_weapon(name: str) -> str:
 def query_quest(name: str) -> str:
     """查询传说任务/世界任务信息。name: 任务名称或角色名。
     返回时自动按系列任务（章节名）分组。显示所属角色，区分主角视角与客串出场。"""
+    name_variants = _resolve_quest_name_variants(name)
+
+    # 戏称映射：先正常搜索真实传说/世界任务；只有确实没有真实结果时才返回戏称活动，
+    # 避免像胡桃这种既有真实传说任务（引蝶之章/奈何蝶飞去）又有玩家戏称活动的角色被误导。
+    matched_fake = _match_fake_legend_quest(name_variants)
+
+    # 部族纪闻映射：该角色的部族纪闻可能未全部关联角色名，需按章节名补全
+    matched_tribal = _match_tribal_chronicle(name_variants)
+    results, is_tribal, seen = _collect_matched_quests(name_variants, matched_tribal)
+
+    if results:
+        series_groups, standalone = _group_and_complete_series(results, seen)
+        print(f"[工具] 查询任务: {name}")
+        return _format_quest_results(name, is_tribal, series_groups, standalone)
+    # 真实传说/世界任务全部未命中时，才降级为玩家戏称的“版本活动”
+    if matched_fake:
+        fake_text = _format_fake_legend_results(name, matched_fake)
+        if fake_text is not None:
+            return fake_text
+
+    return f"未找到任务「{name}」的信息。"
+
+
+def _resolve_quest_name_variants(name: str):
+    """生成任务名的全部检索变体：原文、去“传说任务”后缀、别名规范名与互为别名的写法。"""
     # 获取名字的所有变体（瓦雷莎/瓦蕾莎等异体字问题）
     name_variants = {name}
     if "传说任务" in name:
@@ -157,26 +323,35 @@ def query_quest(name: str) -> str:
         if canon in name_variants or alias in name_variants:
             name_variants.add(alias)
             name_variants.add(canon)
+    return name_variants
 
 
-    # 戏称映射：先正常搜索真实传说/世界任务；只有确实没有真实结果时才返回戏称活动，
-    # 避免像胡桃这种既有真实传说任务（引蝶之章/奈何蝶飞去）又有玩家戏称活动的角色被误导。
-    matched_fake = None
+def _match_fake_legend_quest(name_variants):
+    """在变体集合中查找戏称映射命中的版本活动名；未命中返回 None。"""
     for v in name_variants:
         if v in FAKE_LEGEND_QUESTS:
-            matched_fake = FAKE_LEGEND_QUESTS[v]
-            break
+            return FAKE_LEGEND_QUESTS[v]
+    return None
 
 
-    # 部族纪闻映射：该角色的部族纪闻可能未全部关联角色名，需按章节名补全
+def _match_tribal_chronicle(name_variants):
+    """在变体集合中查找部族纪闻映射命中的章节名；未命中返回 None。"""
+    for v in name_variants:
+        if v in TRIBAL_CHRONICLES:
+            return TRIBAL_CHRONICLES[v]
+    return None
+
+
+def _collect_matched_quests(name_variants, matched_tribal):
+    """按变体检索任务知识库，返回 (命中任务列表, 是否部族纪闻分支, 已命中任务名集合)。
+
+    部族纪闻分支先按章节名前缀纳入该章节全部子任务；主检索按任务名/关联角色/系列任务
+    做包含匹配，并用 seen 去重，避免同一任务重复入列。两条路径共用同一个 seen 集合，
+    该集合同样要交给后续“同系列补齐”继续去重，故一并返回。
+    """
     is_tribal = False
     results = []
     seen = set()
-    matched_tribal = None
-    for v in name_variants:
-        if v in TRIBAL_CHRONICLES:
-            matched_tribal = TRIBAL_CHRONICLES[v]
-            break
     if matched_tribal:
         for q in 任务知识库:
             if q.get("系列任务", "").startswith(matched_tribal):
@@ -195,74 +370,81 @@ def query_quest(name: str) -> str:
         if matched:
             results.append(q)
             seen.add(q.get("任务名称", ""))
-    if results:
-        # 按系列任务（完整"章节,幕名"）分组，区分同一章节下的多幕
-        series_groups = {}  # {"章节,幕名": [任务列表]}
-        standalone = []
-        for q in results:
-            series = q.get("系列任务", "")
-            if series:
-                if series not in series_groups:
-                    series_groups[series] = []
-                series_groups[series].append(q)
-            else:
-                standalone.append(q)
-
-        lines = []
-        if is_tribal:
-            lines.append(f"注意：「{name}」没有专属传说任务，以下为其所在的部族纪闻：")
-            lines.append("-" * 40)
-
-        # 补全：同一系列任务下，纳入所有子任务（包括元数据缺失的孤立条目）
-        all_series = set(series_groups.keys())
-        if all_series:
-            for q in 任务知识库:
-                s = q.get("系列任务", "")
-                if s and s in all_series and q.get("任务名称") not in seen:
-                    series_groups[s].append(q)
-                    seen.add(q.get("任务名称", ""))
-
-        for series, quests in series_groups.items():
-            owner = quests[0].get("所属角色", "")
-            is_main = (owner == name)  # 搜索角色等于所属角色=主角视角
-
-            parts = series.split(",")
-            chapter = parts[0].strip()
-            act_name = parts[1].strip() if len(parts) > 1 else ""
-            qtype = quests[0].get("任务类型", "")
-            tag = " 【主角】" if is_main else " 【客串出场】"
-            lines.append(f"\n【{chapter}】{qtype}{tag}")
-            if owner:
-                lines.append(f"所属角色: {owner}")
-            if act_name:
-                lines.append(f"幕: {act_name}")
-            lines.append(f"子任务({len(quests)}个): " + " | ".join(q["任务名称"] for q in quests))
-            lines.append("-" * 40)
-
-        for q in standalone:
-            lines.append(f"\n【{q['任务名称']}】")
-            lines.append(f"类型: {q.get('任务类型')}  |  关联角色: {q.get('关联角色')}")
-            owner = q.get("所属角色", "")
-            if owner:
-                lines.append(f"所属角色: {owner}")
-            lines.append(f"简介: {q.get('简介', '暂无')}")
-            lines.append("-" * 40)
-
-        print(f"[工具] 查询任务: {name}")
-        return "\n".join(lines)
-    # 真实传说/世界任务全部未命中时，才降级为玩家戏称的“版本活动”
-    if matched_fake:
-        activity_results = [q for q in 任务知识库 if matched_fake in q.get("任务名称", "")]
-        if activity_results:
-            lines = [f"注意：「{name}」没有传说任务，以下是被戏称为「{name}传说任务」的版本活动："]
-            for q in activity_results:
-                lines.append(f"\n【{q['任务名称']}】版本活动")
-                lines.append(f"简介: {q.get('简介', '暂无')}")
-            print(f"[工具] 查询任务(戏称映射): {name} → {matched_fake}")
-            return "\n".join(lines)
+    return results, is_tribal, seen
 
 
-    return f"未找到任务「{name}」的信息。"
+def _group_and_complete_series(results, seen):
+    """按“系列任务”把命中结果分组，并补齐同系列下元数据缺失的孤立子任务。"""
+    # 按系列任务（完整"章节,幕名"）分组，区分同一章节下的多幕
+    series_groups = {}  # {"章节,幕名": [任务列表]}
+    standalone = []
+    for q in results:
+        series = q.get("系列任务", "")
+        if series:
+            if series not in series_groups:
+                series_groups[series] = []
+            series_groups[series].append(q)
+        else:
+            standalone.append(q)
+
+    # 补全：同一系列任务下，纳入所有子任务（包括元数据缺失的孤立条目）
+    all_series = set(series_groups.keys())
+    if all_series:
+        for q in 任务知识库:
+            s = q.get("系列任务", "")
+            if s and s in all_series and q.get("任务名称") not in seen:
+                series_groups[s].append(q)
+                seen.add(q.get("任务名称", ""))
+    return series_groups, standalone
+
+
+def _format_quest_results(name, is_tribal, series_groups, standalone):
+    """把分组后的任务渲染为工具返回文本（含部族纪闻提示、主角/客串标记与子任务清单）。"""
+    lines = []
+    if is_tribal:
+        lines.append(f"注意：「{name}」没有专属传说任务，以下为其所在的部族纪闻：")
+        lines.append("-" * 40)
+
+    for series, quests in series_groups.items():
+        owner = quests[0].get("所属角色", "")
+        is_main = (owner == name)  # 搜索角色等于所属角色=主角视角
+
+        parts = series.split(",")
+        chapter = parts[0].strip()
+        act_name = parts[1].strip() if len(parts) > 1 else ""
+        qtype = quests[0].get("任务类型", "")
+        tag = " 【主角】" if is_main else " 【客串出场】"
+        lines.append(f"\n【{chapter}】{qtype}{tag}")
+        if owner:
+            lines.append(f"所属角色: {owner}")
+        if act_name:
+            lines.append(f"幕: {act_name}")
+        lines.append(f"子任务({len(quests)}个): " + " | ".join(q["任务名称"] for q in quests))
+        lines.append("-" * 40)
+
+    for q in standalone:
+        lines.append(f"\n【{q['任务名称']}】")
+        lines.append(f"类型: {q.get('任务类型')}  |  关联角色: {q.get('关联角色')}")
+        owner = q.get("所属角色", "")
+        if owner:
+            lines.append(f"所属角色: {owner}")
+        lines.append(f"简介: {q.get('简介', '暂无')}")
+        lines.append("-" * 40)
+
+    return "\n".join(lines)
+
+
+def _format_fake_legend_results(name, matched_fake):
+    """戏称降级分支：渲染被玩家戏称为该角色传说任务的版本活动；无命中返回 None。"""
+    activity_results = [q for q in 任务知识库 if matched_fake in q.get("任务名称", "")]
+    if not activity_results:
+        return None
+    lines = [f"注意：「{name}」没有传说任务，以下是被戏称为「{name}传说任务」的版本活动："]
+    for q in activity_results:
+        lines.append(f"\n【{q['任务名称']}】版本活动")
+        lines.append(f"简介: {q.get('简介', '暂无')}")
+    print(f"[工具] 查询任务(戏称映射): {name} → {matched_fake}")
+    return "\n".join(lines)
 
 # 简单同音字组表：用于短名/同音错别字的保守纠错。
 # 只收录常见任务/章节用字，后续遇到真实漏网再补充。
@@ -298,7 +480,7 @@ def _homophone_aligned_score(name: str, candidate: str):
     if len(name) != len(candidate) or not name:
         return 0.0
     exact = 0
-    for a, b in zip(name, candidate):
+    for a, b in zip(name, candidate, strict=False):
         if a == b:
             exact += 1
             continue
@@ -546,7 +728,7 @@ def get_book_metadata(book_name: str) -> str:
     if meta.get("作者"):
         lines.append(f"作者: {meta['作者']}")
     else:
-        lines.append(f"作者: 游戏内未提及")
+        lines.append("作者: 游戏内未提及")
     if meta.get("体裁"):
         lines.append(f"体裁: {meta['体裁']}")
     if meta.get("卷数"):
@@ -558,6 +740,6 @@ def get_book_metadata(book_name: str) -> str:
     volumes = re.findall(r"【卷(\d+)内容】\s*([^\n]{0,24})", text)
     if volumes:
         lines.append("卷目录: " + " / ".join(f"卷{n} {t.strip()}".strip() for n, t in volumes))
-    if len(text) > 3000:
-        lines.append(f"正文长度: {len(text)} 字（超过 3000 字，load_book_content 会分页返回，用 part 参数逐页读完）")
+    if len(text) > 13000:
+        lines.append(f"正文长度: {len(text)} 字（超过 13000 字，load_book_content 会分页返回，用 part 参数逐页读完）")
     return "\n".join(lines)

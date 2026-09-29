@@ -101,7 +101,6 @@ def _cn_to_int(value: str):
         return None
     if value.isdigit():
         return int(value)
-    total = 0
     section = 0
     number = 0
     for char in value:

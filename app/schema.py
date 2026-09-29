@@ -5,7 +5,7 @@ GenshinAdvisorState 是 LangGraph 各节点之间共享的 state 类型，
 所有节点函数签名都以它为输入输出。
 """
 import os
-from typing import Dict, List, Tuple, Any, Optional, Annotated, TypedDict
+from typing import Dict, List, Tuple, Optional, Annotated, TypedDict
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages

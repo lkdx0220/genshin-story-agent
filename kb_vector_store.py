@@ -273,7 +273,7 @@ class KBVectorStore:
                         print(f"  [Save] 文件锁重试 {attempt+1}/5: {e}，等待 {wait}s")
                         time.sleep(wait)
                     else:
-                        raise RuntimeError(f"保存失败 {target}: {e}")
+                        raise RuntimeError(f"保存失败 {target}: {e}") from e
 
     # ====== 写入 ======
 

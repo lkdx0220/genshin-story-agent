@@ -5,7 +5,6 @@
 设计：Agent 先 search 找到词条，再 expand 顺链接找相邻词条，最后 get 取定向片段。
 不返回整篇 3 万字全文，避免撑爆 Plan 上下文；get 支持 focus 参数定位原文。
 """
-import re
 from typing import List, Optional
 
 from langchain_core.tools import tool
@@ -87,7 +86,7 @@ def wiki_graph_expand(entry_id: str) -> str:
     lines.append(f"[反向引用] {len(back)} 个（链接到本词条的）：")
     if not back:
         lines.append("  无")
-    for i, (source, link) in enumerate(back, 1):
+    for i, (source, _link) in enumerate(back, 1):
         lines.append(f"{i}. {source.title} (ID {source.entry_id}, {source.entry_type})")
     return "\n".join(lines)
 

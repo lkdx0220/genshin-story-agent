@@ -57,7 +57,6 @@ def fetch_via_post(titles):
 
 
 def main():
-    import urllib.parse
 
     with open(BATCHES_FILE, 'r', encoding='utf-8') as f:
         batches = json.load(f)
