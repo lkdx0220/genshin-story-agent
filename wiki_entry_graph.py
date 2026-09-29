@@ -698,11 +698,8 @@ def _infer_type(filters: List[str], page: Dict[str, Any]) -> str:
 def _infer_region(filters: List[str]) -> str:
     for f in filters:
         # 频道 filter 里最常见的地区前缀：角色/NPC/组织/地图文本/食物等用“地区/”。
-        if f.startswith("地区/"):
-            return f.split("/", 1)[1]
-        if f.startswith("地图/"):
-            return f.split("/", 1)[1]
-        if f.startswith("任务区域/"):
+        # 三个前缀取的都是「第一个 / 之后」的同一段，故合并判断（S3516）。
+        if f.startswith(("地区/", "地图/", "任务区域/")):
             return f.split("/", 1)[1]
     return ""
 
