@@ -452,6 +452,103 @@ def _get_entity_registry():
     print(f"[实体注册表] 已构建: {total} 个实体, {unique_short} 个唯一短名")
     return registry, shortname_index, exact_index_bracketless
 
+def _new_anchor_state() -> dict:
+    """锚定过程的累加状态：实体→标签集、候选标签有序表与去重集。"""
+    return {"anchored": {}, "labels_ordered": [], "labels_set": set()}
+
+
+def _anchor_add(state: dict, name: str, labels) -> None:
+    """加入一个锚定实体：按 name 去重（同实体多次命中时合并标签），并累计候选标签。"""
+    anchored = state["anchored"]
+    if name in anchored:
+        anchored[name].update(labels)
+    else:
+        anchored[name] = set(labels)
+    # 更新全局候选标签
+    for lbl in sorted(labels):
+        if lbl not in state["labels_set"]:
+            state["labels_set"].add(lbl)
+            state["labels_ordered"].append(lbl)
+
+
+def _anchor_pass_exact(state: dict, registry: dict, query: str) -> None:
+    """Pass 1：实体全名出现在查询中。"""
+    for name, (labels, _) in registry.items():
+        if name in query:
+            _anchor_add(state, name, labels)
+
+
+def _anchor_pass_bracketless(state: dict, exact_index_bracketless: dict, query: str) -> None:
+    """Pass 2：去括号精确匹配（用户不带书名号也能命中）。"""
+    for clean, (name, labels) in exact_index_bracketless.items():
+        if clean in query:
+            _anchor_add(state, name, labels)
+
+
+def _anchor_pass_shortname(state: dict, shortname_index: dict, query: str) -> None:
+    """Pass 3：短名索引（查询中的 2-4 字子串命中唯一短名）。"""
+    qlen = len(query)
+    seen_sub = set()
+    for i in range(qlen):
+        max_j = min(i + 5, qlen + 1)  # 只查 2-4 字子串
+        for j in range(i + 2, max_j):
+            sub = query[i:j]
+            if sub in seen_sub:
+                continue
+            seen_sub.add(sub)
+            entry = shortname_index.get(sub)
+            if entry:
+                name, labels = entry
+                _anchor_add(state, name, labels)
+
+
+def _anchor_pass_legendary(state: dict, query: str) -> None:
+    """Pass 4：别名→传说任务锚定（最长匹配优先）。
+
+    "草神"→纳西妲→智慧主之章，"心海"→珊瑚宫心海→眠龙之章。
+    """
+    if _aliases_sorted_for_legendary is None:
+        _get_legendary_quest_map()
+    if _aliases_sorted_for_legendary:
+        for alias in _aliases_sorted_for_legendary:
+            if alias in query:
+                canonical, chapter = _alias_to_legendary_map[alias]
+                _anchor_add(state, f"{canonical}(传说任务「{chapter}」)", {"D"})
+                break  # 最长匹配命中即停止，避免"心海"和"珊瑚宫心海"重复锚定
+
+
+def _anchor_pass_pseudo(state: dict, query: str) -> str:
+    """Pass 5：伪传说任务检测（活动被戏称为传说任务），返回提醒文案或空串。
+
+    "兹白传说任务"→奔霄颂玉轮(2026年海灯节)，"胡桃传说任务2"→春曦画桃符(2025年海灯节)。
+    """
+    if _pseudo_aliases_sorted is None:
+        _get_legendary_quest_map()
+    if _pseudo_aliases_sorted:
+        for alias in _pseudo_aliases_sorted:
+            if alias in query:
+                activity_name, remark = _pseudo_legendary_map[alias]
+                _anchor_add(state, f"{activity_name}(活动剧情，被戏称为传说任务)", {"D"})
+                return (
+                    f"注意：查询中的「{alias}」并非真正的传说任务，"
+                    f"而是社区对活动「{activity_name}」({remark})的戏称。"
+                    f"路由时请按活动剧情处理（D组），回答时需先澄清这一点。"
+                )
+    return ""
+
+
+def _anchor_truncate(state: dict) -> list:
+    """候选标签超过 3 个时按匹配优先级保留前 3 个，并滤掉没有标签的锚定实体。"""
+    anchored = [(n, sorted(lbs)) for n, lbs in state["anchored"].items()]
+    if len(state["labels_ordered"]) > 3:
+        keep_labels = set(state["labels_ordered"][:3])
+        state["labels_ordered"] = state["labels_ordered"][:3]
+        state["labels_set"] = keep_labels
+        # 过滤 anchored，只保留至少有一个标签在截断集合中的实体
+        anchored = [(n, [l for l in lbs if l in keep_labels]) for n, lbs in anchored]
+        anchored = [(n, lbs) for n, lbs in anchored if lbs]
+    return anchored
+
 
 def _anchor_entities(query: str) -> Tuple[List[str], List[Tuple[str, List[str]]]]:
     """Stage 0：扫描查询中的已知实体，返回 (候选标签, 锚定实体列表)。
@@ -466,89 +563,21 @@ def _anchor_entities(query: str) -> Tuple[List[str], List[Tuple[str, List[str]]]
     """
     registry, shortname_index, exact_index_bracketless = _get_entity_registry()
 
-    anchored_map = {}  # name → {labels}，用于去重
-    candidate_labels_ordered = []  # 保持插入顺序，用于截断
-    candidate_labels_set = set()
-
-    def _add_anchor(name: str, labels):
-        """将实体及其所有标签加入锚定结果，按 name 去重（同实体命中多次匹配策略时合并标签）。"""
-        if name in anchored_map:
-            anchored_map[name].update(labels)
-        else:
-            anchored_map[name] = set(labels)
-        # 更新全局候选标签
-        for lbl in sorted(labels):
-            if lbl not in candidate_labels_set:
-                candidate_labels_set.add(lbl)
-                candidate_labels_ordered.append(lbl)
-
+    state = _new_anchor_state()
     # Pass 1: 精确全名匹配
-    for name, (labels, _) in registry.items():
-        if name in query:
-            _add_anchor(name, labels)
-
+    _anchor_pass_exact(state, registry, query)
     # Pass 2: 去括号精确匹配（用户不带书名号也能命中）
-    for clean, (name, labels) in exact_index_bracketless.items():
-        if clean in query:
-            _add_anchor(name, labels)
-
+    _anchor_pass_bracketless(state, exact_index_bracketless, query)
     # Pass 3: 短名索引（部分匹配）
-    qlen = len(query)
-    seen_sub = set()
-    for i in range(qlen):
-        max_j = min(i + 5, qlen + 1)  # 只查 2-4 字子串
-        for j in range(i + 2, max_j):
-            sub = query[i:j]
-            if sub in seen_sub:
-                continue
-            seen_sub.add(sub)
-            entry = shortname_index.get(sub)
-            if entry:
-                name, labels = entry
-                _add_anchor(name, labels)
-
+    _anchor_pass_shortname(state, shortname_index, query)
     # Pass 4: 别名→传说任务锚定（最长匹配优先）
-    # "草神"→纳西妲→智慧主之章，"心海"→珊瑚宫心海→眠龙之章
-    if _aliases_sorted_for_legendary is None:
-        _get_legendary_quest_map()
-    if _aliases_sorted_for_legendary:
-        for alias in _aliases_sorted_for_legendary:
-            if alias in query:
-                canonical, chapter = _alias_to_legendary_map[alias]
-                _add_anchor(f"{canonical}(传说任务「{chapter}」)", {"D"})
-                break  # 最长匹配命中即停止，避免"心海"和"珊瑚宫心海"重复锚定
-
+    _anchor_pass_legendary(state, query)
     # Pass 5: 伪传说任务检测（活动被戏称为传说任务）
-    # "兹白传说任务"→奔霄颂玉轮(2026年海灯节)，"胡桃传说任务2"→春曦画桃符(2025年海灯节)
-    if _pseudo_aliases_sorted is None:
-        _get_legendary_quest_map()
-    pseudo_note = ""
-    if _pseudo_aliases_sorted:
-        for alias in _pseudo_aliases_sorted:
-            if alias in query:
-                activity_name, remark = _pseudo_legendary_map[alias]
-                pseudo_note = (
-                    f"注意：查询中的「{alias}」并非真正的传说任务，"
-                    f"而是社区对活动「{activity_name}」({remark})的戏称。"
-                    f"路由时请按活动剧情处理（D组），回答时需先澄清这一点。"
-                )
-                _add_anchor(f"{activity_name}(活动剧情，被戏称为传说任务)", {"D"})
-                break
+    pseudo_note = _anchor_pass_pseudo(state, query)
 
-    # 转换为列表输出
-    anchored = [(n, sorted(lbs)) for n, lbs in anchored_map.items()]
-
-    # ---- 截断：候选标签超过 3 个时保留前 3 个 ----
-    truncated = len(candidate_labels_ordered) > 3
-    if truncated:
-        keep_labels = set(candidate_labels_ordered[:3])
-        candidate_labels_ordered = candidate_labels_ordered[:3]
-        candidate_labels_set = keep_labels
-        # 过滤 anchored，只保留至少有一个标签在截断集合中的实体
-        anchored = [(n, [l for l in lbs if l in keep_labels]) for n, lbs in anchored]
-        anchored = [(n, lbs) for n, lbs in anchored if lbs]
-
-    return candidate_labels_ordered, anchored, pseudo_note
+    # 转换为列表输出 + 截断
+    anchored = _anchor_truncate(state)
+    return state["labels_ordered"], anchored, pseudo_note
 
 
 def _format_grounding(anchored: List[Tuple[str, List[str]]]) -> str:
