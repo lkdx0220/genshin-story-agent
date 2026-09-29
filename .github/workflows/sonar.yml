@@ -1,0 +1,34 @@
+name: sonarcloud
+
+# 目前只支持手动触发：SONAR_TOKEN 还没配到仓库 Secrets，先挂 push/PR 会每次必红。
+# 配好 SONAR_TOKEN 之后，把下面两行取消注释即可（与 agent-trace-inspector 一致）：
+#   push:
+#     branches: [main]
+#   pull_request:
+on:
+  workflow_dispatch:
+
+# 最小权限：扫描只需要读代码（DeepSec 审查建议）。
+permissions:
+  contents: read
+
+jobs:
+  sonarcloud:
+    runs-on: ubuntu-latest
+    steps:
+      # 所有 action 钉到 commit SHA（不用可变 tag）：tag 被移动时行为不变。
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          # SonarCloud 需要完整历史来算 blame 与 new code，故保留 fetch-depth: 0。
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.13"
+
+      # 本仓库没有单元测试（评测与用例在 agent-trace-inspector 仓库），故只做静态分析，
+      # 不生成覆盖率报告；质量门里同样要去掉覆盖率条件。
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602  # v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
