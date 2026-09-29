@@ -163,7 +163,7 @@ def _alias_judge_compounds(compound_candidates, covered_spans, alias_notes_parts
 def _build_alias_notes(alias_notes_parts) -> str:
     """拼装 [别名标注] 系统消息补充；无别名时返回空串。"""
     if not alias_notes_parts:
-        print(f"  -> 未检测到别名")
+        print("  -> 未检测到别名")
         return ""
 
     # 代码加固：多实体强制注入 —— 如果检测到多个别名/实体，明确列出并强制要求全部回答
@@ -633,7 +633,7 @@ def _fast_agent_code_shortcuts(messages, original_query, iteration):
 
 def _fast_agent_forced_answer(state, messages, iteration):
     """已达最大轮次：剥离未执行的 tool_calls 后强制生成回答，空内容兜底为未收录。"""
-    print(f"  -> 已达最大快速轮次，强制生成回答")
+    print("  -> 已达最大快速轮次，强制生成回答")
     # 剥离最后一条 AIMessage 的 tool_calls（工具未执行，防止 LLM 困惑）
     for i in range(len(messages) - 1, -1, -1):
         msg = messages[i]
@@ -695,7 +695,7 @@ def _fast_agent_tool_round(state, messages, iteration, current_llm_with_tools):
     # 空内容兜底：工具已返回"未找到"等结果，但 LLM 仍可能返回空串，此时明确告知未收录
     if not content or not content.strip():
         content = "当前知识库未收录。"
-    print(f"  -> 快速路径完成（无工具调用），直接返回回答")
+    print("  -> 快速路径完成（无工具调用），直接返回回答")
     return {
         "messages": [response],
         "final_response": content,
@@ -720,7 +720,7 @@ def route_after_fast(state: GenshinAdvisorState) -> str:
 
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
         if iteration >= MAX_FAST_ITERATIONS:
-            print(f"  -> 快速路径达上限，强制生成回答")
+            print("  -> 快速路径达上限，强制生成回答")
             return "fast_agent"
         return "tools"
 
@@ -1184,10 +1184,10 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
                     "plan_retry": plan_retry_count + 1,
                     "intent_labels": intent_labels,
                 }
-            print(f"  -> [拦截] 重试后仍无工具调用，放弃")
+            print("  -> [拦截] 重试后仍无工具调用，放弃")
             plan_exit_reason = "retry_exhausted"
     else:
-        print(f"  -> [拦截] 重试次数已耗尽，放弃工具调用")
+        print("  -> [拦截] 重试次数已耗尽，放弃工具调用")
         plan_exit_reason = "retry_exhausted"
 
     # 重试耗尽 → 进入回答阶段
@@ -1224,7 +1224,7 @@ def route_after_plan(state: GenshinAdvisorState) -> str:
     # 有工具调用 → 执行工具（除非已达最大轮次）
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
         if iteration >= MAX_AGENT_ITERATIONS:
-            print(f"  -> 已达上限，进入回答阶段")
+            print("  -> 已达上限，进入回答阶段")
             return "answer_agent"
         return "tools"
 

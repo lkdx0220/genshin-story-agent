@@ -39,7 +39,7 @@ def _format_role_info(role: Dict) -> str:
             lines.append(f"  [{sk}]:")
             lines.append(body)
     if role.get('相关剧情'):
-        lines.append(f"\n相关剧情:")
+        lines.append("\n相关剧情:")
         for p in role['相关剧情']:
             lines.append(f"  · {p}")
     lines.append(f"{'='*50}")
@@ -71,16 +71,16 @@ def _format_npc_info(name: str, npc: Dict) -> str:
 
     dialogue = npc.get('dialogue', '')
     if dialogue:
-        lines.append(f"\n对话与语音（前600字预览）:")
+        lines.append("\n对话与语音（前600字预览）:")
         lines.append(dialogue[:600])
 
     related = npc.get('related_quests', [])
     if related:
-        lines.append(f"\n相关任务:")
+        lines.append("\n相关任务:")
         for q in related:
             lines.append(f"  · {q}")
 
-    lines.append(f"\n[系统标记] 此条目为 NPC（非可玩角色）。若用户询问其成长/履历/身份转变/出场经历，请使用 NPC 离散成长检索协议：仅以 NPC 全名检索 hybrid_search，禁止添加「成长/变化/脉络」等抽象词，拿到出场列表后按版本顺序逐篇加载全文。")
+    lines.append("\n[系统标记] 此条目为 NPC（非可玩角色）。若用户询问其成长/履历/身份转变/出场经历，请使用 NPC 离散成长检索协议：仅以 NPC 全名检索 hybrid_search，禁止添加「成长/变化/脉络」等抽象词，拿到出场列表后按版本顺序逐篇加载全文。")
     lines.append(f"{'='*50}")
     return "\n".join(lines)
 
@@ -109,7 +109,7 @@ def _format_story_info(arc: Dict) -> str:
     lines.append(f"\n剧情概要: {arc.get('剧情概要', '暂无')}")
     acts = arc.get('幕列表', [])
     if acts:
-        lines.append(f"\n章节结构（章→幕→任务）:")
+        lines.append("\n章节结构（章→幕→任务）:")
         for i, act in enumerate(acts, 1):
             act_no = act.get('幕编号', '') or ''
             act_name = act.get('幕名称', '') or ''
@@ -118,7 +118,7 @@ def _format_story_info(arc: Dict) -> str:
             for task in act.get('任务', []):
                 lines.append(f"      - {task}")
     elif arc.get('关键事件'):
-        lines.append(f"\n关键事件:")
+        lines.append("\n关键事件:")
         for i, event in enumerate(arc['关键事件'], 1):
             lines.append(f"  {i}. {event}")
     lines.append(f"{'='*50}")

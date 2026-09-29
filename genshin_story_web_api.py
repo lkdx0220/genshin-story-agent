@@ -38,8 +38,8 @@ import re
 # 导入 Agent 工具
 try:
     from genshin_story_agent import (
-        tools, rag_memory, RAG_AVAILABLE,
-        角色知识库, 地区知识库, 主线剧情知识库, 武器知识库, 任务知识库,
+        tools, RAG_AVAILABLE,
+        角色知识库, 地区知识库, 主线剧情知识库,
         _summarize_conversation, SUMMARY_TRIGGER, RECENT_TURNS,
     )
     AGENT_OK = True

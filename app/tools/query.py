@@ -728,7 +728,7 @@ def get_book_metadata(book_name: str) -> str:
     if meta.get("作者"):
         lines.append(f"作者: {meta['作者']}")
     else:
-        lines.append(f"作者: 游戏内未提及")
+        lines.append("作者: 游戏内未提及")
     if meta.get("体裁"):
         lines.append(f"体裁: {meta['体裁']}")
     if meta.get("卷数"):

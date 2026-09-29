@@ -158,7 +158,7 @@ def _collect_quest_series_map():
 def _build_quest_series_lines(char_map, standalone_series):
     """把聚合结果渲染为全角色任务目录文本行。"""
     lines = []
-    lines.append(f"===== 全角色任务目录 =====\n")
+    lines.append("===== 全角色任务目录 =====\n")
 
     # 有角色的传说任务（按角色名排序）
     for owner in sorted(char_map.keys()):
@@ -259,7 +259,7 @@ def list_all_lore_entries() -> str:
 
     _emit_progress("tool_start", {"tool": "list_all_lore_entries", "message": "正在生成世界观目录..."})
 
-    lines = [f"===== 世界观条目目录 =====\n"]
+    lines = ["===== 世界观条目目录 =====\n"]
 
     # 地区
     lines.append(f"【地区】（{len(地区知识库)} 个）")
@@ -298,7 +298,7 @@ def list_all_weapons_and_artifacts() -> str:
 
     _emit_progress("tool_start", {"tool": "list_all_weapons_and_artifacts", "message": "正在生成武器/圣遗物目录..."})
 
-    lines = [f"===== 武器 & 圣遗物目录 =====\n"]
+    lines = ["===== 武器 & 圣遗物目录 =====\n"]
 
     lines.append(f"【武器】（{len(武器知识库)} 把）")
     by_type = {}
@@ -338,7 +338,7 @@ def list_all_game_items() -> str:
 
     _emit_progress("tool_start", {"tool": "list_all_game_items", "message": "正在生成游戏物品目录..."})
 
-    lines = [f"===== 游戏物品目录 =====\n"]
+    lines = ["===== 游戏物品目录 =====\n"]
     total = 0
 
     # 怪物
