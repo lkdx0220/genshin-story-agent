@@ -2607,38 +2607,34 @@ def _extract_speaker_names(texts):
     return names
 
 
-def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries):
-    """返回与全景题相关的角色/组织/圣遗物/地点档案词条。
-
-    相关性规则（通用、与主题无关）：
-    - 已知实体：来自实体提及索引，且必须在任务/地图正文里出现“具体标题/具体别名”；
-    - 说话人：只有词条标题或具体别名与说话人完全一致时才保留；
-    - 泛称别名（妹妹/父亲/偶像/接待员等）不构成相关性证据；
-    - 只允许角色/组织/造物/书籍等档案类型，任务词条和地图文本由各自通道处理。
-    """
-    excluded = {e.entry_id for e in task_entries} | {e.entry_id for e in map_entries}
+def _entity_candidates_from_mentions(graph, task_entries, excluded) -> dict:
+    """第 1 步：实体提及索引的反向边——被任务显式提及的已知实体。"""
     candidates = {}
-
-    # 1) 已知实体：实体提及索引的反向边
     mention_index = _load_entity_mention_index()
-    if mention_index:
-        inverted = mention_index.get("inverted") or {}
-        for task in task_entries:
-            for eid in inverted.get(task.entry_id, []):
-                if eid in excluded:
-                    continue
-                entry = graph.get(eid)
-                if entry is None or entry.entry_type not in _ENTITY_ALLOWED_TYPES:
-                    continue
-                info = candidates.setdefault(
-                    eid, {"entry": entry, "known": 0, "speaker": 0, "hits": 0}
-                )
-                info["known"] += 1
+    if not mention_index:
+        return candidates
+    inverted = mention_index.get("inverted") or {}
+    for task in task_entries:
+        for eid in inverted.get(task.entry_id, []):
+            if eid in excluded:
+                continue
+            entry = graph.get(eid)
+            if entry is None or entry.entry_type not in _ENTITY_ALLOWED_TYPES:
+                continue
+            info = candidates.setdefault(
+                eid, {"entry": entry, "known": 0, "speaker": 0, "hits": 0}
+            )
+            info["known"] += 1
+    return candidates
 
-    # 2) 说话人：只在标题或具体别名与说话人完全一致时保留，
-    #    不再用 graph.search 的模糊结果（避免把只共享单字的无关词条带进来）。
-    speaker_names = _extract_speaker_names(task_texts)
-    for name in speaker_names:
+
+def _add_speaker_candidates(graph, task_texts, excluded, candidates) -> None:
+    """第 2 步：说话人精确匹配。
+
+    只在标题或具体别名与说话人完全一致时保留，不用 graph.search 的模糊结果
+    （避免把只共享单字的无关词条带进来）。
+    """
+    for name in _extract_speaker_names(task_texts):
         for entry in graph.search(name, limit=20):
             if entry.entry_id in excluded:
                 continue
@@ -2652,48 +2648,47 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
             )
             info["speaker"] += 1
 
-    # 3) 通用相关性过滤：必须有具体名字命中，或本人就是说话人。
-    combined_text = "\n".join(task_texts + [_entry_story_text(m) for m in map_entries])
-    filtered = []
-    for info in candidates.values():
-        entry = info["entry"]
-        title = (entry.title or "").strip()
-        if not _entry_story_text(entry):
-            # 没有剧情文本的词条不进入剧情证据（例如只有玩法模块的图鉴/成就）。
-            continue
-        speaker_hit = _entity_is_speaker(entry, speaker_names)
-        # 接待员/看守/店主/酒保这类工具型头衔，以及纳塔龙众、驮兽这类生物页码，
-        # 即使本人确实在任务里说话，也不进角色档案：它们没有立场与结局可评价。
-        if any(k in title for k in _ENTITY_GENERIC_TITLE_KEYWORDS):
-            continue
-        if any(k in title for k in _ENTITY_NONHUMAN_TITLE_KEYWORDS):
-            continue
-        if any(k in title for k in _ENTITY_EXCLUDE_TITLE_KEYWORDS):
-            continue
-        if title in _ENTITY_GENERIC_ALIASES:
-            continue
-        hits = _entity_specific_alias_hits(entry, combined_text)
-        if not speaker_hit and hits == 0:
-            # 圣遗物/武器/书籍即使正文里没有再次点名，只要被任务提及索引显式关联，
-            # 仍作为“造物/文献档案”保留；角色/NPC/组织不享受这条兜底。
-            if not (entry.entry_type in ("artifact", "weapon", "book") and info["known"] > 0):
-                continue
-        info["speaker"] = 1 if speaker_hit else 0
-        info["hits"] = hits
-        info["expand"] = 0
-        filtered.append(info)
 
-    # 4) 图谱一跳扩展：从任务/地图词条出发，补回与其显式链接的造物/文献/组织/地点。
-    #    只做一跳、只允许上面 _LORE_EXPAND_TYPES 的类型，避免噪声扩散。
-    #    共现闸门（2026-09 C4 事故）：图上的链接不等于情节相关性——任务页会链到
-    #    “同世界观的其他作品”（武器故事），聚所页会反链到它列出的全部任务（目录关系）。
-    #    只有标题/别名/【地名】在已选任务与地图正文里出现 ≥1 次的条目才允许进包。
-    existing_ids = {info["entry"].entry_id for info in filtered}
-    reference_text = "\n".join(task_texts)
-    if map_entries:
-        reference_text += "\n" + "\n".join(
-            _entry_story_text(e) or "" for e in map_entries
-        )
+def _entity_relevance(info, speaker_names, combined_text):
+    """第 3 步的准入判定：返回 (本人是否说话人, 具体别名命中次数)；None 表示不相关。
+
+    通用规则（与主题无关），命中任一即丢弃：
+    - 没有剧情文本（只有玩法模块的图鉴/成就）；
+    - 工具型头衔（接待员/看守/店主/酒保）与生物页码（纳塔龙众/驮兽）——没有立场与结局可评价；
+    - 【洞天】这类本体变体、泛称别名（妹妹/父亲/偶像）；
+    - 既不是说话人、又没有具体名字命中。例外：圣遗物/武器/书籍只要被任务提及索引
+      显式关联就保留（作为“造物/文献档案”），角色/NPC/组织不享受这条兜底。
+    """
+    entry = info["entry"]
+    title = (entry.title or "").strip()
+    if not _entry_story_text(entry):
+        return None
+    speaker_hit = _entity_is_speaker(entry, speaker_names)
+    if any(k in title for k in _ENTITY_GENERIC_TITLE_KEYWORDS):
+        return None
+    if any(k in title for k in _ENTITY_NONHUMAN_TITLE_KEYWORDS):
+        return None
+    if any(k in title for k in _ENTITY_EXCLUDE_TITLE_KEYWORDS):
+        return None
+    if title in _ENTITY_GENERIC_ALIASES:
+        return None
+    hits = _entity_specific_alias_hits(entry, combined_text)
+    if not speaker_hit and hits == 0:
+        if not (entry.entry_type in ("artifact", "weapon", "book") and info["known"] > 0):
+            return None
+    return speaker_hit, hits
+
+
+def _graph_expanded_entities(
+    graph, task_entries, map_entries, excluded, existing_ids, reference_text
+) -> list:
+    """第 4 步：图谱一跳扩展 + 共现闸门。
+
+    只做一跳、只允许 _LORE_EXPAND_TYPES 的类型，避免噪声扩散。
+    共现闸门（2026-09 C4 事故）：图上的链接不等于情节相关性——任务页会链到
+    “同世界观的其他作品”（武器故事），聚所页会反链到它列出的全部任务（目录关系）。
+    只有标题/别名/【地名】在已选任务与地图正文里出现 ≥1 次的条目才允许进包。
+    """
     expanded = []
     evaluated = set()
     for seed in list(task_entries) + list(map_entries):
@@ -2732,7 +2727,73 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
                 break
         if len(expanded) >= _LORE_EXPAND_MAX:
             break
-    filtered.extend(expanded)
+    return expanded
+
+
+def _collapse_same_base_titles(ordered: list) -> list:
+    """同名变体折叠：凯瑟琳【须弥/至冬/…】、玛薇卡【洞天】这类变体共享基础别名，
+    会一起排进前 30 并各占一个档案名额，只保留排序最靠前的那一条。"""
+    collapsed = []
+    seen_base = set()
+    for info in ordered:
+        title = (info["entry"].title or "").strip()
+        base = _ENTITY_TITLE_SUFFIX_RE.sub("", title) or title
+        if base in seen_base:
+            continue
+        seen_base.add(base)
+        collapsed.append(info)
+    return collapsed
+
+
+def _cap_entity_budget(ordered: list) -> list:
+    """按词条数上限与总字数预算截取最终实体列表（预算耗尽即停，不跳选）。"""
+    out = []
+    total_chars = 0
+    for info in ordered[:_PANORAMIC_ENTITY_MAX]:
+        entry = info["entry"]
+        text_len = min(len(_entry_story_text(entry)), _PANORAMIC_ENTITY_TEXT_CAP)
+        if total_chars + text_len > _PANORAMIC_EXTRA_CHARS and out:
+            break
+        out.append(entry)
+        total_chars += text_len
+    return out
+
+
+def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries):
+    """返回与全景题相关的角色/组织/圣遗物/地点档案词条。
+
+    相关性规则（通用、与主题无关）：
+    - 已知实体：来自实体提及索引，且必须在任务/地图正文里出现“具体标题/具体别名”；
+    - 说话人：只有词条标题或具体别名与说话人完全一致时才保留；
+    - 泛称别名（妹妹/父亲/偶像/接待员等）不构成相关性证据；
+    - 只允许角色/组织/造物/书籍等档案类型，任务词条和地图文本由各自通道处理。
+    """
+    excluded = {e.entry_id for e in task_entries} | {e.entry_id for e in map_entries}
+    candidates = _entity_candidates_from_mentions(graph, task_entries, excluded)
+    _add_speaker_candidates(graph, task_texts, excluded, candidates)
+
+    speaker_names = _extract_speaker_names(task_texts)
+    combined_text = "\n".join(task_texts + [_entry_story_text(m) for m in map_entries])
+    filtered = []
+    for info in candidates.values():
+        verdict = _entity_relevance(info, speaker_names, combined_text)
+        if verdict is None:
+            continue
+        speaker_hit, hits = verdict
+        info["speaker"] = 1 if speaker_hit else 0
+        info["hits"] = hits
+        info["expand"] = 0
+        filtered.append(info)
+
+    reference_text = "\n".join(task_texts)
+    if map_entries:
+        reference_text += "\n" + "\n".join(_entry_story_text(e) or "" for e in map_entries)
+    existing_ids = {info["entry"].entry_id for info in filtered}
+    filtered.extend(
+        _graph_expanded_entities(
+            graph, task_entries, map_entries, excluded, existing_ids, reference_text
+        )
+    )
 
     ordered = sorted(
         filtered,
@@ -2746,27 +2807,8 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
             x["entry"].title,
         ),
     )
-    # 同名变体折叠：凯瑟琳【须弥/至冬/…】、玛薇卡【洞天】这类变体共享基础别名，
-    # 会一起排进前 30 并各占一个档案名额，只保留排序最靠前的那一条。
-    collapsed = []
-    seen_base = set()
-    for info in ordered:
-        title = (info["entry"].title or "").strip()
-        base = _ENTITY_TITLE_SUFFIX_RE.sub("", title) or title
-        if base in seen_base:
-            continue
-        seen_base.add(base)
-        collapsed.append(info)
-    ordered = collapsed
-    out = []
-    total_chars = 0
-    for info in ordered[:_PANORAMIC_ENTITY_MAX]:
-        entry = info["entry"]
-        text_len = min(len(_entry_story_text(entry)), _PANORAMIC_ENTITY_TEXT_CAP)
-        if total_chars + text_len > _PANORAMIC_EXTRA_CHARS and out:
-            break
-        out.append(entry)
-        total_chars += text_len
+    ordered = _collapse_same_base_titles(ordered)
+    out = _cap_entity_budget(ordered)
     # 仅图谱关联（第 4 步进包、共现较弱）的条目：证据包内打弱标记，
     # 输出规约要求至多一句带过，L3 覆盖兜底也跳过它们，不强制出现在答案中。
     weak_ids = {info["entry"].entry_id for info in ordered[:len(out)] if info.get("weak")}
