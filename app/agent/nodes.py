@@ -2436,6 +2436,41 @@ def _maybe_auto_entity_entry(state, messages, routed_tools, iteration, response=
     }
 
 
+def _graph_map_hook_calls(messages, matched_tasks, pending_map, attempted) -> list:
+    """决定这一步要补读哪些词条。
+
+    任务全文还没拿到时先把任务词条本身补上，再补没读过的地图文本。
+    """
+    calls = []
+    if not _has_loaded_task_text(messages):
+        for task in matched_tasks:
+            if task.entry_id not in attempted:
+                calls.append((task.entry_id, task.title))
+    for entry in pending_map:
+        calls.append((entry.entry_id, entry.title))
+    return calls
+
+
+def _build_graph_map_tool_calls(original_query: str, calls: list, iteration: int) -> Tuple[list, str]:
+    """生成补读用的 tool_calls 与【执行报告】正文。"""
+    tool_calls = []
+    content_parts = [
+        "【执行报告】",
+        f"用户问题回显：{original_query}",
+        "用户意图：多任务剧情 + 对应地区地图文本的综合梳理",
+        "工具决策：系统检测到问题涉及多个任务与地图文本，确定性补全 wiki 链接图：",
+    ]
+    for i, (entry_id, title) in enumerate(calls, 1):
+        tool_calls.append({
+            "name": "wiki_graph_get",
+            "args": {"entry_id": entry_id},
+            "id": f"call_graph_map_{entry_id}_{iteration + 1}",
+            "type": "tool_call",
+        })
+        content_parts.append(f"{i}. 读取 {entry_id} {title}")
+    return tool_calls, "\n".join(content_parts)
+
+
 def _maybe_auto_graph_map_texts(state, messages, routed_tools, iteration, response=None):
     """多任务+地图文本问题的确定性地图补全；返回 None 表示无需介入。"""
     original_query = state.get("user_query", "") or state.get("rewritten_query", "")
@@ -2462,37 +2497,11 @@ def _maybe_auto_graph_map_texts(state, messages, routed_tools, iteration, respon
     attempted = _attempted_wiki_get_ids(messages)
     map_entries = _collect_graph_map_texts(graph, matched_tasks)
     pending_map = [e for e in map_entries if e.entry_id not in attempted]
-    task_text_loaded = _has_loaded_task_text(messages)
-
-    calls = []
-    if not task_text_loaded:
-        # 任务全文还没拿到，先把任务词条本身补上。
-        for task in matched_tasks:
-            if task.entry_id not in attempted:
-                calls.append((task.entry_id, task.title))
-    for entry in pending_map:
-        calls.append((entry.entry_id, entry.title))
-
+    calls = _graph_map_hook_calls(messages, matched_tasks, pending_map, attempted)
     if not calls:
         return None
 
-    tool_calls = []
-    content_parts = [
-        "【执行报告】",
-        f"用户问题回显：{original_query}",
-        "用户意图：多任务剧情 + 对应地区地图文本的综合梳理",
-        "工具决策：系统检测到问题涉及多个任务与地图文本，确定性补全 wiki 链接图：",
-    ]
-    for i, (entry_id, title) in enumerate(calls, 1):
-        tool_calls.append({
-            "name": "wiki_graph_get",
-            "args": {"entry_id": entry_id},
-            "id": f"call_graph_map_{entry_id}_{iteration + 1}",
-            "type": "tool_call",
-        })
-        content_parts.append(f"{i}. 读取 {entry_id} {title}")
-    content = "\n".join(content_parts)
-
+    tool_calls, content = _build_graph_map_tool_calls(original_query, calls, iteration)
     task_ids = [t.entry_id for t in matched_tasks]
     map_ids = [e.entry_id for e in pending_map]
     print(
