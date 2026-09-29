@@ -3497,6 +3497,64 @@ def _confirm_weak_evidence(state) -> None:
         m.content = f"未找到与「{question[:40]}」相关的内容（相关性确认未通过）。"
     print(f"  -> [相关性闸门] 裁判判否，已降级 {len(weak)} 条弱证据")
 
+def _count_recent_tool_failures(messages) -> int:
+    """最近一轮 AI 工具调用之后，连续「未找到」的条数（遇到成功即清零并停止）。"""
+    failures = 0
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+            break
+        if isinstance(msg, ToolMessage):
+            if _is_not_found(msg):
+                failures += 1
+            else:
+                failures = 0
+                break
+        if not isinstance(msg, ToolMessage) and not isinstance(msg, AIMessage):
+            break
+    return failures
+
+
+def _turn_window_stats(messages) -> Tuple[bool, int]:
+    """本轮（最近一条 HumanMessage 之后）的 (是否有成功返回, 相关性确认判否次数)。
+
+    只看本轮：多轮会话里历史轮次的成功不应永久关闭熔断（旧实现扫全会话，
+    一旦历史上有过成功，熔断此后再也不会触发）。
+    """
+    turn_start = 0
+    for idx, msg in enumerate(messages):
+        if isinstance(msg, HumanMessage):
+            turn_start = idx
+    has_any_success = False
+    for msg in messages[turn_start:]:
+        if isinstance(msg, ToolMessage):
+            text = str(getattr(msg, "content", "") or "")
+            if not _is_not_found(msg) and "系统拦截" not in text:
+                has_any_success = True
+                break
+    # 相关性确认判否的次数：连续两轮被判否时不再等 has_any_success（早退保护）
+    rejected = sum(1 for msg in messages[turn_start:]
+                   if isinstance(msg, ToolMessage)
+                   and "相关性确认未通过" in str(getattr(msg, "content", "") or ""))
+    return has_any_success, rejected
+
+
+def _trigger_tool_meltdown(messages, failures: int, rejected: int) -> None:
+    """注入熔断提示并清空最新 AIMessage 的 tool_calls，阻止继续执行工具。"""
+    if rejected >= 2:
+        print(f"  -> 相关性确认连续判否({rejected}次)，进入回答阶段")
+        hint = ('\n\n[系统提示] 连续 2 轮检索均未通过相关性确认（检索到的内容与问题无关），'
+                '已触发熔断。请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。')
+    else:
+        print(f"  -> 连续失败熔断({failures}次)，进入回答阶段")
+        hint = ('\n\n[系统提示] 连续 2 轮搜索均未找到结果，已触发连续失败熔断。'
+                '请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。')
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+            msg.tool_calls = []
+            msg.additional_kwargs = {}
+            msg.content = (msg.content or '') + hint
+            break
+
 
 def route_after_tools(state: GenshinAdvisorState) -> str:
     """工具执行后路由：L1 路径回 fast_agent，L2 路径回 plan_agent（含熔断逻辑）"""
@@ -3516,55 +3574,11 @@ def route_after_tools(state: GenshinAdvisorState) -> str:
     # 下面按既有「连续未找到」口径自然计数（阶段 2 才生效）
     _confirm_weak_evidence(state)
 
-    # 从后往前，找到最近一轮 AIMessage（含 tool_calls）之后的所有 ToolMessage
-    failures = 0
-    for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
-            break
-        if isinstance(msg, ToolMessage):
-            if _is_not_found(msg):
-                failures += 1
-            else:
-                failures = 0
-                break
-        if not isinstance(msg, ToolMessage) and not isinstance(msg, AIMessage):
-            break
-
-    # 只看本轮（最近一条 HumanMessage 之后）的工具返回：多轮会话里历史轮次的成功
-    # 不应永久关闭熔断（旧实现扫全会话，一旦历史上有成功，熔断此后再也不会触发）。
-    turn_start = 0
-    for idx, msg in enumerate(messages):
-        if isinstance(msg, HumanMessage):
-            turn_start = idx
-    has_any_success = False
-    for msg in messages[turn_start:]:
-        if isinstance(msg, ToolMessage):
-            text = str(getattr(msg, "content", "") or "")
-            if not _is_not_found(msg) and "系统拦截" not in text:
-                has_any_success = True
-                break
-
-    # 相关性确认判否的次数：连续两轮被判否时不再等 has_any_success（早退保护）
-    rejected = sum(1 for msg in messages[turn_start:]
-                   if isinstance(msg, ToolMessage)
-                   and "相关性确认未通过" in str(getattr(msg, "content", "") or ""))
+    failures = _count_recent_tool_failures(messages)
+    has_any_success, rejected = _turn_window_stats(messages)
 
     if (failures >= 2 and not has_any_success) or rejected >= 2:
-        if rejected >= 2:
-            print(f"  -> 相关性确认连续判否({rejected}次)，进入回答阶段")
-            hint = ('\n\n[系统提示] 连续 2 轮检索均未通过相关性确认（检索到的内容与问题无关），'
-                    '已触发熔断。请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。')
-        else:
-            print(f"  -> 连续失败熔断({failures}次)，进入回答阶段")
-            hint = ('\n\n[系统提示] 连续 2 轮搜索均未找到结果，已触发连续失败熔断。'
-                    '请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。')
-        # 修改最新 AIMessage 的 tool_calls 为空，阻止执行
-        for msg in reversed(messages):
-            if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
-                msg.tool_calls = []
-                msg.additional_kwargs = {}
-                msg.content = (msg.content or '') + hint
-                break
+        _trigger_tool_meltdown(messages, failures, rejected)
         return "answer_agent"
 
     return "plan_agent"
