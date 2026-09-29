@@ -99,7 +99,25 @@ def list_all_quest_series() -> str:
 
     _emit_progress("tool_start", {"tool": "list_all_quest_series", "message": "正在生成全角色任务目录..."})
 
-    # 按所属角色分组：角色名 → {系列任务: [子任务列表]}
+    char_map, standalone_series = _collect_quest_series_map()
+    lines = _build_quest_series_lines(char_map, standalone_series)
+
+    result = "\n".join(lines)
+    _quest_series_cache = result
+    _quest_series_cache_time = now
+
+    print("[工具] 全角色任务目录（已生成）")
+    return result
+
+
+def _collect_quest_series_map():
+    """扫描任务知识库，按所属角色聚合传说任务的系列结构。
+
+    返回 (char_map, standalone_series)：
+    - char_map: 角色名 → {系列任务: [子任务名列表]}
+    - standalone_series: 无所属角色的系列任务条目列表
+    只收录“传说任务”，活动剧情/其他类型不在此列出。
+    """
     char_map: dict = {}
     standalone_series = []  # 无所属角色的系列任务
 
@@ -134,7 +152,11 @@ def list_all_quest_series() -> str:
                     "type": task_type,
                     "tasks": [task_name],
                 })
+    return char_map, standalone_series
 
+
+def _build_quest_series_lines(char_map, standalone_series):
+    """把聚合结果渲染为全角色任务目录文本行。"""
     lines = []
     lines.append(f"===== 全角色任务目录 =====\n")
 
@@ -166,13 +188,7 @@ def list_all_quest_series() -> str:
 
     lines.append(f"共 {len(char_map)} 位角色，{sum(len(v) for v in char_map.values())} 章。")
     lines.append("如需查看任意角色的子任务详情，请使用 query_quest(角色名)。")
-
-    result = "\n".join(lines)
-    _quest_series_cache = result
-    _quest_series_cache_time = now
-
-    print("[工具] 全角色任务目录（已生成）")
-    return result
+    return lines
 
 
 # ====== 各类目录缓存（统一 TTL 24h） ======
