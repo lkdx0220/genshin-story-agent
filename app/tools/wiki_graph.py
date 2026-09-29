@@ -86,7 +86,7 @@ def wiki_graph_expand(entry_id: str) -> str:
     lines.append(f"[反向引用] {len(back)} 个（链接到本词条的）：")
     if not back:
         lines.append("  无")
-    for i, (source, link) in enumerate(back, 1):
+    for i, (source, _link) in enumerate(back, 1):
         lines.append(f"{i}. {source.title} (ID {source.entry_id}, {source.entry_type})")
     return "\n".join(lines)
 

@@ -439,7 +439,7 @@ def _homophone_aligned_score(name: str, candidate: str):
     if len(name) != len(candidate) or not name:
         return 0.0
     exact = 0
-    for a, b in zip(name, candidate):
+    for a, b in zip(name, candidate, strict=False):
         if a == b:
             exact += 1
             continue

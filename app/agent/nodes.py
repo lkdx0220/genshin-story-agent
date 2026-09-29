@@ -158,7 +158,7 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
         t_batch = time.perf_counter()
         batch_results = _judge_alias_sandbox_batch(batch_candidates)
         batch_duration_ms = (time.perf_counter() - t_batch) * 1000
-        for (alias, canonical, context, pos, span), accepted in zip(compound_candidates, batch_results):
+        for (alias, canonical, context, pos, span), accepted in zip(compound_candidates, batch_results, strict=False):
             if not accepted:
                 print(f"  [AI判定] '{alias}' 在上下文中不是角色别名，保留原样 (上下文: \"{context}\")")
                 continue
@@ -313,8 +313,7 @@ def _extract_mechanism_terms(messages) -> List[str]:
 
 _MECHANISM_CONTEXT_WINDOW = 300
 _MECHANISM_FOCUS_STOPWORDS = {
-    "为什么", "为何", "原因", "机制", "原理", "怎么", "如何", "什么", "为何",
-    "是谁", "谁", "哪些", "哪个", "多少", "几点", "哪里",
+    "为什么", "为何", "原因", "机制", "原理", "怎么", "如何", "什么", "是谁", "谁", "哪些", "哪个", "多少", "几点", "哪里",
     "的", "了", "是", "在", "有", "和", "与", "把", "被", "让", "使",
     "会", "能", "可", "要", "还", "就", "都", "也", "不", "没", "很",
     "之后", "以后", "因为", "所以", "如果", "但是", "而是", "不是",
@@ -2020,7 +2019,7 @@ def _keyword_series_tasks(graph, keywords, matched, matched_ids):
     """
     aux = _graph_aux(graph)
     stories = {}
-    for name, ids in aux["names"].items():
+    for _name, ids in aux["names"].items():
         if len(ids) < 2:
             continue
         core = False

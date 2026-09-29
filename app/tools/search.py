@@ -313,7 +313,7 @@ def search_all(query: str) -> str:
 
     print(f"[工具] 全局搜索: {query} -> {len(all_results)}条结果")
     lines = [f"\n===== 搜索「{query}」({len(all_results)}条结果) ====="]
-    for cat, text in all_results:
+    for _cat, text in all_results:
         lines.append(text)
     return "\n".join(lines)
 
