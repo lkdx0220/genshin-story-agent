@@ -22,6 +22,30 @@ from app.retrieval import SimpleBM25, _rerank
 
 _PAGE_CHARS = 13000  # 每页正文预算：13000 字以内整本一次给全（104/105 本书走这条路），超长书才分页
 _VOLUME_RE = re.compile(r"【卷(\d+)内容】\s*([^\n]{0,24})")
+# 卷号请求与卷数解析（支持「第五卷」/「卷5」），用于卷号守卫。
+_CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+_VOLUME_REQUEST_RE = re.compile(r"(?:第)?([0-9一二三四五六七八九十]+)\s*卷")
+
+
+def _volume_number(text: str):
+    """取文本里的第一个卷号，取不到返回 None。"""
+    match = _VOLUME_REQUEST_RE.search(text or "")
+    if not match:
+        return None
+    raw = match.group(1)
+    if raw.isdigit():
+        return int(raw)
+    if len(raw) == 1:
+        return _CN_NUM.get(raw)
+    return None
+
+
+def _volume_total(text: str, meta: dict) -> int:
+    """书内卷标记的最大卷号（优先），否则取元数据「共N卷」。"""
+    numbers = [int(num) for num, _ in _VOLUME_RE.findall(text or "")]
+    if numbers:
+        return max(numbers)
+    return _volume_number(str((meta or {}).get("卷数") or "")) or 0
 
 
 def _book_pages(text: str) -> list:
@@ -72,7 +96,7 @@ def load_book_content(book_name: str, query: str = "", part: int = 1) -> str:
     """加载指定书籍的完整文本。
     book_name: 书籍名称。
     query: 可选，传入后按关键词定位返回上下文片段（最多3个，各500字）。
-    part: 可选，页码（默认1）。正文超过 3000 字会自动分页（按卷打包），返回内容尾部会给出下一页码与对应的卷，长书需逐页读完。"""
+    part: 可选，页码（默认1）。正文超过 13000 字会自动分页（按卷打包），返回内容尾部会给出下一页码与对应的卷，长书需逐页读完。"""
     content_file = os.path.join(CONTENT_DIR, "books.json")
     try:
         with open(content_file, "r", encoding="utf-8") as f:
@@ -97,6 +121,48 @@ def load_book_content(book_name: str, query: str = "", part: int = 1) -> str:
     except (TypeError, ValueError):
         page_no = 1
     page_label, page_body = pages[page_no - 1]
+    # 元数据放返回头部：卷数这类信息若沉在万字正文之后，模型很可能看不到。
+    # （HX1 事故：问「第五卷」时把卷一正文当成第五卷回答，而元数据明写「共四卷」。）
+    meta = best.get("metadata", {})
+    meta_parts = []
+    if meta.get("体裁"):
+        meta_parts.append(f"体裁: {meta['体裁']}")
+    if meta.get("卷数"):
+        meta_parts.append(f"卷数: {meta['卷数']}")
+    if meta.get("实装版本"):
+        meta_parts.append(f"版本: {meta['实装版本']}")
+    if meta.get("作者"):
+        meta_parts.append(f"作者: {meta['作者']}")
+    else:
+        meta_parts.append("作者: 游戏内未提及")
+    meta_line = f"[书籍信息] {', '.join(meta_parts)}"
+    page_line = f"\n[本页: 第 {page_no}/{len(pages)} 页 = {page_label}]" if len(pages) > 1 else ""
+
+    # 卷号守卫：书名点名了「第N卷」而书里没有这一卷时，直接说清并给出卷目。
+    # （HX1 事故：问「极星舞剧集·第五卷」，模型把加载到的卷一内容当成第五卷讲；
+    #  元数据放到返回头部也不够，必须在工具层拦掉。）
+    requested_volume = _volume_number(book_name)
+    if requested_volume:
+        total_volumes = _volume_total(text, meta)
+        if total_volumes and requested_volume > total_volumes:
+            catalog = "、".join(
+                f"卷{num} {title.strip()}".strip() for num, title in _VOLUME_RE.findall(text)
+            )
+            return (
+                f"\n【{best['title']}】{meta_line}\n"
+                f"[卷号校验] 本书共 {total_volumes} 卷，不存在「第{requested_volume}卷」。"
+                + (f"现有卷目：{catalog}。" if catalog else "")
+                + "\n请按上述卷目提问；不指定卷号可直接读取全书。"
+            )
+        if total_volumes:
+            for index, (label, _body) in enumerate(pages, 1):
+                if f"卷{requested_volume}" in label:
+                    page_no = index
+                    page_label, page_body = pages[index - 1]
+                    page_line = (
+                        f"\n[本页: 第 {page_no}/{len(pages)} 页 = {page_label}]" if len(pages) > 1 else ""
+                    )
+                    break
 
     if query and query.strip():
         # 关键词定位：找到 query 在书中的位置，返回上下文片段
@@ -119,30 +185,17 @@ def load_book_content(book_name: str, query: str = "", part: int = 1) -> str:
                 break
         if snippets:
             print(f"  [关键词定位] \"{query}\" -> {len(snippets)} 个片段")
-            result = f"\n【{best['title']}】（共{len(text)}字）\n[关键词定位: \"{query}\", {len(snippets)}个片段]\n"
+            result = (f"\n【{best['title']}】（共{len(text)}字）{meta_line}\n"
+                      f"[关键词定位: \"{query}\", {len(snippets)}个片段]\n")
             result += "\n---\n".join(snippets)
             return result
         else:
-            return (f"\n【{best['title']}】\n[关键词\"{query}\"未在书中找到，返回第 {page_no} 页 = {page_label}]\n"
+            return (f"\n【{best['title']}】{meta_line}{page_line}\n"
+                    f"[关键词\"{query}\"未在书中找到，返回第 {page_no} 页 = {page_label}]\n"
                     f"{page_body}{_page_hint(best['title'], pages, page_no, len(text))}")
 
-    # 附加元数据摘要
-    meta = best.get("metadata", {})
-    meta_parts = []
-    if meta.get("体裁"):
-        meta_parts.append(f"体裁: {meta['体裁']}")
-    if meta.get("卷数"):
-        meta_parts.append(f"卷数: {meta['卷数']}")
-    if meta.get("实装版本"):
-        meta_parts.append(f"版本: {meta['实装版本']}")
-    if meta.get("作者"):
-        meta_parts.append(f"作者: {meta['作者']}")
-    else:
-        meta_parts.append("作者: 游戏内未提及")
-    meta_line = f"\n[书籍信息] {', '.join(meta_parts)}" if meta_parts else ""
-
-    return (f"\n【{best['title']}】\n{page_body}"
-            f"{_page_hint(best['title'], pages, page_no, len(text))}{meta_line}")
+    return (f"\n【{best['title']}】{meta_line}{page_line}\n{page_body}"
+            f"{_page_hint(best['title'], pages, page_no, len(text))}")
 
 
 @tool
