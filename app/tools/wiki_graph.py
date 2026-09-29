@@ -5,7 +5,6 @@
 设计：Agent 先 search 找到词条，再 expand 顺链接找相邻词条，最后 get 取定向片段。
 不返回整篇 3 万字全文，避免撑爆 Plan 上下文；get 支持 focus 参数定位原文。
 """
-import re
 from typing import List, Optional
 
 from langchain_core.tools import tool

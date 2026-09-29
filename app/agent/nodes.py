@@ -46,7 +46,7 @@ from app.data import (
     角色知识库, 地区知识库, 任务知识库, 武器知识库, 圣遗物知识库, 素材知识库,
     _npcs_data, _normalize_for_match, _load_content_json,
 )
-from character_aliases import ALIAS_MAP, ALIASES_SORTED, resolve_aliases
+from character_aliases import ALIAS_MAP, ALIASES_SORTED
 from intent_router import route_intent, get_tools_for_intent, get_pseudo_legendary_note
 from wiki_entry_graph import WikiEntryGraph, DEFAULT_OUTPUT as WIKI_GRAPH_OUTPUT
 
@@ -2955,7 +2955,6 @@ def _maybe_auto_task_recovery(state, messages, routed_tools, iteration):
         return None
 
     latest_name = _tool_name_of(latest, name_by_call_id)
-    latest_content = latest.content if hasattr(latest, "content") else str(latest)
 
     # 阶段1：任务查询未命中 → 强制先 search_all 全局检索
     if latest_name in ("query_quest", "load_quest_content") and _is_not_found(latest):
@@ -3365,7 +3364,6 @@ def route_after_tools(state: GenshinAdvisorState) -> str:
 
     # L2 路径：原有的熔断和循环逻辑
     messages = state.get("messages", [])
-    iteration = state.get("iteration", 0) or 0
 
     # 已产生最终回答（含中断消息），直接路由到 answer_agent
     if state.get("final_response"):

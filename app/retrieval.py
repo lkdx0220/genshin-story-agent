@@ -20,12 +20,12 @@ from langchain_core.tools import tool
 
 from app.config import CONTENT_DIR, QWEN_API_KEY, QWEN_FALLBACK_API_KEY
 from app.data import (
-    _match_all_in, _load_content_json, _normalize_for_match,
+    _match_all_in, _load_content_json,
 )
 from app.llm import alias_judge_llm
 
 # 字符别名表（外部独立模块）
-from character_aliases import CHARACTER_ALIASES, resolve_aliases, ALIAS_MAP, ALIASES_SORTED
+from character_aliases import CHARACTER_ALIASES, ALIAS_MAP
 
 
 # ====== 查询消毒与别名检测 ======
