@@ -401,6 +401,44 @@ def _mechanism_judge_relevant(term: str, user_query: str, windows: List[str]) ->
         return False
     return False
 
+def _mechanism_exclude_names(alias_pairs, user_query: str) -> set:
+    """不参与「共现=相关」预筛的名字集合。
+
+    别名标注里的实体名 + 问题里直接出现的角色名：否则主实体在证据里出现一次，
+    就会让无关机制名通过预筛（H3 问纳西妲年龄，"童话"被误注入）。
+    """
+    exclude = set()
+    for pair in (alias_pairs or []):
+        if isinstance(pair, (list, tuple)):
+            for item in pair:
+                if isinstance(item, str):
+                    exclude.add(item)
+    for entry in 角色知识库:
+        if not isinstance(entry, dict):
+            continue
+        for key in ("角色名称", "名称", "title"):
+            name = entry.get(key)
+            if isinstance(name, str) and len(name) >= 2 and name in (user_query or ""):
+                exclude.add(name)
+    return exclude
+
+
+def _mechanism_term_kept(term: str, user_query: str, messages, focus_terms) -> bool:
+    """单个机制名是否保留：问题里直现 → 共现预筛 → 小模型裁判兜底。"""
+    if term in (user_query or ""):
+        return True
+    windows = _mechanism_context_windows(messages, term)
+    # 预筛：机制名上下文和问题关注词有共现，说明大概率相关。
+    prescreen_hit = any(
+        ft in window
+        for ft in focus_terms
+        for window in windows
+    )
+    if prescreen_hit:
+        return True
+    # 预筛没把握时交给小模型裁判；小模型只输出是/否。
+    return _mechanism_judge_relevant(term, user_query, windows)
+
 
 def _filter_mechanism_terms(messages, terms: List[str], user_query: str, alias_pairs=None) -> List[str]:
     """机制名相关性过滤：先正则/共现预筛，再交给小模型兜底。
@@ -410,43 +448,9 @@ def _filter_mechanism_terms(messages, terms: List[str], user_query: str, alias_p
     """
     if not terms:
         return []
-    # 别名标注里的实体名不参与“共现=相关”预筛，防止主实体出现在证据里
-    # 就误判相关。
-    exclude = set()
-    for pair in (alias_pairs or []):
-        if isinstance(pair, (list, tuple)):
-            for item in pair:
-                if isinstance(item, str):
-                    exclude.add(item)
-    # 问题里直接出现的角色名同样排除；否则“纳西妲”在证据里出现一次
-    # 就会让无关机制名通过预筛。
-    for entry in 角色知识库:
-        if not isinstance(entry, dict):
-            continue
-        for key in ("角色名称", "名称", "title"):
-            name = entry.get(key)
-            if isinstance(name, str) and len(name) >= 2 and name in (user_query or ""):
-                exclude.add(name)
+    exclude = _mechanism_exclude_names(alias_pairs, user_query)
     focus_terms = _extract_query_focus_terms(user_query, exclude)
-    kept: List[str] = []
-    for term in terms:
-        if term in (user_query or ""):
-            kept.append(term)
-            continue
-        windows = _mechanism_context_windows(messages, term)
-        # 预筛：机制名上下文和问题关注词有共现，说明大概率相关。
-        prescreen_hit = any(
-            ft in window
-            for ft in focus_terms
-            for window in windows
-        )
-        if prescreen_hit:
-            kept.append(term)
-            continue
-        # 预筛没把握时交给小模型裁判；小模型只输出是/否。
-        if _mechanism_judge_relevant(term, user_query, windows):
-            kept.append(term)
-    return kept
+    return [term for term in terms if _mechanism_term_kept(term, user_query, messages, focus_terms)]
 
 
 def assess_query(state: GenshinAdvisorState) -> Dict[str, Any]:
@@ -1373,6 +1377,36 @@ def _resolve_known_entity_type(subject: str) -> str:
         return "item"
     return ""
 
+# 概念问法的触发/排除关键词与抽取模式（模块级常量，避免每次调用重复构造）
+_CONCEPT_MARKERS = ("是什么", "什么是", "何为", "本质", "定义")
+_CONCEPT_EXCLUSIONS = (
+    "是谁", "指谁", "哪个角色", "哪一位",
+    "包含几幕", "有哪些子任务", "有几幕", "第几幕", "章节", "任务", "之章",
+)
+_CONCEPT_QUOTE_PATTERNS = (
+    r"[「『]([^」』]{2,16})[」』]",
+    r"[“\"]([^”\"]{2,16})[”\"]",
+)
+_CONCEPT_SUBJECT_PATTERNS = (
+    r"什么是(.{2,16}?)[？?，,。！!]?$",
+    r"何为(.{2,16}?)[？?，,。！!]?$",
+    r"(.{2,16}?)的(?:本质|定义)(?:是|为)?(?:什么)?[？?。]?$",
+    r"(.{2,16}?)(?:本质上|本质)?(?:是|为)?什么[？?。]?$",
+)
+
+
+def _concept_subject_candidate(query: str) -> str:
+    """抽取概念主语：优先取书名号/引号内的实体，否则按概念句式提取；无则空串。"""
+    for pattern in _CONCEPT_QUOTE_PATTERNS:
+        match = re.search(pattern, query)
+        if match:
+            return match.group(1)
+    for pattern in _CONCEPT_SUBJECT_PATTERNS:
+        match = re.search(pattern, query)
+        if match:
+            return match.group(1)
+    return ""
+
 
 def _detect_concept_subject(original_query: str, intent_labels) -> str:
     """判断问题是否为"抽象概念 XX 是什么/本质/定义"，返回概念主语；不满足返回空字符串。
@@ -1386,42 +1420,12 @@ def _detect_concept_subject(original_query: str, intent_labels) -> str:
     if not query:
         return ""
 
-    concept_markers = ("是什么", "什么是", "何为", "本质", "定义")
-    if not any(marker in query for marker in concept_markers):
+    if not any(marker in query for marker in _CONCEPT_MARKERS):
         return ""
-    exclusion_markers = (
-        "是谁", "指谁", "哪个角色", "哪一位",
-        "包含几幕", "有哪些子任务", "有几幕", "第几幕", "章节", "任务", "之章",
-    )
-    if any(marker in query for marker in exclusion_markers):
+    if any(marker in query for marker in _CONCEPT_EXCLUSIONS):
         return ""
 
-    # 优先取书名号/引号内的实体
-    candidate = ""
-    for pattern in (
-        r"[「『]([^」』]{2,16})[」』]",
-        r"[“\"]([^”\"]{2,16})[”\"]",
-    ):
-        match = re.search(pattern, query)
-        if match:
-            candidate = match.group(1)
-            break
-
-    # 无引号则按概念句式提取主语
-    if not candidate:
-        patterns = (
-            r"什么是(.{2,16}?)[？?，,。！!]?$",
-            r"何为(.{2,16}?)[？?，,。！!]?$",
-            r"(.{2,16}?)的(?:本质|定义)(?:是|为)?(?:什么)?[？?。]?$",
-            r"(.{2,16}?)(?:本质上|本质)?(?:是|为)?什么[？?。]?$",
-        )
-        for pattern in patterns:
-            match = re.search(pattern, query)
-            if match:
-                candidate = match.group(1)
-                break
-
-    candidate = _normalize_for_match(candidate.strip())
+    candidate = _normalize_for_match(_concept_subject_candidate(query).strip())
     candidate = candidate.rstrip("的")
     if not candidate or len(candidate) < 2 or len(candidate) > 16:
         return ""
