@@ -12,36 +12,50 @@ from langchain_core.tools import tool
 from app.config import CONTENT_DIR
 from app.data import (
     角色知识库, 地区知识库, 主线剧情知识库, 武器知识库, 任务知识库,
-    圣遗物知识库, _npcs_data, _match_all_in, _load_content_json, _normalize_for_match,
+    圣遗物知识库, _npcs_data, _match_all_in, _load_content_json,
 )
 from app.formatters import (
     _format_role_info, _format_region_info, _format_story_info,
 )
 from app.retrieval import _expand_query_with_aliases, _rerank
 
+def _quest_files(sorted_by_activity: bool = False) -> list:
+    """任务类原始文件列表。
 
-@tool
-def search_activity(keyword: str, activity_name: str = "") -> str:
-    """搜索活动剧情中的对话内容。当用户提到具体活动名（如\"风花的呼吸\"、\"海灯节\"）时，优先用此工具代替 search_all。
-    keyword: 要在活动剧情中搜索的关键词（如角色名、概念、台词片段）
-    activity_name: 活动名称（可选）。提供后只搜索该活动相关页面；不提供则搜索所有活动类内容。"""
+    sorted_by_activity=True 时把活动文件排前面（search_activity 原文口径）；
+    默认保持 os.listdir 原始顺序（find_first_mention 依赖此顺序的最后排序稳定性）。
+    """
+    files = [f for f in os.listdir(CONTENT_DIR) if f.startswith("quests_") and f.endswith(".json")]
+    if sorted_by_activity:
+        files.sort(key=lambda f: (0 if "活动" in f else 1, f))
+    return files
+
+
+def _load_quest_list(filename: str) -> list:
+    """读单个 quests_*.json，失败或非列表返回空列表。"""
+    try:
+        with open(os.path.join(CONTENT_DIR, filename), "r", encoding="utf-8") as f:
+            quests = json.load(f)
+    except Exception:
+        return []
+    return quests if isinstance(quests, list) else []
+
+
+def _activity_snippet(text: str, matched_term: str) -> str:
+    """用匹配到的词定位片段（前 80、后 120 字）。"""
+    first_kw = matched_term.split()[0]
+    idx = text.find(first_kw)
+    start = max(0, idx - 80)
+    end = min(len(text), idx + len(matched_term) + 120)
+    return text[start:end].replace('\n', ' ').strip()
+
+
+def _activity_matches(keyword: str, activity_name: str) -> list:
+    """扫活动/任务文件，返回 [{title, category, snippet}]。"""
     results = []
-    # 收集所有 quests 文件
-    quest_files = [f for f in os.listdir(CONTENT_DIR) if f.startswith("quests_") and f.endswith(".json")]
-    # 活动文件优先排在前面
-    quest_files.sort(key=lambda f: (0 if "活动" in f else 1, f))
-
     search_terms = _expand_query_with_aliases(keyword)
-
-    for filename in quest_files:
-        try:
-            with open(os.path.join(CONTENT_DIR, filename), "r", encoding="utf-8") as f:
-                quests = json.load(f)
-        except Exception:
-            continue
-        if not isinstance(quests, list):
-            continue
-
+    for filename in _quest_files(sorted_by_activity=True):
+        quests = _load_quest_list(filename)
         for q in quests:
             text = q.get("text", "")
             # 用所有搜索词（含别名）尝试匹配
@@ -63,17 +77,42 @@ def search_activity(keyword: str, activity_name: str = "") -> str:
                 if activity_name not in title and activity_name not in meta_text and activity_name not in category:
                     continue
 
-            # 用匹配到的词定位片段
-            first_kw = matched_term.split()[0]
-            idx = text.find(first_kw)
-            start = max(0, idx - 80)
-            end = min(len(text), idx + len(matched_term) + 120)
-            snippet = text[start:end].replace('\n', ' ').strip()
             results.append({
                 "title": q["title"],
                 "category": q.get("category", ""),
-                "snippet": snippet,
+                "snippet": _activity_snippet(text, matched_term),
             })
+    return results
+
+
+def _rerank_or_all(keyword: str, docs: list, results: list, top_n: int = 10) -> list:
+    """Reranker 重排：rerank 不可用（None）取前 top_n，返回空则结果为空。"""
+    reranked = _rerank(keyword, docs, top_n=top_n)
+    if reranked is None:
+        return results[:top_n]
+    if reranked:
+        return [results[i] for i in reranked]
+    return []
+
+
+def _render_activity_results(keyword: str, activity_name: str, total: int, ordered: list) -> str:
+    """渲染活动搜索结果。"""
+    lines = [
+        f"\n===== 活动剧情搜索「{keyword}」"
+        + (f"（{activity_name}）" if activity_name else "")
+        + f" ({total}条候选，取前{len(ordered)}条) ====="
+    ]
+    for r in ordered:
+        lines.append(f"\n【{r['title']}】（{r['category']}）\n  片段: ...{r['snippet']}...")
+    return "\n".join(lines)
+
+
+@tool
+def search_activity(keyword: str, activity_name: str = "") -> str:
+    """搜索活动剧情中的对话内容。当用户提到具体活动名（如\"风花的呼吸\"、\"海灯节\"）时，优先用此工具代替 search_all。
+    keyword: 要在活动剧情中搜索的关键词（如角色名、概念、台词片段）
+    activity_name: 活动名称（可选）。提供后只搜索该活动相关页面；不提供则搜索所有活动类内容。"""
+    results = _activity_matches(keyword, activity_name)
 
     if not results:
         hint = f"（限定活动「{activity_name}」）" if activity_name else ""
@@ -83,18 +122,76 @@ def search_activity(keyword: str, activity_name: str = "") -> str:
 
     # Reranker 重排序
     rerank_docs = [f"【{r['title']}】{r['snippet']}" for r in results]
-    reranked = _rerank(keyword, rerank_docs, top_n=10)
-    if reranked is None:
-        ordered = results[:10]
-    elif reranked:
-        ordered = [results[i] for i in reranked]
-    else:
-        ordered = []
+    ordered = _rerank_or_all(keyword, rerank_docs, results, top_n=10)
+    return _render_activity_results(keyword, activity_name, len(results), ordered)
 
-    lines = [f"\n===== 活动剧情搜索「{keyword}」" + (f"（{activity_name}）" if activity_name else "") + f" ({len(results)}条候选，取前{len(ordered)}条) ====="]
-    for r in ordered:
-        lines.append(f"\n【{r['title']}】（{r['category']}）\n  片段: ...{r['snippet']}...")
-    return "\n".join(lines)
+
+def _mention_version(metadata: dict) -> tuple:
+    """(排序用版本号, 原始版本字符串)；解析失败记 999.0。"""
+    version_str = metadata.get("所属版本", "")
+    try:
+        version = float(version_str) if version_str else 999.0
+    except ValueError:
+        version = 999.0
+    return version, version_str
+
+
+def _mention_scan(keyword: str, type_priority: dict) -> list:
+    """扫全部任务文件（保持 os.listdir 顺序），收集所有提及，供后续按版本排序。"""
+    all_matches = []
+    for filename in _quest_files():
+        if filename == "quests_processed.json":
+            continue
+        for q in _load_quest_list(filename):
+            text = q.get("text", "")
+            if not _match_all_in(keyword, text):
+                continue
+            category = q.get("category", "")
+            metadata = q.get("metadata", {})
+            version, version_str = _mention_version(metadata)
+            # 多词时用第一个词定位
+            first_kw = keyword.split()[0]
+            idx = text.find(first_kw)
+            start = max(0, idx - 100)
+            end = min(len(text), idx + len(keyword) + 100)
+            snippet = text[start:end].replace('\n', ' ').strip()
+            speaker_match = re.search(r'\*「?([^」\n：]{1,10})」?：', text[max(0, idx-200):idx+50])
+            all_matches.append({
+                "title": q["title"], "category": category,
+                "version": version, "version_str": version_str,
+                "priority": type_priority.get(category, 99),
+                "speaker": speaker_match.group(1) if speaker_match else "未知",
+                "snippet": snippet,
+                "chapter_name": metadata.get("chapter_name", ""),
+                "act_name": metadata.get("act_name", ""),
+            })
+    return all_matches
+
+
+def _render_first_mention(first: dict, total: int, others: list) -> str:
+    """渲染首次提及（章/幕层级 + 说话角色 + 其他提及位置）。"""
+    result = "\n【首次提及位置】\n"
+    # 构建层级信息（章/幕）
+    hierarchy_parts = []
+    if first.get("chapter_name") and first["chapter_name"] != "开场动画":
+        hierarchy_parts.append(first["chapter_name"])
+    if first.get("act_name"):
+        hierarchy_parts.append(first["act_name"])
+    if first.get("chapter_name") == "开场动画":
+        hierarchy_parts.append("开场动画")
+    hierarchy_str = "，".join(hierarchy_parts) + "，" if hierarchy_parts else ""
+    if first['version_str']:
+        result += f"任务: {first['title']}（{first['category']}，{hierarchy_str}版本 {first['version_str']}）\n"
+    else:
+        result += f"任务: {first['title']}（{first['category']}）\n"
+    result += f"说话角色: {first['speaker']}\n"
+    result += f"原文片段: 「...{first['snippet']}...」\n"
+    if total > 1:
+        result += f"\n其他提及位置（共{total}处）:\n"
+        for m in others:
+            v = f"（版本 {m['version_str']}）" if m['version_str'] else ""
+            result += f"  - {m['title']}（{m['category']}）{v}\n"
+    return result
 
 
 @tool
@@ -105,101 +202,70 @@ def find_first_mention(keyword: str) -> str:
     """
     print(f"[工具] 查找首次提及: {keyword}")
     type_priority = {"魔神任务": 1, "传说任务": 2, "世界任务": 3, "部族纪闻": 4, "邀约事件": 5}
-    all_matches = []
-    for filename in os.listdir(CONTENT_DIR):
-        if not filename.startswith("quests_") or not filename.endswith(".json"):
-            continue
-        if filename == "quests_processed.json":
-            continue
-        try:
-            with open(os.path.join(CONTENT_DIR, filename), "r", encoding="utf-8") as f:
-                quests = json.load(f)
-        except Exception:
-            continue
-        if not isinstance(quests, list):
-            continue
-        for q in quests:
-            text = q.get("text", "")
-            if not _match_all_in(keyword, text):
-                continue
-            category = q.get("category", "")
-            priority = type_priority.get(category, 99)
-            metadata = q.get("metadata", {})
-            version_str = metadata.get("所属版本", "")
-            try:
-                version = float(version_str) if version_str else 999.0
-            except ValueError:
-                version = 999.0
-            chapter_name = metadata.get("chapter_name", "")
-            act_name = metadata.get("act_name", "")
-            # 多词时用第一个词定位
-            first_kw = keyword.split()[0]
-            idx = text.find(first_kw)
-            start = max(0, idx - 100)
-            end = min(len(text), idx + len(keyword) + 100)
-            snippet = text[start:end].replace('\n', ' ').strip()
-            speaker_match = re.search(r'\*「?([^」\n：]{1,10})」?：', text[max(0, idx-200):idx+50])
-            speaker = speaker_match.group(1) if speaker_match else "未知"
-            all_matches.append({
-                "title": q["title"], "category": category,
-                "version": version, "version_str": version_str,
-                "priority": priority, "speaker": speaker, "snippet": snippet,
-                "chapter_name": chapter_name, "act_name": act_name,
-            })
+    all_matches = _mention_scan(keyword, type_priority)
     if not all_matches:
         return f"未在任务剧情中找到「{keyword}」的提及。"
     all_matches.sort(key=lambda x: (x["version"], x["priority"]))
     first = all_matches[0]
-    result = f"\n【首次提及位置】\n"
-    # 构建层级信息（章/幕）
-    hierarchy_parts = []
-    if first.get("chapter_name") and first["chapter_name"] != "开场动画":
-        hierarchy_parts.append(first["chapter_name"])
-    if first.get("act_name"):
-        hierarchy_parts.append(first["act_name"])
-    if first.get("chapter_name") == "开场动画":
-        hierarchy_parts.append("开场动画")
-    hierarchy_str = "，".join(hierarchy_parts) + "，" if hierarchy_parts else ""
-    result += f"任务: {first['title']}（{first['category']}，{hierarchy_str}版本 {first['version_str']}）\n" if first['version_str'] else f"任务: {first['title']}（{first['category']}）\n"
-    result += f"说话角色: {first['speaker']}\n"
-    result += f"原文片段: 「...{first['snippet']}...」\n"
-    if len(all_matches) > 1:
-        result += f"\n其他提及位置（共{len(all_matches)}处）:\n"
-        for m in all_matches[1:6]:
-            v = f"（版本 {m['version_str']}）" if m['version_str'] else ""
-            result += f"  - {m['title']}（{m['category']}）{v}\n"
-    return result
+    return _render_first_mention(first, len(all_matches), all_matches[1:6])
 
 
 # ====== 全局检索工具（任务未命中后的确定性兜底）======
 # search_all 已注册为正式工具：当 query_quest/load_quest_content 未命中任务名时，
 # 代码层会先强制调用它做全局检索；search_lore 仍保留为内部辅助函数。
 
-@tool
-def search_all(query: str) -> str:
-    """全局搜索原神知识库，在角色、地区、剧情、武器、任务、概念、怪物、材料、书籍、食谱、食物、采集物、任务内容中模糊匹配。query: 搜索关键词"""
-    all_results = []
-    # 角色
+def _search_roles(query: str) -> list:
+    """角色知识库：角色名称/称号/身份任一命中，输出 ("角色", 文本)。"""
+    results = []
     for role in 角色知识库:
-        if _match_all_in(query, role.get("角色名称", "")) or _match_all_in(query, role.get("称号", "")) or _match_all_in(query, str(role.get("身份", []))):
-            all_results.append(("角色", _format_role_info(role)))
-    # 地区
+        if (_match_all_in(query, role.get("角色名称", ""))
+                or _match_all_in(query, role.get("称号", ""))
+                or _match_all_in(query, str(role.get("身份", [])))):
+            results.append(("角色", _format_role_info(role)))
+    return results
+
+
+def _search_regions(query: str) -> list:
+    """地区知识库：地区名称/神明任一命中。"""
+    results = []
     for region in 地区知识库:
         if _match_all_in(query, region.get("地区名称", "")) or _match_all_in(query, region.get("神明", "")):
-            all_results.append(("地区", _format_region_info(region)))
-    # 主线剧情
+            results.append(("地区", _format_region_info(region)))
+    return results
+
+
+def _search_story_arcs(query: str) -> list:
+    """主线剧情知识库：章节名称/章节编号/所属地区任一命中。"""
+    results = []
     for arc in 主线剧情知识库:
-        if _match_all_in(query, arc.get("章节名称", "")) or _match_all_in(query, arc.get("章节编号", "")) or _match_all_in(query, arc.get("所属地区", "")):
-            all_results.append(("剧情", _format_story_info(arc)))
-    # 武器
+        if (_match_all_in(query, arc.get("章节名称", ""))
+                or _match_all_in(query, arc.get("章节编号", ""))
+                or _match_all_in(query, arc.get("所属地区", ""))):
+            results.append(("剧情", _format_story_info(arc)))
+    return results
+
+
+def _search_weapons(query: str) -> list:
+    """武器知识库：武器名称/关联角色任一命中。"""
+    results = []
     for wpn in 武器知识库:
         if _match_all_in(query, wpn.get("武器名称", "")) or _match_all_in(query, wpn.get("关联角色", "")):
-            all_results.append(("武器", f"\n【{wpn['武器名称']}】{'★'*wpn['稀有度']} {wpn.get('武器类型')}"))
-    # 圣遗物
+            results.append(("武器", f"\n【{wpn['武器名称']}】{'★'*wpn['稀有度']} {wpn.get('武器类型')}"))
+    return results
+
+
+def _search_artifacts(query: str) -> list:
+    """圣遗物知识库：圣遗物名称命中。"""
+    results = []
     for art in 圣遗物知识库:
         if _match_all_in(query, art.get("圣遗物名称", "")):
-            all_results.append(("圣遗物", f"\n【{art['圣遗物名称']}】{art.get('稀有度','')}星 | 两件套: {art.get('两件套效果','?')[:60]}"))
-    # 任务元数据（含系列任务/章幕/所属角色，确保“全局检索”能覆盖任务体系字段）
+            results.append(("圣遗物", f"\n【{art['圣遗物名称']}】{art.get('稀有度','')}星 | 两件套: {art.get('两件套效果','?')[:60]}"))
+    return results
+
+
+def _search_quest_metadata(query: str) -> list:
+    """任务元数据：任务名称/关联角色/系列任务/所属角色/章名/幕名任一命中。"""
+    results = []
     for q in 任务知识库:
         meta = q.get("metadata", {}) or {}
         if (_match_all_in(query, q.get("任务名称", ""))
@@ -208,114 +274,155 @@ def search_all(query: str) -> str:
                 or _match_all_in(query, q.get("所属角色", ""))
                 or _match_all_in(query, str(meta.get("chapter_name", "")))
                 or _match_all_in(query, str(meta.get("act_name", "")))):
-            all_results.append(("任务", f"\n【{q['任务名称']}】{q.get('任务类型','')} | 关联: {q.get('关联角色','')} | {q.get('简介','')[:100]}"))
-    # 概念
+            results.append(("任务", f"\n【{q['任务名称']}】{q.get('任务类型','')} | 关联: {q.get('关联角色','')} | {q.get('简介','')[:100]}"))
+    return results
+
+
+def _search_concepts(query: str) -> list:
+    """概念类条目：名称/正文+章节任一命中，取正文前 500 字做预览。"""
+    results = []
     concepts = _load_content_json("concepts")
     for c in concepts:
         name = c.get("名称", "")
         text_body = c.get("正文", "") + str(c.get("章节", {}))
         if _match_all_in(query, name) or _match_all_in(query, text_body):
             preview = text_body[:500].replace('\n', ' ')
-            all_results.append(("概念", f"\n【{name}】（{c.get('类型','')}）\n  {preview}..."))
-    # 怪物
+            results.append(("概念", f"\n【{name}】（{c.get('类型','')}）\n  {preview}..."))
+    return results
+
+
+def _search_monsters(query: str) -> list:
+    """怪物条目：名称/别称任一命中。"""
+    results = []
     monsters = _load_content_json("monsters")
     for m in monsters:
         if _match_all_in(query, m.get("名称", "")) or _match_all_in(query, m.get("别称", "")):
-            all_results.append(("怪物", f"\n【{m.get('名称','')}】{m.get('怪物类型','')} | {m.get('元素属性','')}"))
-    # 材料
-    materials = _load_content_json("materials")
-    for mat in materials:
+            results.append(("怪物", f"\n【{m.get('名称','')}】{m.get('怪物类型','')} | {m.get('元素属性','')}"))
+    return results
+
+
+def _search_simple_content(query: str) -> list:
+    """材料/食谱/食物/采集物条目：按名称命中，输出格式保持原口径。"""
+    results = []
+    for mat in _load_content_json("materials"):
         if _match_all_in(query, mat.get("名称", "")):
-            all_results.append(("材料", f"\n【{mat.get('名称','')}】{mat.get('类型','')} | {mat.get('用途','')[:100]}"))
-    # 食谱
-    recipes = _load_content_json("recipes")
-    for r in recipes:
+            results.append(("材料", f"\n【{mat.get('名称','')}】{mat.get('类型','')} | {mat.get('用途','')[:100]}"))
+    for r in _load_content_json("recipes"):
         if _match_all_in(query, r.get("名称", "")):
-            all_results.append(("食谱", f"\n【{r.get('名称','')}】{r.get('类型','')} | {r.get('效果','')[:80]}"))
-    # 食物
-    foods = _load_content_json("foods")
-    for fd in foods:
+            results.append(("食谱", f"\n【{r.get('名称','')}】{r.get('类型','')} | {r.get('效果','')[:80]}"))
+    for fd in _load_content_json("foods"):
         if _match_all_in(query, fd.get("名称", "")):
-            all_results.append(("食物", f"\n【{fd.get('名称','')}】{fd.get('类型','')} | {fd.get('效果','')[:80]}"))
-    # 采集物
-    collectibles = _load_content_json("collectibles")
-    for col in collectibles:
+            results.append(("食物", f"\n【{fd.get('名称','')}】{fd.get('类型','')} | {fd.get('效果','')[:80]}"))
+    for col in _load_content_json("collectibles"):
         if _match_all_in(query, col.get("名称", "")):
-            all_results.append(("采集物", f"\n【{col.get('名称','')}】"))
-    # 书籍
+            results.append(("采集物", f"\n【{col.get('名称','')}】"))
+    return results
+
+
+def _search_books(query: str) -> list:
+    """书籍条目：标题/正文任一命中，输出带卷数与来源。"""
+    results = []
     books = _load_content_json("books")
     for b in books:
         if _match_all_in(query, b.get("title", "")) or _match_all_in(query, b.get("text", "")):
             vol_count = b.get("metadata", {}).get("卷数", "")
-            all_results.append(("书籍", f"\n【{b['title']}】（{vol_count}）| 来源: {b.get('source','')}"))
+            results.append(("书籍", f"\n【{b['title']}】（{vol_count}）| 来源: {b.get('source','')}"))
+    return results
+
+
+def _append_quest_file_candidates(filename: str, search_terms: list, candidates: list, seen_candidates: set) -> None:
+    """扫单个 quests_*.json：搜索词/别名命中即收候选（单文件最多 5 条、总量上限 200 条），原地追加。"""
+    file_count = 0
+    for q in _load_quest_list(filename):
+        if file_count >= 5 or len(candidates) >= 200:  # 激进上限，防止极端情况
+            break
+        text = q.get("text", "")
+        # 用所有搜索词（含别名）尝试匹配
+        matched_term = None
+        for term in search_terms:
+            if _match_all_in(term, text):
+                matched_term = term
+                break
+        if matched_term:
+            # 用匹配到的词定位片段
+            first_word = matched_term.split()[0]
+            idx = text.find(first_word)
+            start = max(0, idx - 120)
+            end = min(len(text), idx + len(matched_term) + 120)
+            snippet = text[start:end].replace('\n', ' ').strip()
+            category = q.get('category', '')
+            # 去重: (title, category, snippet 前 60 字)
+            dedup_key = (q['title'], category, snippet[:60])
+            if dedup_key not in seen_candidates:
+                seen_candidates.add(dedup_key)
+                result_str = f"\n【{q['title']}】（{category}）\n  匹配片段: ...{snippet}..."
+                candidates.append((q['title'], category, snippet, result_str))
+                file_count += 1
+
+
+def _collect_quest_content_candidates(search_terms: list) -> list:
+    """扫全部 quests_*.json 收集任务内容候选（保持 os.listdir 顺序，总量上限 200 条）。"""
+    candidates = []
+    seen_candidates = set()
+    for filename in _quest_files():
+        if filename == "quests_processed.json":
+            continue
+        if len(candidates) >= 200:  # 激进上限，防止极端情况
+            break
+        _append_quest_file_candidates(filename, search_terms, candidates, seen_candidates)
+    return candidates
+
+
+def _rerank_quest_content_candidates(query: str, candidates: list) -> list:
+    """任务内容候选重排：rerank 不可用（None）取前 10，返回空则丢弃全部弱命中。"""
+    if not candidates:
+        return []
+    # 带标题上下文，帮助区分不同意图；用原始 query 做 Rerank（保持语义精度）
+    rerank_docs = [f"【{c[0]}】{c[2]}" for c in candidates]
+    reranked = _rerank(query, rerank_docs, top_n=10)
+    if reranked is None:
+        return [("任务内容", c[3]) for c in candidates[:10]]
+    if reranked:
+        return [("任务内容", candidates[idx][3]) for idx in reranked]
+    # rerank 已执行但全部低于阈值，不输出弱任务结果
+    return []
+
+
+def _render_search_all_results(query: str, all_results: list) -> str:
+    """无命中直接返回提示；否则打印命中计数并拼接全部结果文本。"""
+    if not all_results:
+        return f"未找到与「{query}」相关的任何内容。"
+    print(f"[工具] 全局搜索: {query} -> {len(all_results)}条结果")
+    lines = [f"\n===== 搜索「{query}」({len(all_results)}条结果) ====="]
+    for _cat, text in all_results:
+        lines.append(text)
+    return "\n".join(lines)
+
+
+@tool
+def search_all(query: str) -> str:
+    """全局搜索原神知识库，在角色、地区、剧情、武器、任务、概念、怪物、材料、书籍、食谱、食物、采集物、任务内容中模糊匹配。query: 搜索关键词"""
+    all_results = []
+    # 结构化知识库：角色、地区、主线剧情、武器、圣遗物、任务元数据
+    all_results.extend(_search_roles(query))
+    all_results.extend(_search_regions(query))
+    all_results.extend(_search_story_arcs(query))
+    all_results.extend(_search_weapons(query))
+    all_results.extend(_search_artifacts(query))
+    all_results.extend(_search_quest_metadata(query))
+    # content_data 条目：概念、怪物、材料、食谱、食物、采集物、书籍
+    all_results.extend(_search_concepts(query))
+    all_results.extend(_search_monsters(query))
+    all_results.extend(_search_simple_content(query))
+    all_results.extend(_search_books(query))
 
     # 任务内容全文搜索 - 收集候选后用 Reranker 重排序
     # 术语别名扩展：同一实体可能有多种称呼，都作为搜索词尝试
     search_terms = _expand_query_with_aliases(query)
-    quest_candidates = []  # (title, category, expanded_snippet, result_string)
-    seen_candidates = set()  # 去重: (title, category)
-    for filename in os.listdir(CONTENT_DIR):
-        if not filename.startswith("quests_") or not filename.endswith(".json"):
-            continue
-        if filename == "quests_processed.json":
-            continue
-        if len(quest_candidates) >= 200:  # 激进上限，防止极端情况
-            break
-        try:
-            with open(os.path.join(CONTENT_DIR, filename), "r", encoding="utf-8") as f:
-                quests = json.load(f)
-        except Exception:
-            continue
-        if not isinstance(quests, list):
-            continue
-        file_count = 0
-        for q in quests:
-            if file_count >= 5 or len(quest_candidates) >= 200:
-                break
-            text = q.get("text", "")
-            # 用所有搜索词（含别名）尝试匹配
-            matched_term = None
-            for term in search_terms:
-                if _match_all_in(term, text):
-                    matched_term = term
-                    break
-            if matched_term:
-                # 用匹配到的词定位片段
-                first_word = matched_term.split()[0]
-                idx = text.find(first_word)
-                start = max(0, idx - 120)
-                end = min(len(text), idx + len(matched_term) + 120)
-                snippet = text[start:end].replace('\n', ' ').strip()
-                category = q.get('category', '')
-                # 去重
-                dedup_key = (q['title'], category, snippet[:60])
-                if dedup_key not in seen_candidates:
-                    seen_candidates.add(dedup_key)
-                    result_str = f"\n【{q['title']}】（{category}）\n  匹配片段: ...{snippet}..."
-                    quest_candidates.append((q['title'], category, snippet, result_str))
-                    file_count += 1
+    quest_candidates = _collect_quest_content_candidates(search_terms)
+    all_results.extend(_rerank_quest_content_candidates(query, quest_candidates))
 
-    # Reranker 重排序：带标题上下文，帮助区分不同意图
-    if quest_candidates:
-        rerank_docs = [f"【{c[0]}】{c[2]}" for c in quest_candidates]
-        # 用原始 query 做 Rerank（保持语义精度）
-        reranked = _rerank(query, rerank_docs, top_n=10)
-        if reranked is None:
-            for c in quest_candidates[:10]:
-                all_results.append(("任务内容", c[3]))
-        elif reranked:
-            for idx in reranked:
-                all_results.append(("任务内容", quest_candidates[idx][3]))
-        # else: rerank 已执行但全部低于阈值，不输出弱任务结果
-
-    if not all_results:
-        return f"未找到与「{query}」相关的任何内容。"
-
-    print(f"[工具] 全局搜索: {query} -> {len(all_results)}条结果")
-    lines = [f"\n===== 搜索「{query}」({len(all_results)}条结果) ====="]
-    for cat, text in all_results:
-        lines.append(text)
-    return "\n".join(lines)
+    return _render_search_all_results(query, all_results)
 
 
 def search_lore(keyword: str) -> str:
@@ -445,6 +552,133 @@ def _snippet_around(text: str, keyword: str, width: int = 300) -> str:
 
 
 # ====== 世界/组织背景补充检索工具（不在初始工具集中，搜索碰壁后才暴露） ======
+
+def _world_npc_hay(name, npc, fields: tuple) -> str:
+    """NPC 匹配文本：名字 + 指定字段值；非 dict 时字段位留空（与原口径一致，含分隔空格）。"""
+    parts = [str(name)]
+    for key in fields:
+        parts.append(str(npc.get(key, "")) if isinstance(npc, dict) else "")
+    return " ".join(parts)
+
+
+def _world_npc_formatted(name, npc):
+    """NPC 多行展示：组织/种族/职业/地区任一存在才输出；非 dict 返回 None。"""
+    if not isinstance(npc, dict):
+        return None
+    org = npc.get("org") or npc.get("所属组织") or npc.get("org_race") or ""
+    race = npc.get("race") or npc.get("种族") or ""
+    occupation = npc.get("occupation") or npc.get("职业") or ""
+    region = npc.get("region") or npc.get("所在国家") or ""
+    lines = [f"【{name}】"]
+    if org:
+        lines.append(f"所属组织: {org}")
+    if race:
+        lines.append(f"种族: {race}")
+    if occupation:
+        lines.append(f"职业: {occupation}")
+    if region:
+        lines.append(f"地区: {region}")
+    return chr(10).join(lines)
+
+
+def _world_weapon_snippets(query: str) -> list:
+    """武器故事：名称/简介/武器故事任一含 query，则取武器故事四周片段。"""
+    hits = []
+    for wpn in 武器知识库:
+        if not isinstance(wpn, dict):
+            continue
+        weapon_hay = " ".join([
+            str(wpn.get("武器名称", "")),
+            str(wpn.get("简介", "")),
+            str(wpn.get("武器故事", "")),
+        ])
+        if query in weapon_hay:
+            story = str(wpn.get("武器故事", ""))
+            hits.append(
+                "【武器】" + str(wpn.get("武器名称", "")) + chr(10)
+                + _snippet_around(story, query, 400)
+            )
+    return hits
+
+
+def _world_artifact_snippets(query: str) -> list:
+    """圣遗物部位故事：逐个部位故事查 query，命中即取该部位片段。"""
+    hits = []
+    for art in 圣遗物知识库:
+        if not isinstance(art, dict):
+            continue
+        stories = art.get("部位故事", {})
+        if isinstance(stories, dict):
+            for key, val in stories.items():
+                if query in str(val):
+                    hits.append(
+                        "【圣遗物】" + str(art.get("圣遗物名称", "")) + " · " + str(key) + chr(10)
+                        + _snippet_around(str(val), query, 400)
+                    )
+    return hits
+
+
+def _world_book_snippets(query: str) -> list:
+    """书籍：标题/正文任一含 query，则取正文四周片段。"""
+    hits = []
+    for book in _load_content_json("books"):
+        if not isinstance(book, dict):
+            continue
+        book_hay = " ".join([
+            str(book.get("title", "")),
+            str(book.get("text", "")),
+        ])
+        if query in book_hay:
+            hits.append(
+                "【书籍】" + str(book.get("title", "")) + chr(10)
+                + _snippet_around(str(book.get("text", "")), query, 400)
+            )
+    return hits
+
+
+def _world_npc_hits_from_data(query: str) -> list:
+    """npcs_processed.json（_npcs_data）：名字/组织/种族/职业字段命中即收集。"""
+    hits = []
+    for name, npc in _npcs_data.items():
+        text = _world_npc_hay(name, npc, ("org", "所属组织", "org_race", "职业", "occupation"))
+        if query not in text:
+            continue
+        fmt = _world_npc_formatted(name, npc)
+        if fmt:
+            hits.append(fmt)
+    return hits
+
+
+def _world_npc_hits_from_wiki(query: str, existing: list) -> list:
+    """npcs_wiki_details.json（含更完整 org_race）：与 existing 去重后收集；文件缺失/损坏视为无数据。"""
+    wiki_path = os.path.join(CONTENT_DIR, "npcs_wiki_details.json")
+    if not os.path.exists(wiki_path):
+        return []
+    try:
+        with open(wiki_path, "r", encoding="utf-8") as f:
+            wiki_npcs = json.load(f)
+    except Exception:
+        wiki_npcs = {}
+    if not isinstance(wiki_npcs, dict):
+        return []
+    hits = []
+    for name, npc in wiki_npcs.items():
+        text = _world_npc_hay(name, npc, ("org_race", "origin", "region"))
+        if query not in text:
+            continue
+        fmt = _world_npc_formatted(name, npc)
+        if fmt and fmt not in existing and fmt not in hits:
+            hits.append(fmt)
+    return hits
+
+
+def _world_npc_hits(query: str) -> list:
+    """NPC/组织命中清单：先 npcs_processed，再接 wiki 明细（同名同格式去重）。"""
+    hits = _world_npc_hits_from_data(query)
+    hits.extend(_world_npc_hits_from_wiki(query, hits))
+    return hits
+
+
 @tool
 def search_world(query: str) -> str:
     """搜索世界观设定与组织/NPC背景（lore.json + NPC所属组织）。
@@ -460,103 +694,12 @@ def search_world(query: str) -> str:
         results.append(lore_text)
 
     # 2) 武器故事 / 圣遗物故事 / 书籍正文（卢契烬等组织名常出现在这些长文本里）
-    for wpn in 武器知识库:
-        if not isinstance(wpn, dict):
-            continue
-        weapon_hay = " ".join([
-            str(wpn.get("武器名称", "")),
-            str(wpn.get("简介", "")),
-            str(wpn.get("武器故事", "")),
-        ])
-        if query in weapon_hay:
-            story = str(wpn.get("武器故事", ""))
-            results.append(
-                "【武器】" + str(wpn.get("武器名称", "")) + chr(10)
-                + _snippet_around(story, query, 400)
-            )
-
-    for art in 圣遗物知识库:
-        if not isinstance(art, dict):
-            continue
-        art_hay = str(art.get("圣遗物名称", ""))
-        stories = art.get("部位故事", {})
-        if isinstance(stories, dict):
-            for key, val in stories.items():
-                if query in str(val):
-                    results.append(
-                        "【圣遗物】" + str(art.get("圣遗物名称", "")) + " · " + str(key) + chr(10)
-                        + _snippet_around(str(val), query, 400)
-                    )
-
-    for book in _load_content_json("books"):
-        if not isinstance(book, dict):
-            continue
-        book_hay = " ".join([
-            str(book.get("title", "")),
-            str(book.get("text", "")),
-        ])
-        if query in book_hay:
-            results.append(
-                "【书籍】" + str(book.get("title", "")) + chr(10)
-                + _snippet_around(str(book.get("text", "")), query, 400)
-            )
+    results.extend(_world_weapon_snippets(query))
+    results.extend(_world_artifact_snippets(query))
+    results.extend(_world_book_snippets(query))
 
     # 3) NPC / 组织字段
-    def _npc_formatted(name, npc):
-        if not isinstance(npc, dict):
-            return None
-        org = npc.get("org") or npc.get("所属组织") or npc.get("org_race") or ""
-        race = npc.get("race") or npc.get("种族") or ""
-        occupation = npc.get("occupation") or npc.get("职业") or ""
-        region = npc.get("region") or npc.get("所在国家") or ""
-        lines = [f"【{name}】"]
-        if org:
-            lines.append(f"所属组织: {org}")
-        if race:
-            lines.append(f"种族: {race}")
-        if occupation:
-            lines.append(f"职业: {occupation}")
-        if region:
-            lines.append(f"地区: {region}")
-        return chr(10).join(lines)
-
-    npc_hits = []
-    # 3) npcs_processed.json（已加载到 _npcs_data）
-    for name, npc in _npcs_data.items():
-        text = " ".join([
-            str(name),
-            str(npc.get("org", "")) if isinstance(npc, dict) else "",
-            str(npc.get("所属组织", "")) if isinstance(npc, dict) else "",
-            str(npc.get("org_race", "")) if isinstance(npc, dict) else "",
-            str(npc.get("职业", "")) if isinstance(npc, dict) else "",
-            str(npc.get("occupation", "")) if isinstance(npc, dict) else "",
-        ])
-        if query in text:
-            fmt = _npc_formatted(name, npc)
-            if fmt:
-                npc_hits.append(fmt)
-
-    # 4) npcs_wiki_details.json（含更完整的 org_race）
-    wiki_path = os.path.join(CONTENT_DIR, "npcs_wiki_details.json")
-    if os.path.exists(wiki_path):
-        try:
-            with open(wiki_path, "r", encoding="utf-8") as f:
-                wiki_npcs = json.load(f)
-        except Exception:
-            wiki_npcs = {}
-        if isinstance(wiki_npcs, dict):
-            for name, npc in wiki_npcs.items():
-                text = " ".join([
-                    str(name),
-                    str(npc.get("org_race", "")) if isinstance(npc, dict) else "",
-                    str(npc.get("origin", "")) if isinstance(npc, dict) else "",
-                    str(npc.get("region", "")) if isinstance(npc, dict) else "",
-                ])
-                if query in text:
-                    fmt = _npc_formatted(name, npc)
-                    if fmt and fmt not in npc_hits:
-                        npc_hits.append(fmt)
-
+    npc_hits = _world_npc_hits(query)
     if npc_hits:
         results.append("相关组织/NPC：" + chr(10) + chr(10).join(npc_hits[:20]))
 

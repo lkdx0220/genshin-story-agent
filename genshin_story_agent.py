@@ -114,7 +114,6 @@ from app.progress import _cancel_events, _emit_progress, set_progress_hook
 # 兼容 web_api.py 的 `agent_module._progress_hook = hook` 写法：
 # 由于 _progress_hook 是不可变变量，直接赋值不会同步到 app.progress；
 # 改为通过 set_progress_hook() 函数注入。web_api.py 需相应改为 set_progress_hook()。
-set_progress_hook  # 显式导出供 web_api.py 使用
 
 
 # ====== 主函数 ======
@@ -122,13 +121,13 @@ def main():
     print("\n" + "=" * 55)
     print("       原神剧情检索助手 Agent")
     print("=" * 55)
-    print(f"  LLM: 通义千问 qwen3.7-max")
-    print(f"  架构: 别名归一化 → 路径分类(L1/L2) → 快速/完整 双路径")
+    print("  LLM: 通义千问 qwen3.7-max")
+    print("  架构: 别名归一化 → 路径分类(L1/L2) → 快速/完整 双路径")
     print(f"  L1 快速: 合并 Plan/Answer，最多 {MAX_FAST_ITERATIONS} 轮工具调用")
     print(f"  L2 完整: Plan → Tool → Answer，最多 {MAX_AGENT_ITERATIONS} 轮迭代")
     print(f"  知识库: 角色{len(角色知识库)}位 | 武器{len(武器知识库)}把 | 圣遗物{len(圣遗物知识库)}套")
     print(f"  剧情: {len(主线剧情知识库)}章 | 地区{len(地区知识库)}个 | 任务{len(任务知识库)}个")
-    print(f"  内容数据: 怪物/材料/采集物/食谱/书籍/任务剧情")
+    print("  内容数据: 怪物/材料/采集物/食谱/书籍/任务剧情")
     print(f"  RAG记忆: {'已启用' if rag_memory else '未启用'}")
     print("=" * 55)
     print("\n输入 '帮助' 查看用法，输入 '退出' 结束对话\n")

@@ -85,7 +85,7 @@ def summarize_quest(title, text):
             summary = resp.content.strip()
             if summary:
                 return summary
-        except Exception as e:
+        except Exception:
             time.sleep(2)
     return None
 
@@ -296,7 +296,7 @@ def load_all_quests():
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except Exception as e:
+        except Exception:
             # 静默跳过，不写 stdout（避免终端问题）
             pass
             continue

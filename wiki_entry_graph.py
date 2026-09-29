@@ -419,7 +419,7 @@ def _data_to_text(data: Any) -> str:
             else:
                 texts.append(_clean_plain_text(html.unescape(stripped)))
         elif isinstance(obj, dict):
-            for key, value in obj.items():
+            for _key, value in obj.items():
                 walk(value)
         elif isinstance(obj, list):
             for item in obj:
@@ -1118,11 +1118,9 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
             ("", "", _norm_meta_key(row["title"])),
         ]
         matched: List[WikiEntry] = []
-        used_key = None
         for key in keys:
             if key[2] and key in index:
                 matched = index[key]
-                used_key = key
                 break
         sibling_rescue = False  # 本次是否为兄弟页救回（标题要用页面名而不是任务名）
         if matched:
@@ -1169,7 +1167,7 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
         entry_type = "task"
         if not act and not chapter and row["title"].startswith("「") and row["title"].endswith("」"):
             entry_type = "activity"
-        filters = [f"来源/bwiki"]
+        filters = ["来源/bwiki"]
         if row["entry_type"]:
             filters.append(f"任务类型/{row['entry_type']}")
         graph.add(

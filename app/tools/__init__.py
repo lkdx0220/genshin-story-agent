@@ -10,7 +10,7 @@
 注：hybrid_search 和 kb_vector_search 在 app/retrieval.py 中（与检索逻辑耦合）。
 """
 from app.tools.query import (
-    query_character, query_region, query_story, query_weapon, query_quest,
+    query_character, query_voice_relation, query_region, query_story, query_weapon, query_quest,
     query_monster, query_artifact, query_material, query_collectible,
     query_recipe, query_food, get_book_metadata,
 )
@@ -36,7 +36,7 @@ from app.retrieval import hybrid_search, kb_vector_search
 
 # ====== 工具列表（顺序决定 LLM 看到的工具顺序）======
 tools = [
-    query_character, query_region, query_story, query_weapon, query_quest,
+    query_character, query_voice_relation, query_region, query_story, query_weapon, query_quest,
     list_characters_by_element, list_characters_by_region, list_characters_by_weapon, list_characters_by_rarity,
     list_all_quest_series,
     list_all_books, list_all_lore_entries, list_all_weapons_and_artifacts, list_all_game_items,

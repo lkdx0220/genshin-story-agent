@@ -13,19 +13,19 @@ import math
 import json
 import requests
 from collections import Counter
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
 from app.config import CONTENT_DIR, QWEN_API_KEY, QWEN_FALLBACK_API_KEY
 from app.data import (
-    _match_all_in, _load_content_json, _normalize_for_match,
+    _match_all_in, _load_content_json,
 )
 from app.llm import alias_judge_llm
 
 # 字符别名表（外部独立模块）
-from character_aliases import CHARACTER_ALIASES, resolve_aliases, ALIAS_MAP, ALIASES_SORTED
+from character_aliases import CHARACTER_ALIASES, ALIAS_MAP
 
 
 # ====== 查询消毒与别名检测 ======
@@ -172,6 +172,109 @@ def _expand_query_with_aliases(query: str) -> List[str]:
 VECTOR_MIN_SIMILARITY = 0.35
 # 关键词路/rerank 最低相关分：先保守取值，后续用 bad case 集标定。
 RERANK_MIN_SCORE = 0.25
+
+# ====== 相关性闸门（阶段开关 + 阈值）======
+# 0 = 关闭（完全旧行为）；1 = 埋点（只记录不拒绝，默认）；2 = 执行（硬闸拒绝 + 弱证据标注 + 规划层确认）
+RELEVANCE_GATE = int(os.getenv("RELEVANCE_GATE", "1") or "1")
+# 证据强度标注：检索层写、规划层读，两边必须引用同一常量，否则字符串迟早漂移
+EVIDENCE_STRENGTH_TAG = "[证据强度]"
+EVIDENCE_WEAK_MARK = "弱"
+# 阈值按嵌入后端区分：分数尺度随后端不同（bge-m3 与 text-embedding-v4 不可混用），禁止裸写数字。
+# bge-m3 一行是 2026-09-20 用 16 条查询实测标定；v4 未标定 → 取到 None 时必须 fail-open（只记录不拒绝）。
+RELEVANCE_THRESHOLDS = {
+    "bge-m3": {"hard_top1": 0.50, "hard_kw_top1": 0.42, "weak_top1": 0.60, "rrf_min": 0.45},
+    "text-embedding-v4": None,
+}
+
+
+def _relevance_thresholds(backend: str):
+    """按嵌入后端取阈值配置；未标定的后端返回 None，调用方必须 fail-open。"""
+    return RELEVANCE_THRESHOLDS.get(backend or "")
+
+
+def _emit_relevance_signal(query: str, kw_hits: int, top1: float, top2, backend: str,
+                           thresholds, stage: int) -> str:
+    """埋点/执行共用的相关性信号记录：打印 + trace 事件，返回判定结论。
+
+    阶段 1 只调用本函数记录，不改检索输出；阶段 2 起据返回的结论做拒绝与标注。
+    """
+    delta = (top1 - top2) if top2 is not None else 0.0
+    if thresholds is None:
+        verdict = "未标定（fail-open）"
+    elif kw_hits == 0 and top1 < thresholds["hard_top1"]:
+        verdict = "硬拒（R2）"
+    elif kw_hits > 0 and top1 < thresholds["hard_kw_top1"]:
+        verdict = "硬拒（R3）"
+    elif kw_hits == 0 and top1 < thresholds["weak_top1"]:
+        verdict = "弱（应触发确认）"
+    else:
+        verdict = "强"
+    print(f"  -> [相关性埋点] 「{query}」关键词 {kw_hits}｜top1 {top1:.4f}｜差值 {delta:.4f}"
+          f"｜后端 {backend or '未知'}｜判定 {verdict}（阶段 {stage}）")
+    try:
+        from app.trace_recorder import emit as _emit
+
+        _emit("relevance_gate", {
+            "query": query,
+            "kw_hits": kw_hits,
+            "top1": round(top1, 4),
+            "top2": round(top2, 4) if top2 is not None else None,
+            "delta": round(delta, 4),
+            "backend": backend,
+            "thresholds_calibrated": thresholds is not None,
+            "verdict": verdict,
+            "stage": stage,
+        })
+    except Exception as e:
+        print(f"  -> [相关性埋点] trace 写入失败: {type(e).__name__}")
+    return verdict
+
+
+def format_evidence_line(kw_hits: int, top1: float, delta: float) -> str:
+    """拼「弱证据」标注行：检索层写、规划层解析，格式必须只在本处定义。"""
+    return (f"{EVIDENCE_STRENGTH_TAG} {EVIDENCE_WEAK_MARK}"
+            f"（关键词 {kw_hits}｜最高相似度 {top1:.4f}｜分差 {delta:.4f}）")
+
+
+def _trace_relevance(event: str, data: dict) -> None:
+    """写 trace 事件（trace 失败不影响检索主流程）。"""
+    try:
+        from app.trace_recorder import emit as _emit
+
+        _emit(event, data)
+    except Exception as e:
+        print(f"  -> [相关性闸门] trace 写入失败: {type(e).__name__}")
+
+
+_NAMED_QUOTE_RE = re.compile(r"[「『《\"“]([^」』》\"”]{2,40})[」』》\"”]")
+
+
+def _missing_named_quotes(query: str) -> list:
+    """R0：查询里带具名引用（「」『』《》引号）但全库逐字查不到的专名。
+
+    只对带明确引号的查询启用——高精确、零误伤；无引号的交给 R1-R4 与规划层确认。
+    """
+    missing = []
+    for name in _NAMED_QUOTE_RE.findall(query or ""):
+        name = name.strip()
+        if not name or name in missing:
+            continue
+        try:
+            # 先查标题注册表（便宜且精确）
+            if any(name in str(t) for t in TITLE_REGISTRY):
+                continue
+            # 关键词路是模糊匹配（「浮世记」会命中「浮世…」），必须逐字确认正文里有没有
+            hits = _keyword_search_docs(name, top_k=15)
+            if not any(name in str(d.get("document", "")) for d in hits):
+                missing.append(name)
+        except Exception as e:
+            print(f"  -> [相关性闸门] R0 查证失败，跳过: {type(e).__name__}")
+    return missing
+
+
+def _relevance_threshold_or_none(backend: str):
+    """语义化别名：未标定的后端返回 None，调用方必须 fail-open。"""
+    return _relevance_thresholds(backend)
 # 常见停用字/词：关键词路禁止“只命中这些字”的候选进入 RRF。
 _COMMON_STOPWORDS = {
     "的", "了", "是", "人", "我", "你", "他", "她", "它", "我们", "你们", "他们",
@@ -356,74 +459,89 @@ def _rrf_fusion(kw_items: list, vec_items: list, k: int = 60) -> list:
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
 
-def _build_quest_snippet(text: str, words: list, first_word: str, matched_term: str) -> str:
-    """生成任务正文关键词片段。
+def _quest_snippet_candidates(text: str, words: list, half: int, first_word: str) -> List[tuple]:
+    """收集每个查询词每次出现的窗口覆盖度（窗口内命中多少个不同查询词）。"""
+    cands = []
+    for w in words:
+        pos = 0
+        while True:
+            idx = text.find(w, pos)
+            if idx == -1:
+                break
+            window_text = text[max(0, idx - half):min(len(text), idx + half)]
+            count = sum(1 for w2 in words if w2 in window_text)
+            cands.append((count, idx))
+            pos = idx + len(w)
+    if not cands:
+        cands = [(0, text.find(first_word))]
+    return cands
 
-    - 长文档且多查询词（>2000字）：最多取 3 段、每段约 400 字，优先覆盖不同查询词出现位置，
-      最后补一段文末窗口，避免后部关键信息被 240 字单窗口截断。
-    - 中等/短文档：保持原有 best_window 行为，降低回归风险。
-    """
-    if len(text) > 2000 and len(words) > 1:
-        seg_chars = 400
-        half = seg_chars // 2
-        # 收集每个查询词每次出现的窗口覆盖度（窗口内命中多少个不同查询词）
-        cands = []
-        for w in words:
-            pos = 0
-            while True:
-                idx = text.find(w, pos)
-                if idx == -1:
-                    break
-                window_text = text[max(0, idx - half):min(len(text), idx + half)]
-                count = sum(1 for w2 in words if w2 in window_text)
-                cands.append((count, idx))
-                pos = idx + len(w)
-        if not cands:
-            cands = [(0, text.find(first_word))]
-        # 第一段：覆盖查询词最多且位置最早的窗口
-        _best_count, best_pos = max(cands, key=lambda c: (c[0], -c[1]))
-        chosen = [best_pos]
-        # 第二段：在文档中部四分之一到四分之三区间内，取离全文中点最近的查询词窗口，
-        # 目的是覆盖“首段之后、文末之前”的关键信息（而非一味贪心挑更远处的高分窗口）
-        band_start = len(text) // 4
-        band_end = (len(text) * 3) // 4
-        mid = len(text) // 2
-        pool = [(count, idx) for count, idx in cands
-                if band_start <= idx <= band_end and all(abs(idx - c) >= seg_chars for c in chosen)]
-        if pool:
-            _count, second_pos = min(pool, key=lambda c: (abs(c[1] - mid), -c[0]))
-            chosen.append(second_pos)
-        # 第三段：尾部补充扫描，若文末窗口与已有段落不重叠则补上
-        tail_center = max(0, len(text) - half)
-        if all(abs(tail_center - c) >= seg_chars for c in chosen):
-            chosen.append(tail_center)
-        chosen.sort()
-        segments = []
-        for c in chosen:
-            start = max(0, c - half)
-            end = min(len(text), c + half)
-            seg = text[start:end].strip()
-            if seg and (not segments or seg != segments[-1]):
-                segments.append(seg)
-        snippet = " ... ".join(segments).replace('\n', ' ').strip()
-        return snippet[:seg_chars * 3 + 32]
 
+def _quest_middle_center(text: str, cands: list, chosen: list, seg_chars: int) -> Optional[int]:
+    """长文档片段第二段中心：文档中部区间内离全文中点最近的候选窗口，无合适窗口返回 None。"""
+    band_start = len(text) // 4
+    band_end = (len(text) * 3) // 4
+    mid = len(text) // 2
+    pool = [(count, idx) for count, idx in cands
+            if band_start <= idx <= band_end and all(abs(idx - c) >= seg_chars for c in chosen)]
+    if not pool:
+        return None
+    _count, second_pos = min(pool, key=lambda c: (abs(c[1] - mid), -c[0]))
+    return second_pos
+
+
+def _quest_segment_text(text: str, centers: list, half: int) -> str:
+    """按中心截取窗口文本，去重后以 " ... " 拼接并清理换行。"""
+    segments = []
+    for c in centers:
+        start = max(0, c - half)
+        end = min(len(text), c + half)
+        seg = text[start:end].strip()
+        if seg and (not segments or seg != segments[-1]):
+            segments.append(seg)
+    return " ... ".join(segments).replace('\n', ' ').strip()
+
+
+def _quest_rich_snippet(text: str, words: list, first_word: str) -> str:
+    """超长文档多查询词：最多取 3 段、每段约 400 字，补中部与文末窗口。"""
+    seg_chars = 400
+    half = seg_chars // 2
+    cands = _quest_snippet_candidates(text, words, half, first_word)
+    _best_count, best_pos = max(cands, key=lambda c: (c[0], -c[1]))
+    chosen = [best_pos]
+    second_pos = _quest_middle_center(text, cands, chosen, seg_chars)
+    if second_pos is not None:
+        chosen.append(second_pos)
+    tail_center = max(0, len(text) - half)
+    if all(abs(tail_center - c) >= seg_chars for c in chosen):
+        chosen.append(tail_center)
+    chosen.sort()
+    return _quest_segment_text(text, chosen, half)[:seg_chars * 3 + 32]
+
+
+def _quest_best_window_pos(text: str, words: list, half: int) -> int:
+    """长文档多搜索词：返回覆盖最多不同搜索词的窗口中心，未命中返回 -1。"""
+    best_pos = -1
+    best_count = 0
+    for w in words:
+        pos = 0
+        while True:
+            idx = text.find(w, pos)
+            if idx == -1:
+                break
+            window_text = text[max(0, idx - half):min(len(text), idx + half)]
+            count = sum(1 for w2 in words if w2 in window_text)
+            if count > best_count:
+                best_count = count
+                best_pos = idx
+            pos = idx + len(w)
+    return best_pos
+
+
+def _quest_plain_snippet(text: str, words: list, first_word: str, matched_term: str) -> str:
+    """中等/短文档：保持原有 best_window 行为。"""
     if len(words) > 1 and len(text) > 600:
-        # 长文档多搜索词：找到覆盖最多不同搜索词的窗口位置，避免只截取第一个词的首次出现
-        best_pos = -1
-        best_count = 0
-        for w in words:
-            pos = 0
-            while True:
-                idx = text.find(w, pos)
-                if idx == -1:
-                    break
-                window_text = text[max(0, idx - 120):min(len(text), idx + 120)]
-                count = sum(1 for w2 in words if w2 in window_text)
-                if count > best_count:
-                    best_count = count
-                    best_pos = idx
-                pos = idx + len(w)
+        best_pos = _quest_best_window_pos(text, words, 120)
         if best_pos >= 0:
             start = max(0, best_pos - 120)
             end = min(len(text), best_pos + 120)
@@ -437,10 +555,23 @@ def _build_quest_snippet(text: str, words: list, first_word: str, matched_term: 
     return text[start:end].replace('\n', ' ').strip()
 
 
-def _keyword_search_docs(query: str, top_k: int = 15) -> list:
-    """关键词路：搜索任务内容、世界观设定、书籍正文。
-    返回格式与向量结果统一：[{id, collection, document, category}]。"""
-    results = []
+def _build_quest_snippet(text: str, words: list, first_word: str, matched_term: str) -> str:
+    """生成任务正文关键词片段。
+
+    - 长文档且多查询词（>2000字）：最多取 3 段、每段约 400 字，优先覆盖不同查询词出现位置，
+      最后补一段文末窗口，避免后部关键信息被 240 字单窗口截断。
+    - 中等/短文档：保持原有 best_window 行为，降低回归风险。
+    """
+    if len(text) > 2000 and len(words) > 1:
+        return _quest_rich_snippet(text, words, first_word)
+    return _quest_plain_snippet(text, words, first_word, matched_term)
+
+
+def _keyword_search_terms(query: str) -> Tuple[List[str], List[str]]:
+    """把查询扩成关键词路用的检索词表（别名展开 + 去疑问词 + 拆词 + 停用词过滤）。
+
+    返回 (search_terms, query_tokens)；search_terms 为空表示关键词路应直接返回空。
+    """
     search_terms = _expand_query_with_aliases(query)
     # 对中文自然语言查询做二次拆词：去掉疑问词后，用单个/组合关键词兜底，
     # 否则“深渊是什么 提瓦特 本质”这类无空格整句会漏掉“深渊的本质”原文。
@@ -459,11 +590,11 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
     # 过滤纯停用词/疑问词构成的检索词；没有有效内容词时关键词路直接返回空，
     # 避免“的/人/是”这类常见字把大量无关结果送进 RRF。
     search_terms = [t for t in search_terms if t and not _is_stopword_term(t)]
-    if not search_terms:
-        return []
+    return search_terms, query_tokens
 
 
-    # --- 任务内容关键词搜索 ---
+def _collect_quest_candidates(search_terms: List[str], query_tokens: List[str]) -> List[tuple]:
+    """扫 content_data/quests_*.json 收集命中候选（上限 1000 条），返回 (标题, 分类, 片段)。"""
     quest_candidates = []
     seen_candidates = set()
     for filename in os.listdir(CONTENT_DIR):
@@ -498,14 +629,19 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
             if dedup_key not in seen_candidates:
                 seen_candidates.add(dedup_key)
                 quest_candidates.append((q["title"], q.get("category", ""), snippet))
+    return quest_candidates
 
+
+def _quest_keyword_results(query: str, candidates: List[tuple], top_k: int) -> List[dict]:
+    """任务候选重排序：转成检索结果（rerank 失败时退化为按原顺序取前 top_k）。"""
+    results: List[dict] = []
     # Reranker 重排序
-    if quest_candidates:
-        rerank_docs = [f"【{c[0]}】{c[2]}" for c in quest_candidates]
-        reranked = _rerank(query, rerank_docs, top_n=min(top_k, len(quest_candidates)))
+    if candidates:
+        rerank_docs = [f"【{c[0]}】{c[2]}" for c in candidates]
+        reranked = _rerank(query, rerank_docs, top_n=min(top_k, len(candidates)))
         if reranked is None:
             # 候选太少或 rerank 失败：按原逻辑取前 top_k
-            for c in quest_candidates[:top_k]:
+            for c in candidates[:top_k]:
                 results.append({
                     "id": f"quest:{c[0]}:chunk:0",
                     "collection": "kb_quests_keyword",
@@ -514,7 +650,7 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
                 })
         elif reranked:
             for idx in reranked:
-                c = quest_candidates[idx]
+                c = candidates[idx]
                 results.append({
                     "id": f"quest:{c[0]}:chunk:0",
                     "collection": "kb_quests_keyword",
@@ -522,94 +658,121 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
                     "category": c[1],
                 })
         # else: rerank 已执行但所有候选低于阈值，关键词路不输出弱结果
+    return results
 
-    # --- 世界观设定搜索 ---
+
+def _lore_query_terms(query: str) -> List[str]:
+    """世界观检索用的查询变体：整句 + 去尾字（"清籁岛有什么内容" → 去 1~2 字）。"""
+    terms = [query]
+    if len(query) >= 3:
+        terms.append(query[:-1])
+    if len(query) >= 4:
+        terms.append(query[:-2])
+    return terms
+
+
+def _collect_lore_candidates(lore: list, terms: List[str], query: str) -> Tuple[List[dict], set]:
+    """扫 lore.json 收集候选条目，同时标出「标题被精确命中」的条目名。
+
+    标题也算命中源：地图文本类条目的地区/子区域名只写在标题里
+    （如"地图文本/稻妻 / 清籁岛"），正文只有碎片内容，只比正文会导致按名检索不到。
+    反向匹配用来接住"地图文本中稻妻的清籁岛"这类无空格整句。
+    """
+    lore_candidates = []
+    seen_lore = set()
+    lore_exact_titles = set()
+    for entry in lore:
+        title = entry["title"]
+        text = entry["text"]
+        if not any(term in title or term in text for term in terms):
+            leaf = title.rsplit("/", 1)[-1].strip()
+            if len(leaf) < 2 or leaf not in query:
+                continue
+            lore_exact_titles.add(title)
+        eid = title + text[:40]
+        if eid in seen_lore:
+            continue
+        seen_lore.add(eid)
+        lore_candidates.append(entry)
+        if any(term == title or term == title.rsplit("/", 1)[-1].strip() for term in terms):
+            lore_exact_titles.add(title)
+    return lore_candidates, lore_exact_titles
+
+
+def _lore_snippet(text: str, terms: List[str]) -> str:
+    """长文档 snippet 定位：从搜索词出现位置截窗口。
+
+    避免至冬(81871字)等长文本只返回开头的目录结构，关键原文被截掉。
+    """
+    best_pos = -1
+    for term in terms:
+        idx = text.find(term)
+        if idx >= 0:
+            best_pos = idx
+            break
+    if best_pos >= 0:
+        start = max(0, best_pos - 120)
+        end = min(len(text), best_pos + 480)
+        return text[start:end].replace('\n', ' ').strip()
+    return text[:480].replace('\n', ' ').strip()
+
+
+def _lore_keyword_results(query: str) -> Tuple[List[dict], set]:
+    """世界观设定搜索：返回 (结果, 标题被精确命中的条目名集合)。"""
+    results: List[dict] = []
     lore_path = os.path.join(CONTENT_DIR, "lore.json")
-    if os.path.exists(lore_path):
-        try:
-            with open(lore_path, "r", encoding="utf-8") as f:
-                lore = json.load(f)
-        except Exception:
-            lore = []
-        if lore:
-            lore_candidates = []
-            seen_lore = set()
-            # 标题末段与检索词完全相等的条目（用户问的就是这个条目名），
-            # 单独标记并在融合前提到关键词路最前面。
-            lore_exact_titles = set()
-            lore_terms = [query]
-            if len(query) >= 3:
-                lore_terms.append(query[:-1])
-            if len(query) >= 4:
-                lore_terms.append(query[:-2])
-            for entry in lore:
-                title = entry["title"]
-                text = entry["text"]
-                # 标题也算命中源：地图文本类条目的地区/子区域名只写在标题里
-                # （如"地图文本/稻妻 / 清籁岛"），正文只有碎片内容，
-                # 只比正文会导致按名检索不到。
-                if not any(term in title or term in text for term in lore_terms):
-                    # 反向匹配：条目名本身出现在查询里。中文查询无空格，
-                    # "地图文本中稻妻的清籁岛"这类整句靠正向子串永远比不上。
-                    leaf = title.rsplit("/", 1)[-1].strip()
-                    if len(leaf) < 2 or leaf not in query:
-                        continue
-                    lore_exact_titles.add(title)
-                eid = title + text[:40]
-                if eid in seen_lore:
-                    continue
-                seen_lore.add(eid)
-                lore_candidates.append(entry)
-                if any(term == title or term == title.rsplit("/", 1)[-1].strip()
-                       for term in lore_terms):
-                    lore_exact_titles.add(title)
-            if lore_candidates:
-                # 精确命中条目名的先锁定名额，不参与 rerank 竞争：
-                # 否则地名/名词查询里它们会被“正文顺带提到”的长条目挤掉。
-                exact = [c for c in lore_candidates if c["title"] in lore_exact_titles][:5]
-                rest = [c for c in lore_candidates if c["title"] not in lore_exact_titles]
-                budget = 5 - len(exact)
-                reranked = None
-                if budget > 0 and rest:
-                    rerank_docs = [f"【{c['title']}】{c['text']}" for c in rest]
-                    reranked = _rerank(query, rerank_docs, top_n=min(budget, len(rest)))
-                if reranked is None:
-                    ordered = exact + rest[:budget]
-                elif reranked:
-                    ordered = exact + [rest[i] for i in reranked]
-                else:
-                    ordered = exact
-                for c in ordered:
-                    text = c["text"]
-                    # 长文档 snippet 定位：找到搜索词出现位置，从该位置截取窗口
-                    # 避免至冬(81871字)等长文本只返回开头的目录结构，关键原文被截掉
-                    best_pos = -1
-                    for term in lore_terms:
-                        idx = text.find(term)
-                        if idx >= 0:
-                            best_pos = idx
-                            break
-                    if best_pos >= 0:
-                        start = max(0, best_pos - 120)
-                        end = min(len(text), best_pos + 480)
-                        snippet = text[start:end].replace('\n', ' ').strip()
-                    else:
-                        snippet = text[:480].replace('\n', ' ').strip()
-                    results.append({
-                        "id": f"lore:{c['title']}",
-                        "collection": "kb_lore",
-                        "document": snippet,
-                    })
+    if not os.path.exists(lore_path):
+        return results, set()
+    try:
+        with open(lore_path, "r", encoding="utf-8") as f:
+            lore = json.load(f)
+    except Exception:
+        lore = []
+    if not lore:
+        return results, set()
 
-                # 精确标题命中前置：这些条目的名字就是用户问的对象，
-                # 优先级高于“正文顺带提到”的任务片段。
-                if lore_exact_titles:
-                    head = [r for r in results if r["id"][len("lore:"):] in lore_exact_titles]
-                    if head:
-                        head_ids = {r["id"] for r in head}
-                        results = head + [r for r in results if r["id"] not in head_ids]
+    terms = _lore_query_terms(query)
+    lore_candidates, lore_exact_titles = _collect_lore_candidates(lore, terms, query)
+    if not lore_candidates:
+        return results, set()
 
-    # --- 书籍正文搜索 ---
+    # 精确命中条目名的先锁定名额，不参与 rerank 竞争：
+    # 否则地名/名词查询里它们会被“正文顺带提到”的长条目挤掉。
+    exact = [c for c in lore_candidates if c["title"] in lore_exact_titles][:5]
+    rest = [c for c in lore_candidates if c["title"] not in lore_exact_titles]
+    budget = 5 - len(exact)
+    reranked = None
+    if budget > 0 and rest:
+        rerank_docs = [f"【{c['title']}】{c['text']}" for c in rest]
+        reranked = _rerank(query, rerank_docs, top_n=min(budget, len(rest)))
+    if reranked is None:
+        ordered = exact + rest[:budget]
+    elif reranked:
+        ordered = exact + [rest[i] for i in reranked]
+    else:
+        ordered = exact
+    for c in ordered:
+        results.append({
+            "id": f"lore:{c['title']}",
+            "collection": "kb_lore",
+            "document": _lore_snippet(c["text"], terms),
+        })
+    return results, lore_exact_titles
+
+
+def _promote_exact_titles(results: List[dict], exact_titles: set) -> List[dict]:
+    """精确命中条目名的结果前置：条目名就是用户问的对象，优先级高于“正文顺带提到”的片段。"""
+    if not exact_titles:
+        return results
+    head = [r for r in results if r["id"][len("lore:"):] in exact_titles]
+    if not head:
+        return results
+    head_ids = {r["id"] for r in head}
+    return head + [r for r in results if r["id"] not in head_ids]
+
+
+def _book_keyword_results(search_terms: List[str]) -> List[dict]:
+    """书籍正文关键词搜索：标题或正文命中即入候选，最多取前 5 本。"""
     books = _load_content_json("books")
     book_candidates = []
     for b in books:
@@ -627,48 +790,72 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
                     snippet = text[:240].replace('\n', ' ').strip()
                 book_candidates.append((b["title"], snippet))
                 break
-    for i, (title, snippet) in enumerate(book_candidates[:5]):
+    results: List[dict] = []
+    for title, snippet in book_candidates[:5]:
         results.append({
             "id": f"book:{title}",
             "collection": "kb_books",
             "document": snippet,
         })
+    return results
 
-    # --- 概念/组织/设定搜索 ---
-    # concepts.json 包含 64 个具体概念（教令院、七星、愚人众、神之眼等）
-    # 删除 query_concept 工具后，这些数据通过 hybrid_search 的关键词路检索
+
+def _concept_keyword_results(search_terms: List[str]) -> List[dict]:
+    """概念/组织/设定搜索：concepts.json 含教令院、七星、愚人众、神之眼等具体概念。
+
+    删除 query_concept 工具后，这些数据通过 hybrid_search 的关键词路检索。
+    """
     concepts = _load_content_json("concepts")
-    if concepts:
-        concept_candidates = []
-        seen_concepts = set()
-        for term in search_terms:
-            for c in concepts:
-                name = c.get("名称", "")
-                body = c.get("正文", "")
-                sections = c.get("章节", {})
-                section_titles = " ".join(sections.keys()) if sections else ""
-                full_text = name + " " + body + " " + section_titles
-                if _match_all_in(term, full_text):
-                    cid = name + body[:40]
-                    if cid not in seen_concepts:
-                        seen_concepts.add(cid)
-                        # 构建摘要：名称 + 正文 / 章节预览
-                        info = f"【{name}】（{c.get('类型', '?')}）"
-                        if body:
-                            info += f"\n{body[:400]}"
-                        elif sections:
-                            for sec_name in list(sections.keys())[:3]:
-                                sec_text = sections[sec_name][:200]
-                                if sec_text.strip():
-                                    info += f"\n[{sec_name}]: {sec_text}"
-                        concept_candidates.append((name, info))
-        for name, info in concept_candidates[:3]:
-            results.append({
-                "id": f"concept:{name}",
-                "collection": "kb_concepts",
-                "document": info,
-            })
+    results: List[dict] = []
+    if not concepts:
+        return results
+    concept_candidates = []
+    seen_concepts = set()
+    for term in search_terms:
+        for c in concepts:
+            name = c.get("名称", "")
+            body = c.get("正文", "")
+            sections = c.get("章节", {})
+            section_titles = " ".join(sections.keys()) if sections else ""
+            full_text = name + " " + body + " " + section_titles
+            if _match_all_in(term, full_text):
+                cid = name + body[:40]
+                if cid not in seen_concepts:
+                    seen_concepts.add(cid)
+                    # 构建摘要：名称 + 正文 / 章节预览
+                    info = f"【{name}】（{c.get('类型', '?')}）"
+                    if body:
+                        info += f"\n{body[:400]}"
+                    elif sections:
+                        for sec_name in list(sections.keys())[:3]:
+                            sec_text = sections[sec_name][:200]
+                            if sec_text.strip():
+                                info += f"\n[{sec_name}]: {sec_text}"
+                    concept_candidates.append((name, info))
+    for name, info in concept_candidates[:3]:
+        results.append({
+            "id": f"concept:{name}",
+            "collection": "kb_concepts",
+            "document": info,
+        })
+    return results
 
+
+def _keyword_search_docs(query: str, top_k: int = 15) -> list:
+    """关键词路：搜索任务内容、世界观设定、书籍正文、概念设定。
+
+    结果顺序即优先级：任务 → 世界观（精确命中条目名的前置）→ 书籍 → 概念。
+    返回格式与向量结果统一：[{id, collection, document, category}]。
+    """
+    search_terms, query_tokens = _keyword_search_terms(query)
+    if not search_terms:
+        return []
+    candidates = _collect_quest_candidates(search_terms, query_tokens)
+    results = _quest_keyword_results(query, candidates, top_k)
+    lore_results, lore_exact_titles = _lore_keyword_results(query)
+    results = _promote_exact_titles(results + lore_results, lore_exact_titles)
+    results += _book_keyword_results(search_terms)
+    results += _concept_keyword_results(search_terms)
     return results
 
 
@@ -698,7 +885,7 @@ def _quest_chunk_map() -> Dict[str, list]:
     if _vector_store is not None:
         vectors, ids, docs = _vector_store._load("kb_quests_vec")
         _QUEST_VECTORS = vectors
-        for row, (doc_id, text) in enumerate(zip(ids, docs)):
+        for row, (doc_id, text) in enumerate(zip(ids, docs, strict=False)):
             m = _QUEST_CHUNK_RE.match(doc_id)
             if not m or not text:
                 continue
@@ -749,6 +936,117 @@ def _quest_display_chunks(key: str, hit_docs: list, query_vec, budget: int) -> l
     return pieces
 
 
+def _relevance_setup(_vector_store) -> Tuple[str, object]:
+    """向量后端名 + 该后端的相关性阈值（未标定返回 None → 调用方 fail-open）。"""
+    backend = getattr(_vector_store, "embedding_backend", "") if _vector_store is not None else ""
+    return backend, _relevance_thresholds(backend)
+
+
+def _r0_named_guard(query: str) -> str:
+    """阶段 2 · R0：具名引用守卫（确定性，零 LLM）。
+
+    点名的专名全库查不到时返回拒答文案，否则返回空串。
+    """
+    if RELEVANCE_GATE < 2:
+        return ""
+    missing = _missing_named_quotes(query)
+    if not missing:
+        return ""
+    print(f"  -> [相关性闸门] R0 具名引用查无出处：{missing[0]}")
+    _trace_relevance("relevance_gate", {
+        "query": query, "verdict": "硬拒（R0）",
+        "missing_name": missing[0], "stage": RELEVANCE_GATE,
+    })
+    return f"混合检索未找到与「{missing[0]}」相关的内容。"
+
+
+def _hybrid_retrieve(query: str, top_k: int, _vector_store, min_sim: float) -> Tuple[list, list, list, list]:
+    """关键词路 + 向量路 + RRF 融合，返回 (kw_docs, vec_docs, vec_raw, merged)。"""
+    kw_docs = _keyword_search_docs(query, top_k=max(top_k, 15))
+    vec_docs = []
+    vec_raw = []
+    if _vector_store is not None:
+        vec_raw = _vector_store.search(query, top_k=max(top_k, 15), collection=None)
+        # 向量路质量过滤：低于最低相似度的弱召回直接丢弃，不进入 RRF。
+        vec_docs = [d for d in vec_raw if d.get("score", 0.0) >= min_sim]
+    merged = _rrf_fusion(kw_docs, vec_docs, k=60)
+    return kw_docs, vec_docs, vec_raw, merged
+
+
+def _relevance_signal(query: str, kw_docs: list, vec_raw: list, backend: str, conf) -> Tuple[str, float, float, str]:
+    """阶段 1 只记录、阶段 2 起据结论拒绝：返回 (判定, top1, 差值, 拒答文案或空串)。"""
+    if RELEVANCE_GATE < 1:
+        return "", 0.0, 0.0, ""
+    raw_scores = sorted((d.get("score", 0.0) for d in vec_raw), reverse=True)
+    top1 = raw_scores[0] if raw_scores else 0.0
+    top2 = raw_scores[1] if len(raw_scores) > 1 else None
+    delta = (top1 - top2) if top2 is not None else 0.0
+    verdict = _emit_relevance_signal(query, len(kw_docs), top1, top2, backend, conf, RELEVANCE_GATE)
+    if RELEVANCE_GATE >= 2 and verdict.startswith("硬拒"):
+        print(f"  -> [相关性闸门] {verdict}，直接拒答：{query}")
+        return verdict, top1, delta, f"混合检索未找到与「{query}」相关的内容。"
+    return verdict, top1, delta, ""
+
+
+def _quest_query_vector(query: str, kw_docs: list, vec_docs: list, chunk_map: dict, _vector_store):
+    """任务内挑代表 chunk 需要查询向量：只在结果里真的有任务条目时才算一次。"""
+    if _vector_store is None or not any(_get_doc_key(d) in chunk_map for d in kw_docs + vec_docs):
+        return None
+    from kb_vector_store import get_embedder
+
+    return get_embedder(_vector_store.embedding_backend).embed_single(query)
+
+
+def _hybrid_hit_lines(order: int, key: str, kw_docs: list, vec_docs: list,
+                      chunk_map: dict, query_vec, expand_budget: int) -> Tuple[list, int]:
+    """单条命中的展示块：标题行 + 正文（任务条目按 chunk 补代表内容）。返回 (行列表, 剩余预算)。"""
+    # 从关键词结果中找
+    kw_match = [d for d in kw_docs if _get_doc_key(d) == key]
+    vec_match = [d for d in vec_docs if _get_doc_key(d) == key] if vec_docs else []
+    hit_docs = kw_match + vec_match
+    if not hit_docs:
+        return [], expand_budget
+    tags = []
+    if kw_match:
+        tags.append("关键词")
+    if vec_match:
+        tags.append("向量")
+    tag_str = "+".join(tags)
+
+    region = TITLE_REGISTRY.get(key, {}).get("region", "")
+    head = hit_docs[0]
+    collection = head.get("collection", "")
+    category = head.get("category", "")
+    attrs = []
+    if category:
+        attrs.append(category)
+    if region:
+        attrs.append(f"任务地区：{region}")
+    attr_str = f"（{'，'.join(attrs)}）" if attrs else ""
+    score_str = f" 相似度:{vec_match[0].get('score', 0):.4f}" if not kw_match else ""
+    lines = [f"\n【{key}】{attr_str}({collection}) [{tag_str}]{score_str}"]
+
+    # 任务条目：已命中的正文（关键词片段 / 向量 chunk）之外，再按 chunk 序号就近补齐同任务
+    # 其余 chunk；补齐只给 RRF 靠前的任务，且受单次检索总预算约束
+    is_quest = key in chunk_map and any(
+        _QUEST_CHUNK_RE.match(str(d.get("id", ""))) for d in hit_docs
+    )
+    if is_quest:
+        if order < _QUEST_EXPAND_TOP_KEYS:
+            budget = min(_QUEST_SHOW_MAX_CHARS, expand_budget)
+            shown = _quest_display_chunks(key, hit_docs, query_vec, budget)
+            expand_budget -= sum(len(text) for _, text in shown)
+        else:
+            shown = _quest_display_chunks(key, hit_docs, query_vec, 0)
+    else:
+        shown = [("", head.get("document", "")[:_DISPLAY_MAX_CHARS])]
+
+    for label, text in shown:
+        # 关键词路长文档片段最多约 3x400 字，展示上限放宽，避免 R3 类后部关键信息被截断
+        lines.append(f"  [{label}] {text}" if label else f"  {text}")
+    return lines, expand_budget
+
+
 @tool
 def hybrid_search(query: str, top_k: int = 10) -> str:
     """混合检索：同时执行关键词匹配和语义搜索，自动融合排序。大多数内容搜索场景的默认工具。
@@ -757,17 +1055,22 @@ def hybrid_search(query: str, top_k: int = 10) -> str:
     # 延迟导入避免循环依赖（_vector_store 在 data.py 顶层初始化）
     from app.data import _vector_store
 
-    # 关键词路
-    kw_docs = _keyword_search_docs(query, top_k=max(top_k, 15))
-    # 向量路：仅搜索当前有效集合
-    vec_docs = []
-    if _vector_store is not None:
-        vec_raw = _vector_store.search(query, top_k=max(top_k, 15), collection=None)
-        # 向量路质量过滤：低于最低相似度的弱召回直接丢弃，不进入 RRF。
-        vec_docs = [d for d in vec_raw if d.get("score", 0.0) >= VECTOR_MIN_SIMILARITY]
+    _backend, _conf = _relevance_setup(_vector_store)
 
-    # RRF 融合
-    merged = _rrf_fusion(kw_docs, vec_docs, k=60)
+    refusal = _r0_named_guard(query)
+    if refusal:
+        return refusal
+
+    # 关键词路 + 向量路：阶段 2 起用按后端标定的下限（未标定则退回常量）
+    _min_sim = VECTOR_MIN_SIMILARITY
+    if RELEVANCE_GATE >= 2 and _conf:
+        _min_sim = _conf["rrf_min"]
+    kw_docs, vec_docs, vec_raw, merged = _hybrid_retrieve(query, top_k, _vector_store, _min_sim)
+
+    # 相关性信号：阶段 1 只记录（不改输出），阶段 2 起据结论拒绝与标注
+    _verdict, _top1, _delta, refusal = _relevance_signal(query, kw_docs, vec_raw, _backend, _conf)
+    if refusal:
+        return refusal
 
     # 取 top_k 结果
     top_keys = [key for key, _ in merged[:top_k]]
@@ -776,60 +1079,18 @@ def hybrid_search(query: str, top_k: int = 10) -> str:
     lines = [f"\n===== 混合检索「{query}」({len(top_keys)}条结果) ====="]
     chunk_map = _quest_chunk_map()
     expand_budget = _QUEST_EXPAND_TOTAL_CHARS
-    # 任务内挑代表 chunk 需要查询向量：只在结果里真的有任务条目时才算一次
-    query_vec = None
-    if _vector_store is not None and any(_get_doc_key(d) in chunk_map for d in kw_docs + vec_docs):
-        from kb_vector_store import get_embedder
-
-        query_vec = get_embedder(_vector_store.embedding_backend).embed_single(query)
+    query_vec = _quest_query_vector(query, kw_docs, vec_docs, chunk_map, _vector_store)
     for order, key in enumerate(top_keys):
-        # 从关键词结果中找
-        kw_match = [d for d in kw_docs if _get_doc_key(d) == key]
-        vec_match = [d for d in vec_docs if _get_doc_key(d) == key] if vec_docs else []
-        hit_docs = kw_match + vec_match
-        if not hit_docs:
-            continue
-        tags = []
-        if kw_match:
-            tags.append("关键词")
-        if vec_match:
-            tags.append("向量")
-        tag_str = "+".join(tags)
-
-        region = TITLE_REGISTRY.get(key, {}).get("region", "")
-        head = hit_docs[0]
-        collection = head.get("collection", "")
-        category = head.get("category", "")
-        attrs = []
-        if category:
-            attrs.append(category)
-        if region:
-            attrs.append(f"任务地区：{region}")
-        attr_str = f"（{'，'.join(attrs)}）" if attrs else ""
-        score_str = f" 相似度:{vec_match[0].get('score', 0):.4f}" if not kw_match else ""
-        lines.append(f"\n【{key}】{attr_str}({collection}) [{tag_str}]{score_str}")
-
-        # 任务条目：已命中的正文（关键词片段 / 向量 chunk）之外，再按 chunk 序号就近补齐同任务
-        # 其余 chunk；补齐只给 RRF 靠前的任务，且受单次检索总预算约束
-        is_quest = key in chunk_map and any(
-            _QUEST_CHUNK_RE.match(str(d.get("id", ""))) for d in hit_docs
+        block, expand_budget = _hybrid_hit_lines(
+            order, key, kw_docs, vec_docs, chunk_map, query_vec, expand_budget
         )
-        if is_quest:
-            if order < _QUEST_EXPAND_TOP_KEYS:
-                budget = min(_QUEST_SHOW_MAX_CHARS, expand_budget)
-                shown = _quest_display_chunks(key, hit_docs, query_vec, budget)
-                expand_budget -= sum(len(text) for _, text in shown)
-            else:
-                shown = _quest_display_chunks(key, hit_docs, query_vec, 0)
-        else:
-            shown = [("", head.get("document", "")[:_DISPLAY_MAX_CHARS])]
-
-        for label, text in shown:
-            # 关键词路长文档片段最多约 3x400 字，展示上限放宽，避免 R3 类后部关键信息被截断
-            lines.append(f"  [{label}] {text}" if label else f"  {text}")
+        lines.extend(block)
 
     if not top_keys:
         return f"混合检索未找到与「{query}」相关的内容。"
+    # 阶段 2 · R4：弱证据在结果尾部标注（供规划层同源解析并触发确认）
+    if RELEVANCE_GATE >= 2 and _verdict.startswith("弱"):
+        lines.append("\n" + format_evidence_line(len(kw_docs), _top1, _delta))
     return "\n".join(lines)
 
 
@@ -849,7 +1110,7 @@ def kb_vector_search(query: str, collection: str = "", top_k: int = 5) -> str:
     if not results:
         return f"语义搜索未找到与「{query}」相关的内容。"
     lines = [f"===== 语义搜索「{query}」({len(results)}条结果) ====="]
-    for i, r in enumerate(results):
+    for _i, r in enumerate(results):
         # 从 id 中提取类型和标题信息
         doc_id = r.get("id", "")
         collection = r.get("collection", "")

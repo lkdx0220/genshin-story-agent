@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -39,24 +40,30 @@ _FULL_TEXT_HEADER = "[全景全文读取]"
 _MAP_SECTION_MARKER = "\n\n===== 相关地图文本"
 _ENTITY_SECTION_MARKER = "\n\n===== 相关角色/组织/圣遗物/地点"
 
+# 词条 ID 兼容多源词条图：米游社是纯数字，B 站是 bwiki_<hex>。
+# 历史缺陷：这里曾限定 (ID \d+)，导致所有 B 站条目被静默丢弃、进不了任何分节。
 _TASK_BLOCK_RE = re.compile(
-    r"===== 任务 \d+: (.+?) \(ID (\d+)\) 共 \d+ 字 =====\n(.*?)(?=\n===== 任务 |\n\n===== 相关地图文本全文|\Z)",
+    r"===== 任务 \d+: (.+?) \(ID ([A-Za-z0-9_]+)\) 共 \d+ 字 =====\n(.*?)(?=\n===== 任务 |\n\n===== 相关地图文本全文|\Z)",
     re.S,
 )
 _MAP_BLOCK_RE = re.compile(
-    r"----- (.+?) \(ID (\d+)\) 共 \d+ 字 -----\n(.*?)(?=\n----- |\Z)",
+    r"----- (.+?) \(ID ([A-Za-z0-9_]+)\) 共 \d+ 字 -----\n(.*?)(?=\n----- |\Z)",
     re.S,
 )
 _ENTITY_BLOCK_RE = re.compile(
-    r"----- (.+?) \((.+?), ID (\d+)\) 共 \d+ 字 -----\n(.*?)(?=\n----- |\Z)",
+    r"----- (.+?) \((.+?), ID ([A-Za-z0-9_]+)\) 共 \d+ 字 -----\n(.*?)(?=\n----- |\Z)",
     re.S,
 )
 
-_EMIT: Optional[Callable[[str, dict], None]] = None
+# 每线程一份 emit 回调：gunicorn 单 worker 多线程下，并发 L3 请求若共用全局变量会互相覆盖，
+# 导致流式片段发到别人的连接里（与 app/progress.py 同模式）。
+_tls = threading.local()
 _SECTION_WORKERS = 4
 _ENTITY_PER_SECTION = 15
 _MAX_ENTITY_CHARS = 3000
 _MAX_TASK_RELATED_ENTITY_CHARS = 24000
+_MAX_TASK_SECTIONS = 24  # 独立任务节上限（可用 L3_MAX_TASK_SECTIONS 覆盖）；超出的任务按 _MAX_OTHER_TASKS_CHARS 切块合并，内容不丢，总节数 = 独立节 + 合并节
+_MAX_OTHER_TASKS_CHARS = 60000  # 单个合并节的证据字数上限（超了就再开一节，而不是截断丢内容）
 _COVERAGE_MAX_NAMES = 12
 _COVERAGE_CONTEXT_CHARS = 260
 _SPEAKER_RE = re.compile(r"(?:^|\n)\s*\*?\s*([\u4e00-\u9fff·]{2,10})\s*[：:]")
@@ -88,9 +95,10 @@ class PanoramaSection:
 
 
 def _emit_progress(event: str, data: dict) -> None:
-    if _EMIT is not None:
+    _emit = getattr(_tls, "emit", None)
+    if _emit is not None:
         try:
-            _EMIT(event, data)
+            _emit(event, data)
         except Exception:
             pass
 
@@ -129,10 +137,30 @@ def _split_evidence(text: str):
     return tasks, maps, entities
 
 
+def _env_int(name: str, default: int) -> int:
+    """读整数型环境变量：非法值回退默认，不抛异常。"""
+    try:
+        return int(os.getenv(name, str(default)) or default)
+    except ValueError:
+        return default
+
+
 def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "\n...[本节证据过长，已截断]"
+
+
+def _task_related_entities(content, maps, entities) -> str:
+    """任务正文里出现过的实体标题，才作为该任务线的相关实体证据。"""
+    related = []
+    for etitle, etype, eeid, econtent in entities:
+        if len(etitle) >= 2 and (etitle in content or any(etitle in m[2] for m in maps)):
+            related.append((etitle, etype, eeid, econtent))
+    return "\n\n".join(
+        f"----- {etitle} ({etype}, ID {eeid}) -----\n{_truncate(econtent, _MAX_ENTITY_CHARS)}"
+        for etitle, etype, eeid, econtent in related
+    )
 
 
 def _build_task_sections(tasks, maps, entities) -> List[PanoramaSection]:
@@ -140,17 +168,17 @@ def _build_task_sections(tasks, maps, entities) -> List[PanoramaSection]:
     map_text = "\n\n".join(
         f"----- {title} (ID {eid}) -----\n{content}" for title, eid, content in maps
     )
-    for title, eid, content in tasks:
+    # 分节上限：超出的任务并入一节，内容保留、只少几次 LLM 调用（多源图让任务数可达 40+）。
+    cap = _env_int("L3_MAX_TASK_SECTIONS", _MAX_TASK_SECTIONS)
+    if cap < 1 or len(tasks) <= cap:
+        head, tail = tasks, []
+    else:
+        head, tail = tasks[:cap - 1], tasks[cap - 1:]
+
+    for title, eid, content in head:
         # 第一版不做 Embedding 语义切片：任务正文里出现过的实体标题，
         # 才作为该任务线的相关实体证据；跨线实体在多个任务正文里出现时会自然重复进入多个桶。
-        related = []
-        for etitle, etype, eeid, econtent in entities:
-            if len(etitle) >= 2 and (etitle in content or any(etitle in m[2] for m in maps)):
-                related.append((etitle, etype, eeid, econtent))
-        related_text = "\n\n".join(
-            f"----- {etitle} ({etype}, ID {eeid}) -----\n{_truncate(econtent, _MAX_ENTITY_CHARS)}"
-            for etitle, etype, eeid, econtent in related
-        )
+        related_text = _task_related_entities(content, maps, entities)
         evidence_parts = [f"【任务全文：{title}】\n{content}"]
         if map_text:
             evidence_parts.append("【相关地图文本】\n" + map_text)
@@ -165,6 +193,40 @@ def _build_task_sections(tasks, maps, entities) -> List[PanoramaSection]:
                 instruction=_TASK_INSTRUCTION,
             )
         )
+
+    if tail:
+        # 合并节：每条任务只带自己的正文与相关实体，地图文本每节共用一份。
+        # 按字数切块而不是硬截断——超限时多开一节，避免把尾部任务整条丢掉。
+        blocks, cur, cur_len = [], [], 0
+        for title, _eid, content in tail:
+            block = f"----- 任务：{title} -----\n【任务全文】\n{content}"
+            related_text = _task_related_entities(content, maps, entities)
+            if related_text:
+                block += "\n\n【该任务线相关实体档案】\n" + _truncate(related_text, _MAX_ENTITY_CHARS)
+            if cur and cur_len + len(block) > _MAX_OTHER_TASKS_CHARS:
+                blocks.append(cur)
+                cur, cur_len = [], 0
+            cur.append(block)
+            cur_len += len(block)
+        if cur:
+            blocks.append(cur)
+        for idx, chunk in enumerate(blocks, 1):
+            body = "\n\n".join(chunk)
+            if map_text:
+                body += "\n\n【相关地图文本】\n" + map_text
+            if len(blocks) == 1:
+                key, title = "task_other", f"其他任务要点（{len(chunk)} 条）"
+            else:
+                key, title = f"task_other{idx}", f"其他任务要点 {idx}/{len(blocks)}（{len(chunk)} 条）"
+            sections.append(
+                PanoramaSection(
+                    key=key,
+                    title=title,
+                    kind="task",
+                    text=body,
+                    instruction=_TASK_INSTRUCTION,
+                )
+            )
     return sections
 
 
@@ -263,7 +325,7 @@ def _generate_one(section: PanoramaSection) -> str:
         return content
     except Exception as e:
         print(f"  -> [L3分段] {section.key} 失败：{e}")
-        return f"[本节生成失败：{e}]"
+        return "[本节生成失败，请稍后重试]"
 
 
 def _ordered_parallel(sections: List[PanoramaSection]) -> List[str]:
@@ -284,7 +346,7 @@ def _ordered_parallel(sections: List[PanoramaSection]) -> List[str]:
 
 def _assemble(sections: List[PanoramaSection], results: List[str], original_query: str) -> str:
     parts = [f"# {original_query}\n"]
-    for section, content in zip(sections, results):
+    for section, content in zip(sections, results, strict=False):
         parts.append(f"\n\n## {section.title}\n\n{content.strip()}")
     return "".join(parts).strip()
 
@@ -295,7 +357,7 @@ def _entity_titles(sections) -> List[str]:
         if section.kind != "entity":
             continue
         for line in section.text.splitlines():
-            m = re.match(r"----- (.+?) \((.+?), ID (\d+)\) -----", line.strip())
+            m = re.match(r"----- (.+?) \((.+?), ID ([A-Za-z0-9_]+)\) -----", line.strip())
             if m:
                 title = m.group(1).strip()
                 # 仅图谱关联的弱条目不参与覆盖兜底：不强制出现在答案里。
@@ -366,13 +428,12 @@ def _build_coverage_section(missing_names: List[str], sections) -> PanoramaSecti
 
 def generate_panorama_answer(messages, original_query: str, emit: Optional[Callable[[str, dict], None]] = None) -> str:
     """L3 全景题入口：返回最终答案字符串；解析失败返回空字符串由调用方回退。"""
-    global _EMIT
-    _EMIT = emit
+    _tls.emit = emit
     sections = build_sections(messages, original_query)
     if not sections:
         return ""
     # 冒烟测试用：L3_PANORAMA_LIMIT=1 时只生成第一节，避免每次测试都跑完整 8 节。
-    limit = int(os.getenv("L3_PANORAMA_LIMIT", "0") or "0")
+    limit = _env_int("L3_PANORAMA_LIMIT", 0)
     if limit > 0:
         sections = sections[:limit]
     print(f"  -> [L3分段] 共 {len(sections)} 节：{[s.key for s in sections]}")

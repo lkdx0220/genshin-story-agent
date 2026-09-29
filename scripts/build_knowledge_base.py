@@ -15,7 +15,7 @@
 """
 
 import os, sys, re, json, time, argparse
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 import requests
 
 if sys.platform == 'win32':
@@ -241,6 +241,26 @@ def parse_character(page_title: str, wikitext: str) -> Optional[Dict]:
             if val:
                 val = re.sub(r'<[^>]+>', '', val).strip()[:1500]
                 stories[field] = val
+        # Wiki 用「冒险笔记」承载角色的特殊档案（如爱可菲的「多目标烹饪机关组」）。
+        # 冒险笔记名称 是这篇档案的真实标题，不能被丢掉。
+        note_name = clean_value(story_tmpl.get("冒险笔记名称", ""))
+        note_body = clean_value(story_tmpl.get("冒险笔记", ""))
+        if note_body:
+            for br in ("<br>", "<br/>", "<br />"):
+                note_body = note_body.replace(br, "\n")
+            note_body = re.sub(r'<[^>]+>', '', note_body).strip()
+            note_body = re.sub(r'\n{3,}', '\n\n', note_body)
+            note_unlock = clean_value(story_tmpl.get("冒险笔记解锁条件", ""))
+            if note_unlock:
+                note_body = f"【解锁条件】{note_unlock}\n\n{note_body}"
+            stories[note_name or "冒险笔记"] = note_body[:4000]
+        note_end = clean_value(story_tmpl.get("冒险笔记结束语", ""))
+        if note_end and note_name:
+            for br in ("<br>", "<br/>", "<br />"):
+                note_end = note_end.replace(br, "\n")
+            note_end = re.sub(r'<[^>]+>', '', note_end).strip()
+            if note_end:
+                stories[f"{note_name}·结束语"] = note_end[:1500]
         story_text = stories.get("角色详细", "") or stories.get("角色故事1", "")
 
     if not intro and story_text:
@@ -503,7 +523,6 @@ def generate_knowledge_base(characters: List[Dict], weapons: List[Dict],
 
     # 格式化 Python 列表
     def format_list(data: List[Dict], var_name: str) -> str:
-        import pprint
         lines = [f"{var_name} = ["]
         for i, item in enumerate(data):
             # 用 repr 方式输出字典
