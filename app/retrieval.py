@@ -30,15 +30,18 @@ from character_aliases import CHARACTER_ALIASES, ALIAS_MAP
 
 # ====== 查询消毒与别名检测 ======
 
-def _sanitize_query(query: str) -> str:
-    """安全层：移除用户输入中的指令性内容，提取核心查询文本。
-    剥离括号内容、末尾标点等非实体部分。"""
-    # 移除中英文括号及其内容（典型 prompt 注入路径）
-    cleaned = re.sub(r'[（(][^）)]*[）)]', '', query)
-    # 移除末尾纯标点
-    cleaned = re.sub(r'[？！。，、；：\s]+$', '', cleaned)
-    return cleaned.strip()
+def _sanitize_query(query: str, limit: int = 200) -> str:
+    """安全层：剥离指令性内容（中英文括号及其内容、末尾标点），并去控制字符、限长。
 
+    括号剥离是别名检测的语义依赖（「胡桃」→胡桃），不能去掉；这里是**保留原语义**的加固：
+    ① 去控制字符（换行/制表/ESC 等——原实现会让它们原样进入提示词）② 限长 200。
+    """
+    if not query:
+        return ""
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", " ", str(query))
+    cleaned = re.sub(r"[（(][^）)]*[）)]", "", cleaned)
+    cleaned = re.sub(r"[？！。，、；：\s]+$", "", cleaned)
+    return cleaned.strip()[:limit]
 
 def _is_compound_hit(query: str, alias: str, pos: int) -> bool:
     """判断别名是否作为复合词的一部分出现（如 '风龙' 在 '风龙废墟' 中）。
