@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Tuple
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 
 from app.config import (
-    MAX_AGENT_ITERATIONS, MAX_PLAN_RETRIES, MAX_FAST_ITERATIONS, RECENT_TURNS,
+    MAX_AGENT_ITERATIONS, MAX_PLAN_RETRIES, MAX_FAST_ITERATIONS, RECENT_TURNS, CONTENT_DIR,
 )
 from app.llm import (
     llm, plan_llm, plan_llm_l2, assess_llm, llm_invoke_with_retry, _select_answer_llm,
@@ -879,6 +879,7 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         # ---- 步骤2：根据意图动态绑定工具 ----
         routed_tools = get_tools_for_intent(intent_labels, _tools_by_name)
         routed_tools = _maybe_add_entity_graph_tool(original_query, routed_tools)
+        routed_tools = _maybe_add_named_entity_tools(state, original_query, routed_tools)
         tool_names = [t.name for t in routed_tools]
         print(f"  [路由] 注入工具({len(routed_tools)}个): {tool_names}")
         trace_emit("route", {
@@ -928,6 +929,7 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         if intent_labels:
             routed_tools = get_tools_for_intent(intent_labels, _tools_by_name)
         routed_tools = _maybe_add_entity_graph_tool(original_query, routed_tools)
+        routed_tools = _maybe_add_named_entity_tools(state, original_query, routed_tools)
         # 搜索碰壁后补充暴露 search_world（lore/NPC组织），初始不暴露。
         had_search_world = any(
             getattr(t, "name", "") == "search_world" for t in routed_tools
@@ -1053,6 +1055,13 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     )
     if entity_auto is not None:
         return entity_auto
+
+    # 点名任务/书籍的确定性读全文（挂载点B）：Planner 想零工具收工但全文还没读时补读。
+    full_text_read_auto = _maybe_auto_full_text_read(
+        state, messages, routed_tools, iteration, response=response,
+    )
+    if full_text_read_auto is not None:
+        return full_text_read_auto
 
     # 概念三视图补位（挂载点B）：LLM 本轮没出任何工具调用且想进入回答阶段，
     # 先检查概念维度是否齐；不齐则代码直接补发，Planner 不能提前收工。
@@ -2528,6 +2537,260 @@ def _build_graph_map_tool_calls(original_query: str, calls: list, iteration: int
     return tool_calls, "\n".join(content_parts)
 
 
+# ====== 点名任务/书籍的确定性读全文 ======
+# 治 planner 采样抖动：同一批题目下约 1/3 概率少调一次「读全文」工具（RX3/CX1/XX2 实测），
+# 只靠 search_all/hybrid_search 的片段答题会漏掉只在全文里出现的关键句。
+# 触发只用题面/上轮原文（XX 类多轮指代实体在上一条人类消息里），与模型自述无关；
+# 只在挂载点B（LLM 已想零工具收工）介入，不抢 Planner 的检索决策。
+_READ_FULL_TOOLS = ("load_quest_content", "load_book_content", "query_character")
+# 身份类问题（"她是谁/是什么身份/来历"）：优先读角色词条，不叠加整本书。
+_AUTO_READ_IDENTITY_RE = re.compile(r"身份|是谁|指谁|来历|背景|身世|原名|本名|成为|之前|原来")
+_AUTO_READ_CHARS_CACHE = None
+_AUTO_READ_MAX = 2
+_AUTO_READ_MIN_TITLE = 4
+_AUTO_READ_BOOKS_CACHE = None
+_AUTO_READ_QUESTS_CACHE = None
+
+
+def _auto_read_book_titles() -> list:
+    """books.json 的书名（规范化后 >=4 字），按长度降序；构建一次后缓存。"""
+    global _AUTO_READ_BOOKS_CACHE
+    if _AUTO_READ_BOOKS_CACHE is not None:
+        return _AUTO_READ_BOOKS_CACHE
+    items = []
+    try:
+        with open(os.path.join(CONTENT_DIR, "books.json"), "r", encoding="utf-8") as f:
+            for book in json.load(f) or []:
+                if not isinstance(book, dict):
+                    continue
+                raw = (book.get("title") or "").strip()
+                norm = _probe_for_entity_match(raw)
+                if len(norm) >= _AUTO_READ_MIN_TITLE:
+                    items.append((raw, norm))
+    except Exception as exc:
+        print(f"  [读全文钩子] 书名索引构建失败（已跳过）: {type(exc).__name__}")
+    # 长名优先：避免「至冬国通史」被更短的子串名抢占。
+    items.sort(key=lambda pair: len(pair[1]), reverse=True)
+    _AUTO_READ_BOOKS_CACHE = items
+    return items
+
+
+def _auto_read_quest_titles() -> list:
+    """任务名（TITLE_REGISTRY 键，规范化后 >=4 字），按长度降序；构建一次后缓存。"""
+    global _AUTO_READ_QUESTS_CACHE
+    if _AUTO_READ_QUESTS_CACHE is not None:
+        return _AUTO_READ_QUESTS_CACHE
+    items = []
+    for title in TITLE_REGISTRY:
+        raw = (title or "").strip()
+        norm = _probe_for_entity_match(raw)
+        if len(norm) >= _AUTO_READ_MIN_TITLE:
+            items.append((raw, norm))
+    items.sort(key=lambda pair: len(pair[1]), reverse=True)
+    _AUTO_READ_QUESTS_CACHE = items
+    return items
+
+
+def _auto_read_character_names() -> list:
+    """角色规范名列表（别名展开，>=2 字），按长度降序；构建一次后缓存。"""
+    global _AUTO_READ_CHARS_CACHE
+    if _AUTO_READ_CHARS_CACHE is not None:
+        return _AUTO_READ_CHARS_CACHE
+    items = []
+    for alias in ALIASES_SORTED:
+        raw = (alias or "").strip()
+        # 别名至少 3 字：2 字别名（「主角」「奶奶」）太容易在题面里偶然出现，会过度触发。
+        if len(raw) < 3:
+            continue
+        canon = (ALIAS_MAP.get(raw) or raw).strip()
+        if len(canon) < 2:
+            continue
+        items.append((canon, _probe_for_entity_match(raw)))
+        if canon != raw:
+            items.append((canon, _probe_for_entity_match(canon)))
+    # 去重后长名优先（避免「库塔尔」被更短的别名抢占）
+    uniq = {}
+    for canon, norm in items:
+        if norm and norm not in uniq:
+            uniq[norm] = canon
+    out = sorted(uniq.items(), key=lambda pair: len(pair[0]), reverse=True)
+    _AUTO_READ_CHARS_CACHE = [(canon, norm) for norm, canon in out]
+    return _AUTO_READ_CHARS_CACHE
+
+
+def _named_entity_probe(state, query: str) -> str:
+    """点名检测文本：当前问题 + 上轮上下文（多轮指代题点名的实体只在这里）。"""
+    parts = [query or "", state.get("user_query") or ""]
+    for turn in (state.get("conversation_history") or [])[-2:]:
+        parts.append(str(turn.get("user") or "") if isinstance(turn, dict) else str(turn or ""))
+    return _probe_for_entity_match("\n".join(p for p in parts if p))
+
+
+def _maybe_add_named_entity_tools(state, query: str, routed_tools):
+    """题面/上轮点名了角色｜书籍｜任务时，把对应的「读实体」工具补进候选集。
+
+    意图分类器对同一题可能给不同标签（XX2 实测），而 query_character 只在 B、load_quest_content
+    只在 D、load_book_content 只在 E——工具不在候选里时，Planner 想读也读不到，
+    挂载点B 的确定性补读同样被挡在门外。这里只补「题面确实点名」的那一个工具，不做全量放开。
+    """
+    probe = _named_entity_probe(state, query)
+    if not probe:
+        return routed_tools
+    have = {getattr(t, "name", str(t)) for t in routed_tools}
+    added = []
+
+    def _take(tool_name: str):
+        if tool_name in have:
+            return None
+        tool = _tools_by_name.get(tool_name)
+        if tool is None:
+            return None
+        have.add(tool_name)
+        return tool
+
+    # 角色：只在身份类问法下补（否则角色名出现在题面太常见）
+    if _AUTO_READ_IDENTITY_RE.search(probe):
+        tool = _take("query_character")
+        if tool is not None:
+            for _canon, norm in _auto_read_character_names():
+                if norm in probe:
+                    added.append(tool)
+                    break
+    # 书籍
+    tool = _take("load_book_content")
+    if tool is not None:
+        for _raw, norm in _auto_read_book_titles():
+            if norm in probe:
+                added.append(tool)
+                break
+    # 任务
+    tool = _take("load_quest_content")
+    if tool is not None:
+        for _raw, norm in _auto_read_quest_titles():
+            if norm in probe:
+                added.append(tool)
+                break
+
+    if not added:
+        return routed_tools
+    print(f"  [路由] 题面点名实体，补挂读实体工具: {[getattr(t, 'name', t) for t in added]}")
+    return list(routed_tools) + added
+
+
+def _auto_read_probe_text(state, messages) -> str:
+    """点名检测文本：当前问题 + 最近两条人类消息（多轮指代只在上下文里点名实体）。"""
+    parts = [state.get("user_query") or "", state.get("rewritten_query") or ""]
+    # 上轮上下文：适配器把 context 放进 conversation_history（不是 messages），
+    # 多轮指代题（"那她呢…"）点名的实体只在这里出现。
+    for turn in (state.get("conversation_history") or [])[-2:]:
+        if isinstance(turn, dict):
+            parts.append(str(turn.get("user") or ""))
+        else:
+            parts.append(str(turn or ""))
+    humans = [m for m in messages if isinstance(m, HumanMessage)]
+    for msg in humans[-2:]:
+        parts.append(str(getattr(msg, "content", "") or ""))
+    return _probe_for_entity_match("\n".join(p for p in parts if p))
+
+
+def _attempted_read_names(messages) -> set:
+    """已经用 load_quest_content / load_book_content 尝试过的名字（规范化，去引号书名号）。"""
+    names = set()
+    for msg in messages:
+        if not isinstance(msg, AIMessage):
+            continue
+        for tc in (getattr(msg, "tool_calls", None) or []):
+            if tc.get("name") not in _READ_FULL_TOOLS:
+                continue
+            args = tc.get("args", {}) or {}
+            value = args.get("quest_name") or args.get("book_name") or args.get("name")
+            if value:
+                names.add(_probe_for_entity_match(str(value)))
+    return names
+
+
+def _maybe_auto_full_text_read(state, messages, routed_tools, iteration, response=None):
+    """题面点名了具体任务/书籍，而 Planner 想零工具收工时，代码强制补一次读全文。
+
+    返回 None 表示无需介入。只在挂载点B（response 非空）介入：挂载点A 会抢 Planner 的
+    检索决策，而这里要治的是「明明点名了却只拿片段就收工」。
+    """
+    if response is None:
+        return None
+    original_query = state.get("user_query", "") or state.get("rewritten_query", "")
+    if not original_query:
+        return None
+    tool_names = {getattr(t, "name", str(t)) for t in routed_tools}
+    if not any(name in tool_names for name in _READ_FULL_TOOLS):
+        return None
+    if iteration + 1 >= MAX_AGENT_ITERATIONS:
+        return None
+    probe = _auto_read_probe_text(state, messages)
+    if not probe:
+        return None
+    attempted = _attempted_read_names(messages)
+
+    calls = []
+    # 身份类问题（XX2 实测）：点名角色时优先读角色词条——Planner 常只搜片段就收工，
+    # 漏掉「执行官」这类只写在角色档案里的身份信息。
+    if "query_character" in tool_names and _AUTO_READ_IDENTITY_RE.search(probe):
+        for canon, norm in _auto_read_character_names():
+            if len(calls) >= _AUTO_READ_MAX:
+                break
+            if norm in attempted or norm not in probe:
+                continue
+            if any(canon == c[2] for c in calls):
+                continue
+            calls.append(("query_character", "name", canon, norm))
+    if not calls:
+        for raw, norm in _auto_read_book_titles():
+            if len(calls) >= _AUTO_READ_MAX:
+                break
+            if norm in attempted or norm not in probe:
+                continue
+            calls.append(("load_book_content", "book_name", raw, norm))
+    if len(calls) < _AUTO_READ_MAX:
+        for raw, norm in _auto_read_quest_titles():
+            if len(calls) >= _AUTO_READ_MAX:
+                break
+            if norm in attempted or norm not in probe:
+                continue
+            calls.append(("load_quest_content", "quest_name", raw, norm))
+    if not calls:
+        return None
+
+    tool_calls = []
+    content_parts = [
+        "【执行报告】",
+        f"用户问题回显：{original_query}",
+        "用户意图：了解题面点名的任务/书籍的完整剧情文本",
+        "工具决策：题面点名了具体任务/书籍，但当前只有片段检索结果，"
+        "系统确定性补读全文（避免漏掉只在全文里出现的关键句）：",
+    ]
+    for i, (tool_name, arg_key, raw, _norm) in enumerate(calls, 1):
+        tool_calls.append({
+            "name": tool_name,
+            "args": {arg_key: raw},
+            "id": f"call_auto_read_{i}_{iteration + 1}",
+            "type": "tool_call",
+        })
+        kind = "书籍" if tool_name == "load_book_content" else "任务"
+        content_parts.append(f"{i}. 读取{kind}《{raw}》全文")
+    content = "\n".join(content_parts)
+    print(f"  -> [读全文补全] 点名但未读全文，确定性补读：{[(n, r) for n, _, r, _ in calls]}")
+    trace_emit("auto_full_text_read", {
+        "run_id": state.get("run_id"),
+        "calls": [{"tool": n, "value": r} for n, _, r, _ in calls],
+        "iteration": iteration + 1,
+    })
+    return {
+        "messages": [AIMessage(content=content, tool_calls=tool_calls)],
+        "execution_plan": content,
+        "iteration": iteration + 1,
+        "intent_labels": state.get("intent_labels", []),
+    }
+
+
 def _maybe_auto_graph_map_texts(state, messages, routed_tools, iteration, response=None):
     """多任务+地图文本问题的确定性地图补全；返回 None 表示无需介入。"""
     original_query = state.get("user_query", "") or state.get("rewritten_query", "")
@@ -3579,6 +3842,29 @@ def _confirm_weak_evidence(state) -> None:
         m.content = f"未找到与「{question[:40]}」相关的内容（相关性确认未通过）。"
     print(f"  -> [相关性闸门] 裁判判否，已降级 {len(weak)} 条弱证据")
 
+def _is_no_progress(tool_message) -> bool:
+    """重复调用被守卫拦下的返回：不带新信息，按「空转」计。"""
+    text = str(getattr(tool_message, "content", "") or "").strip()
+    return text.startswith("[系统提示] 与上一次完全相同的调用")
+
+
+def _count_recent_no_progress(messages) -> int:
+    """本轮（最近一条人类消息之后）内「重复调用被拦」的条数。
+
+    不按「最后一批」计：Planner 每次重复调用都是独立一轮，最后一批永远只有 1 条，
+    会漏掉空转累积（XX2 实测连续 8 轮各 1 条）。
+    """
+    turn_start = 0
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], HumanMessage):
+            turn_start = i + 1
+            break
+    return sum(
+        1 for msg in messages[turn_start:]
+        if isinstance(msg, ToolMessage) and _is_no_progress(msg)
+    )
+
+
 def _count_recent_tool_failures(messages) -> int:
     """最近一轮 AI 工具调用之后，连续「未找到」的条数（遇到成功即清零并停止）。"""
     failures = 0
@@ -3620,9 +3906,13 @@ def _turn_window_stats(messages) -> Tuple[bool, int]:
     return has_any_success, rejected
 
 
-def _trigger_tool_meltdown(messages, failures: int, rejected: int) -> None:
+def _trigger_tool_meltdown(messages, failures: int, rejected: int, no_progress: int = 0) -> None:
     """注入熔断提示并清空最新 AIMessage 的 tool_calls，阻止继续执行工具。"""
-    if rejected >= 2:
+    if no_progress >= 2:
+        print(f"  -> 重复调用空转({no_progress}次)，进入回答阶段")
+        hint = ('\n\n[系统提示] 连续重复调用同一工具且未带来新信息，已触发熔断。'
+                '请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。')
+    elif rejected >= 2:
         print(f"  -> 相关性确认连续判否({rejected}次)，进入回答阶段")
         hint = ('\n\n[系统提示] 连续 2 轮检索均未通过相关性确认（检索到的内容与问题无关），'
                 '已触发熔断。请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。')
@@ -3658,9 +3948,11 @@ def route_after_tools(state: GenshinAdvisorState) -> str:
 
     failures = _count_recent_tool_failures(messages)
     has_any_success, rejected = _turn_window_stats(messages)
+    # 重复调用空转：不受 has_any_success 影响（首次成功不该为后续空转背书）
+    no_progress = _count_recent_no_progress(messages)
 
-    if (failures >= 2 and not has_any_success) or rejected >= 2:
-        _trigger_tool_meltdown(messages, failures, rejected)
+    if (failures >= 2 and not has_any_success) or rejected >= 2 or no_progress >= 2:
+        _trigger_tool_meltdown(messages, failures, rejected, no_progress)
         return "answer_agent"
 
     return "plan_agent"
