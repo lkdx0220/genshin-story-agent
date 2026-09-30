@@ -39,6 +39,13 @@ def _load_quest_list(filename: str) -> list:
     if safe_name != filename or not safe_name.endswith(".json") or ".." in safe_name:
         return []
     path = os.path.join(CONTENT_DIR, safe_name)
+    # 符号链接围栏：归一化后必须仍在 CONTENT_DIR 内（数据目录来自本地仓库，这里是纵深防御）。
+    try:
+        if os.path.commonpath([os.path.realpath(path), os.path.realpath(CONTENT_DIR)]) != os.path.realpath(CONTENT_DIR):
+            print(f"  [工具] 拒绝读取 CONTENT_DIR 之外的路径：{safe_name!r}")
+            return []
+    except ValueError:
+        return []
     try:
         with open(path, "r", encoding="utf-8") as f:
             quests = json.load(f)
@@ -134,7 +141,7 @@ def search_activity(keyword: str, activity_name: str = "") -> str:
         hint = f"（限定活动「{activity_name}」）" if activity_name else ""
         return f"未在活动剧情中找到与「{keyword}」相关的内容。{hint}"
 
-    print(f"[工具] 活动搜索: {keyword}" + (f" @ {activity_name}" if activity_name else "") + f" -> {len(results)}条")
+    print(f"[工具] 活动搜索: {keyword!r}" + (f" @ {activity_name}" if activity_name else "") + f" -> {len(results)}条")
 
     # Reranker 重排序
     rerank_docs = [f"【{r['title']}】{r['snippet']}" for r in results]
@@ -434,7 +441,7 @@ def _render_search_all_results(query: str, all_results: list) -> str:
     """无命中直接返回提示；否则打印命中计数并拼接全部结果文本。"""
     if not all_results:
         return f"未找到与「{query}」相关的任何内容。"
-    print(f"[工具] 全局搜索: {query} -> {len(all_results)}条结果")
+    print(f"[工具] 全局搜索: {query!r} -> {len(all_results)}条结果")
     lines = [f"\n===== 搜索「{query}」({len(all_results)}条结果) ====="]
     for _cat, text in all_results:
         lines.append(text)
@@ -509,7 +516,7 @@ def search_lore(keyword: str) -> str:
         return f"在世界观设定中未找到与「{keyword}」相关的内容。"
 
     fallback_info = "" if len(search_terms) == 1 else f"（含词根退化「{'、'.join(search_terms[1:])}」）"
-    print(f"[工具] 世界观搜索: {keyword} -> {len(candidates)}条候选{fallback_info}")
+    print(f"[工具] 世界观搜索: {keyword!r} -> {len(candidates)}条候选{fallback_info}")
 
     # Reranker 重排序
     rerank_docs = [f"【{c['title']}】{c['text']}" for c in candidates]

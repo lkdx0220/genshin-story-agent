@@ -576,7 +576,11 @@ def api_search():
 # 会话存储（简单内存字典，单机使用）
 # 会话按口令分命名空间：每个 k 只看得见自己的列表；本地直连（无口令）落根目录。
 _sessions: Dict[str, list] = {}
-SESSION_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conversation_memory")
+# 会话根目录：默认落项目内 conversation_memory/；演示实例可用 SESSION_DIR 指到独立目录，
+# 避免访客会话与本机历史混在同一处（命名空间仍在其下按口令分租户目录）。
+SESSION_ROOT = (os.getenv("SESSION_DIR") or "").strip() or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "conversation_memory"
+)
 
 
 def _valid_session_id(session_id: str) -> bool:

@@ -1725,6 +1725,7 @@ def _load_wiki_graph_cached():
             _wiki_graph_cache = WikiEntryGraph.load(WIKI_GRAPH_OUTPUT)
         except Exception as e:
             print(f"  -> [wiki图] 加载失败，跳过地图文本补全：{e}")
+            trace_emit("wiki_graph_load_failed", {"error": type(e).__name__})
             _wiki_graph_cache = False
     return _wiki_graph_cache or None
 

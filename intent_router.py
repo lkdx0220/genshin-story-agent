@@ -387,9 +387,18 @@ def _load_registry_from_module(registry: dict, module_attr: str, field: str, lab
 
 def _load_registry_from_json(registry: dict, filename: str, field: str, label: str,
                              use_keys: bool = False) -> None:
-    """从 content_data 的 JSON 装载；use_keys=True 时取对象键名（如 NPC）。"""
+    """从 content_data 的 JSON 装载；use_keys=True 时取对象键名（如 NPC）。
+
+    文件名都是本模块内的字面量；这里做 basename 归一 + .json 白名单式的纵深防御，
+    让静态分析也能确认拼进路径的不含目录成分（与 app/tools/search.py 同一口径）。
+    """
+    safe_name = os.path.basename(filename or "")
+    if safe_name != filename or not safe_name.endswith(".json"):
+        print(f"  [实体注册表] 拒绝非 content_data 直系 JSON 文件名：{filename!r}")
+        return
+    path = os.path.join(CONTENT_DIR, safe_name)
     try:
-        with open(os.path.join(CONTENT_DIR, filename), "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             rows = json.load(f)
         if use_keys:
             for name in rows.keys():
