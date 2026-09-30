@@ -105,8 +105,17 @@ def _load_book_matches(book_name: str):
         return None, "书籍数据文件未找到。"
     normalized_book = _normalize_for_match(book_name)
     # 双向匹配：支持 "提瓦特游览指南·蒙德篇" 匹配到 "提瓦特游览指南"（书名作为查询的子串）
-    matches = [b for b in books if normalized_book in _normalize_for_match(b["title"])
-               or _normalize_for_match(b["title"]) in normalized_book]
+    matches = []
+    for b in books:
+        if not isinstance(b, dict):
+            continue
+        title = b.get("title") or ""
+        if not title:
+            # 畸形记录：必须跳过——空标题会让 "" in normalized_book 恒真，匹配到所有书。
+            continue
+        norm_title = _normalize_for_match(title)
+        if normalized_book in norm_title or norm_title in normalized_book:
+            matches.append(b)
     if not matches:
         map_text = _aggregate_map_text(book_name)
         if map_text:
@@ -206,9 +215,9 @@ def load_book_content(book_name: str, query: str = "", part: int = 1) -> str:
     matches, early = _load_book_matches(book_name)
     if early is not None:
         return early
-    best = max(matches, key=lambda b: len(b["text"]))
-    text = best["text"]
-    print(f"[工具] 加载书籍: {best['title']} ({len(text)}字)")
+    best = max(matches, key=lambda b: len(b.get("text") or ""))
+    text = best.get("text") or ""
+    print(f"[工具] 加载书籍: {best.get('title', '')} ({len(text)}字)")
     pages = _book_pages(text)
     page_no = _select_book_page(pages, part)
     page_label, page_body = pages[page_no - 1]
@@ -221,7 +230,7 @@ def load_book_content(book_name: str, query: str = "", part: int = 1) -> str:
     # 卷号守卫：书名点名了「第N卷」而书里没有这一卷时，直接说清并给出卷目。
     # （HX1 事故：问「极星舞剧集·第五卷」，模型把加载到的卷一内容当成第五卷讲；
     #  元数据放到返回头部也不够，必须在工具层拦掉。）
-    early, page_no = _apply_volume_guard(book_name, best["title"], text, meta, meta_line, pages, page_no)
+    early, page_no = _apply_volume_guard(book_name, best.get("title", ""), text, meta, meta_line, pages, page_no)
     if early is not None:
         return early
     page_label, page_body = pages[page_no - 1]
@@ -273,19 +282,25 @@ def _collect_quest_matches(quest_name: str, act_quests):
         try:
             with open(os.path.join(CONTENT_DIR, filename), "r", encoding="utf-8") as f:
                 quests = json.load(f)
-        except Exception:
+        except (OSError, ValueError) as exc:
+            print(f"[工具] 跳过无法解析的任务文件 {filename!r}: {type(exc).__name__}")
             continue
         if not isinstance(quests, list):
             continue
         for q in quests:
+            title = (q.get("title") or "").strip() if isinstance(q, dict) else ""
+            if not title:
+                # 畸形记录：缺标题的外部 JSON 条目跳过。
+                continue
             if act_quests:
                 # 幕名匹配：检查子任务标题是否在映射列表中
-                if q["title"] in act_quests:
-                    results.append((q["title"], q.get("category", ""), q["text"]))
+                if title in act_quests:
+                    results.append((title, q.get("category", ""), q.get("text", "")))
             else:
                 # 标题匹配（原有逻辑）
-                if quest_name in q["title"] or quest_name in q.get("系列任务", ""):
-                    results.append((q["title"], q.get("category", ""), q["text"]))
+                series = q.get("系列任务") or ""
+                if quest_name in title or quest_name in series:
+                    results.append((title, q.get("category", ""), q.get("text", "")))
     return results
 
 

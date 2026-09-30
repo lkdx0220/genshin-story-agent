@@ -418,7 +418,11 @@ def list_collectibles_by_region(region: str) -> str:
         return f"未找到{region}区域特产数据。"
     lines = [f"\n【{region}区域特产】({len(matched)}种)", "-" * 40]
     for c in matched:
-        lines.append(f"  {c['名称']}")
+        name = c.get("名称") or ""
+        if not name:
+            # 畸形记录：缺名称条目跳过。
+            continue
+        lines.append(f"  {name}")
     return "\n".join(lines)
 
 
@@ -426,7 +430,7 @@ def list_collectibles_by_region(region: str) -> str:
 def count_character_lines(character_name: str, quest_name: str = "") -> str:
     """统计指定角色在剧情任务中说了多少句话。character_name: 角色名称；quest_name: 任务名关键词（可选）"""
     aliases = resolve_aliases(character_name)
-    print(f"[工具] 统计台词: {character_name} -> 别名={aliases}")
+    print(f"[工具] 统计台词: {character_name!r} -> 别名={aliases!r}")
     results = []
     for filename in os.listdir(CONTENT_DIR):
         if not filename.startswith("quests_") or not filename.endswith(".json"):
@@ -436,14 +440,19 @@ def count_character_lines(character_name: str, quest_name: str = "") -> str:
         try:
             with open(os.path.join(CONTENT_DIR, filename), "r", encoding="utf-8") as f:
                 quests = json.load(f)
-        except Exception:
+        except (OSError, ValueError) as exc:
+            print(f"[工具] 跳过无法解析的任务文件 {filename!r}: {type(exc).__name__}")
             continue
         if not isinstance(quests, list):
             continue
         for q in quests:
-            if quest_name and quest_name not in q["title"]:
+            title = (q.get("title") or "").strip() if isinstance(q, dict) else ""
+            if not title:
+                # 畸形记录：缺标题的外部 JSON 条目跳过。
                 continue
-            text = q["text"]
+            if quest_name and quest_name not in title:
+                continue
+            text = q.get("text") or ""
             total_lines = 0
             for alias in aliases:
                 lines = re.findall(rf'^\*{re.escape(alias)}[：:(]', text, re.MULTILINE)
@@ -453,7 +462,7 @@ def count_character_lines(character_name: str, quest_name: str = "") -> str:
                 for alias in aliases:
                     found = re.findall(rf'^\*{re.escape(alias)}[：:(].+', text, re.MULTILINE)
                     sample_lines.extend(found[:3])
-                results.append((q["title"], q.get("category", ""), total_lines, sample_lines[:3]))
+                results.append((title, q.get("category", ""), total_lines, sample_lines[:3]))
     if not results:
         return f"未找到「{character_name}」的台词。"
     output_lines = [f"\n【{character_name} 台词统计】（别名：{' / '.join(aliases)}）"]

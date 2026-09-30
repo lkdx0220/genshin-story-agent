@@ -33,8 +33,14 @@ def _quest_files(sorted_by_activity: bool = False) -> list:
 
 def _load_quest_list(filename: str) -> list:
     """读单个 quests_*.json，失败或非列表返回空列表。"""
+    # 文件名只来自 os.listdir：这里做防御性归一——basename 必须与原值相同（不含目录成分）、
+    # 只读 .json；静态分析据此可确认拼进路径的字符集与基目录都受控。
+    safe_name = os.path.basename(filename or "")
+    if safe_name != filename or not safe_name.endswith(".json") or ".." in safe_name:
+        return []
+    path = os.path.join(CONTENT_DIR, safe_name)
     try:
-        with open(os.path.join(CONTENT_DIR, filename), "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             quests = json.load(f)
     except Exception:
         return []
@@ -42,7 +48,12 @@ def _load_quest_list(filename: str) -> list:
 
 
 def _activity_snippet(text: str, matched_term: str) -> str:
-    """用匹配到的词定位片段（前 80、后 120 字）。"""
+    """用匹配到的词定位片段（前 80、后 120 字）。
+
+    防御：空/纯空白词会让 split()[0] 抛 IndexError，直接返回空片段而不是打穿整个工具。
+    """
+    if not matched_term or not matched_term.split():
+        return ""
     first_kw = matched_term.split()[0]
     idx = text.find(first_kw)
     start = max(0, idx - 80)
@@ -57,6 +68,10 @@ def _activity_matches(keyword: str, activity_name: str) -> list:
     for filename in _quest_files(sorted_by_activity=True):
         quests = _load_quest_list(filename)
         for q in quests:
+            title = (q.get("title") or "").strip()
+            if not title:
+                # 畸形记录：缺标题的外部 JSON 条目跳过，不让 KeyError / 空标题进入结果。
+                continue
             text = q.get("text", "")
             # 用所有搜索词（含别名）尝试匹配
             matched_term = None
@@ -70,7 +85,6 @@ def _activity_matches(keyword: str, activity_name: str) -> list:
             # 如果指定了活动名，检查该页面是否属于此活动
             if activity_name:
                 meta = q.get("metadata", {})
-                title = q.get("title", "")
                 category = q.get("category", "")
                 # 在标题、元数据各字段中查找活动名
                 meta_text = json.dumps(meta, ensure_ascii=False)
@@ -78,7 +92,7 @@ def _activity_matches(keyword: str, activity_name: str) -> list:
                     continue
 
             results.append({
-                "title": q["title"],
+                "title": title,
                 "category": q.get("category", ""),
                 "snippet": _activity_snippet(text, matched_term),
             })
@@ -91,7 +105,9 @@ def _rerank_or_all(keyword: str, docs: list, results: list, top_n: int = 10) -> 
     if reranked is None:
         return results[:top_n]
     if reranked:
-        return [results[i] for i in reranked]
+        # reranker 可能返回越界/非整数下标：过滤后才索引，全部非法时退回未重排结果。
+        valid = [i for i in reranked if isinstance(i, int) and 0 <= i < len(results)]
+        return [results[i] for i in valid] if valid else results[:top_n]
     return []
 
 
@@ -138,11 +154,18 @@ def _mention_version(metadata: dict) -> tuple:
 
 def _mention_scan(keyword: str, type_priority: dict) -> list:
     """扫全部任务文件（保持 os.listdir 顺序），收集所有提及，供后续按版本排序。"""
+    if not keyword or not keyword.split():
+        # 空/纯空白关键词会让下面的 keyword.split()[0] 抛 IndexError。
+        return []
     all_matches = []
     for filename in _quest_files():
         if filename == "quests_processed.json":
             continue
         for q in _load_quest_list(filename):
+            title = (q.get("title") or "").strip()
+            if not title:
+                # 畸形记录：缺标题的外部 JSON 条目跳过。
+                continue
             text = q.get("text", "")
             if not _match_all_in(keyword, text):
                 continue
@@ -157,7 +180,7 @@ def _mention_scan(keyword: str, type_priority: dict) -> list:
             snippet = text[start:end].replace('\n', ' ').strip()
             speaker_match = re.search(r'\*「?([^」\n：]{1,10})」?：', text[max(0, idx-200):idx+50])
             all_matches.append({
-                "title": q["title"], "category": category,
+                "title": title, "category": category,
                 "version": version, "version_str": version_str,
                 "priority": type_priority.get(category, 99),
                 "speaker": speaker_match.group(1) if speaker_match else "未知",
@@ -200,7 +223,9 @@ def find_first_mention(keyword: str) -> str:
     查找某个关键词在剧情文本中首次出现的位置。按游戏版本号排序，优先返回版本最早的任务。
     keyword: 要查找的关键词（如\"降临者\"、\"深渊\"）
     """
-    print(f"[工具] 查找首次提及: {keyword}")
+    print(f"[工具] 查找首次提及: {keyword!r}")
+    if not keyword or not keyword.strip():
+        return "请提供要查找的关键词。"
     type_priority = {"魔神任务": 1, "传说任务": 2, "世界任务": 3, "部族纪闻": 4, "邀约事件": 5}
     all_matches = _mention_scan(keyword, type_priority)
     if not all_matches:
@@ -249,8 +274,16 @@ def _search_weapons(query: str) -> list:
     """武器知识库：武器名称/关联角色任一命中。"""
     results = []
     for wpn in 武器知识库:
-        if _match_all_in(query, wpn.get("武器名称", "")) or _match_all_in(query, wpn.get("关联角色", "")):
-            results.append(("武器", f"\n【{wpn['武器名称']}】{'★'*wpn['稀有度']} {wpn.get('武器类型')}"))
+        name = (wpn.get("武器名称") or "").strip()
+        if not name:
+            # 畸形记录：缺名称条目跳过（原来直接下标会 KeyError）。
+            continue
+        if _match_all_in(query, name) or _match_all_in(query, wpn.get("关联角色", "")):
+            try:
+                rarity = int(wpn.get("稀有度") or 0)
+            except (TypeError, ValueError):
+                rarity = 0
+            results.append(("武器", f"\n【{name}】{'★'*rarity} {wpn.get('武器类型')}"))
     return results
 
 
@@ -258,8 +291,13 @@ def _search_artifacts(query: str) -> list:
     """圣遗物知识库：圣遗物名称命中。"""
     results = []
     for art in 圣遗物知识库:
-        if _match_all_in(query, art.get("圣遗物名称", "")):
-            results.append(("圣遗物", f"\n【{art['圣遗物名称']}】{art.get('稀有度','')}星 | 两件套: {art.get('两件套效果','?')[:60]}"))
+        name = (art.get("圣遗物名称") or "").strip()
+        if not name:
+            # 畸形记录：缺名称条目跳过（原来直接下标会 KeyError）。
+            continue
+        if _match_all_in(query, name):
+            effect = (art.get("两件套效果") or "?")[:60]
+            results.append(("圣遗物", f"\n【{name}】{art.get('稀有度','')}星 | 两件套: {effect}"))
     return results
 
 
@@ -326,7 +364,7 @@ def _search_books(query: str) -> list:
     for b in books:
         if _match_all_in(query, b.get("title", "")) or _match_all_in(query, b.get("text", "")):
             vol_count = b.get("metadata", {}).get("卷数", "")
-            results.append(("书籍", f"\n【{b['title']}】（{vol_count}）| 来源: {b.get('source','')}"))
+            results.append(("书籍", f"\n【{b.get('title', '')}】（{vol_count}）| 来源: {b.get('source','')}"))
     return results
 
 
@@ -336,6 +374,10 @@ def _append_quest_file_candidates(filename: str, search_terms: list, candidates:
     for q in _load_quest_list(filename):
         if file_count >= 5 or len(candidates) >= 200:  # 激进上限，防止极端情况
             break
+        title = (q.get("title") or "").strip()
+        if not title:
+            # 畸形记录：缺标题的外部 JSON 条目跳过。
+            continue
         text = q.get("text", "")
         # 用所有搜索词（含别名）尝试匹配
         matched_term = None
@@ -343,7 +385,7 @@ def _append_quest_file_candidates(filename: str, search_terms: list, candidates:
             if _match_all_in(term, text):
                 matched_term = term
                 break
-        if matched_term:
+        if matched_term and matched_term.split():
             # 用匹配到的词定位片段
             first_word = matched_term.split()[0]
             idx = text.find(first_word)
@@ -352,11 +394,11 @@ def _append_quest_file_candidates(filename: str, search_terms: list, candidates:
             snippet = text[start:end].replace('\n', ' ').strip()
             category = q.get('category', '')
             # 去重: (title, category, snippet 前 60 字)
-            dedup_key = (q['title'], category, snippet[:60])
+            dedup_key = (title, category, snippet[:60])
             if dedup_key not in seen_candidates:
                 seen_candidates.add(dedup_key)
-                result_str = f"\n【{q['title']}】（{category}）\n  匹配片段: ...{snippet}..."
-                candidates.append((q['title'], category, snippet, result_str))
+                result_str = f"\n【{title}】（{category}）\n  匹配片段: ...{snippet}..."
+                candidates.append((title, category, snippet, result_str))
                 file_count += 1
 
 
