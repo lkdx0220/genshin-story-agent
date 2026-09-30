@@ -32,7 +32,8 @@ def _load_voice_profiles():
         try:
             with open(_VOICE_PROFILE_PATH, "r", encoding="utf-8") as f:
                 _voice_profile_cache = json.load(f)
-        except Exception:
+        except (OSError, ValueError) as exc:
+            print(f"[工具] 角色语音档案读取失败，降级为空档案: {type(exc).__name__}")
             _voice_profile_cache = {"characters": {}}
     return _voice_profile_cache
 
@@ -43,7 +44,8 @@ def _load_voice_relations():
         try:
             with open(_VOICE_RELATION_PATH, "r", encoding="utf-8") as f:
                 _voice_relation_cache = json.load(f)
-        except Exception:
+        except (OSError, ValueError) as exc:
+            print(f"[工具] 角色关系档案读取失败，降级为空关系: {type(exc).__name__}")
             _voice_relation_cache = {"edges": []}
     return _voice_relation_cache
 
@@ -173,14 +175,14 @@ def query_character(name: str, section: str = "") -> str:
     for candidate in candidates:
         for role in 角色知识库:
             if candidate in role.get("角色名称", "") or candidate in role.get("称号", ""):
-                print(f"[工具] 查询角色: {name} -> {candidate}")
+                print(f"[工具] 查询角色: {name!r} -> {candidate!r}")
                 if voice_mode:
                     return _format_voice_profile(role["角色名称"])
                 return _format_role_info(role)
 
         npc = _npcs_data.get(candidate)
         if npc:
-            print(f"[工具] 查询NPC: {name} -> {candidate}")
+            print(f"[工具] 查询NPC: {name!r} -> {candidate!r}")
             if voice_mode:
                 return _voice_coverage_message(candidate)
             return _format_npc_info(candidate, npc)
@@ -443,7 +445,7 @@ def _format_fake_legend_results(name, matched_fake):
     for q in activity_results:
         lines.append(f"\n【{q['任务名称']}】版本活动")
         lines.append(f"简介: {q.get('简介', '暂无')}")
-    print(f"[工具] 查询任务(戏称映射): {name} → {matched_fake}")
+    print(f"[工具] 查询任务(戏称映射): {name!r} → {matched_fake!r}")
     return "\n".join(lines)
 
 # 简单同音字组表：用于短名/同音错别字的保守纠错。
