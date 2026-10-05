@@ -49,3 +49,13 @@ _wiki_metadata_武器_cache.json
 
 # 知识库图谱资产（约 29MB 构建产物，随 GitHub Release 分发，不入库）
 kb-graph-schema4-*.zip
+
+# 数据与发布产物（2026-10-04 整理：运行时数据/向量备份/发布包/实验报告不入库）
+content_data/
+kb_vectors_backup_*/
+release_assets_*/
+reports/
+wiki_data_tools/*.json
+wiki_data_tools/*.txt
+wiki_data_tools/kb_vectors/
+_kb_graph_schema4_preview.zip
