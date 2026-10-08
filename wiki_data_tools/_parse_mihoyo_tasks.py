@@ -468,7 +468,11 @@ def main():
             if title in existing:
                 skipped_existing.append(title)
                 continue
-            if is_duplicate_title(title, existing_norms):
+            # “危影重重·其二”这类同系列不同序号是不同任务，
+            # 不能因为 normalize_title 会去掉“·其X”就误判成已有任务。
+            if re.search(r"[·•‧]\s*其[一二三四五六七八九十]+$", title):
+                pass
+            elif is_duplicate_title(title, existing_norms):
                 skipped_existing.append(title)
                 continue
             if is_container:
