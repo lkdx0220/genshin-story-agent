@@ -44,7 +44,7 @@ L3_SECTION_COVERAGE = _load_prompt("system/agent_system_v4_l3_section_coverage.t
 # ====== Agent 状态 ======
 class GenshinAdvisorState(TypedDict):
     user_query: str
-    rewritten_query: Optional[str]
+    rewritten_query: Optional[str]   # 别名扫描口径的消毒文本（剥括号/限长 200），不用于提示词与检索取词
     alias_notes: Optional[str]
     alias_pairs: Optional[List[Tuple[str, str]]]   # 结构化别名映射 [(别名, 规范名)]，供确定性身份直答使用
     conversation_history: Optional[List[Dict[str, str]]]

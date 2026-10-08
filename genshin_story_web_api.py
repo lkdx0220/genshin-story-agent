@@ -569,7 +569,12 @@ def api_search():
     data = request.get_json()
     if not data or "query" not in data:
         return jsonify({"error": "缺少 query 参数"}), 400
-    result = tool.invoke(data["query"])
+    try:
+        result = tool.invoke(data["query"])
+    except Exception as e:
+        # 只回固定文案，明细留在服务端日志
+        print(f"  [/api/search] 检索失败: {type(e).__name__}")
+        return jsonify({"success": False, "error": "检索失败，请查看服务端日志"}), 500
     return jsonify({"success": True, "result": result})
 
 
@@ -714,7 +719,7 @@ def api_chat():
             agent_module._cancel_events[run_id] = cancel_event
             agent = _get_workflow()
             result = agent.invoke({
-                "user_query": message,
+                "user_query": agent_module.sanitize_prompt_text(message),
                 "rewritten_query": None,
                 "alias_notes": None,
                 "conversation_history": conv_pairs,

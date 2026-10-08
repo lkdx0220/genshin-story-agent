@@ -194,6 +194,13 @@ def _build_alias_notes(alias_notes_parts) -> str:
 
 
 def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
+    """入口后的第一步：查询消毒 + 别名标注（**不做同义改写、不替换问题原文**）。
+
+    - 别名映射只以 alias_notes / alias_pairs 注入提示词，供模型理解社区外号；
+      检索侧另有 ALIAS_MAP / CHARACTER_ALIASES 扩展兜底；
+    - rewritten_query 存的是「别名扫描口径」的消毒文本（剥括号、限长 200），
+      不参与提示词与检索取词——进模型和检索的是入口已做安全清洗的 user_query。
+    """
     t_start = time.perf_counter()
     user_query = state.get("user_query", "")
     # 供导出器区分“进程启动/知识库加载”与真正的 rewrite_query 阶段耗时。
@@ -203,7 +210,7 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
     print("=" * 50)
     print(f"  原始: {user_query}")
 
-    # Step 1: 安全层 —— 消毒，剥离指令性内容
+    # Step 1: 别名扫描口径的消毒（剥括号 + 限长 200，只服务于别名检测与身份直答）
     sanitized = _sanitize_query(user_query)
     if sanitized != user_query:
         print(f"  消毒: {sanitized}")
@@ -224,7 +231,7 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     alias_notes = _build_alias_notes(alias_notes_parts)
 
-    # rewritten_query 保持原样，不再做文本替换
+    # rewritten_query 保持"别名扫描口径"，不做文本替换（问题原文进提示词/检索，见 sanitize_prompt_text）
     total_duration_ms = (time.perf_counter() - t_start) * 1000
     print(
         f"  [rewrite计时] 总耗时 {total_duration_ms:.1f}ms"
