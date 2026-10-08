@@ -67,7 +67,7 @@ from app.rag_memory import rag_memory, RAG_AVAILABLE
 
 # ====== 检索层 ======
 from app.retrieval import (
-    _sanitize_query, _is_compound_hit, _judge_alias_sandbox,
+    sanitize_prompt_text, _sanitize_query, _is_compound_hit, _judge_alias_sandbox,
     _expand_query_with_aliases, _rerank,
     _keyword_search_docs, _rrf_fusion, _get_doc_key,
     _build_title_registry, TITLE_REGISTRY, SECTION_TO_TITLE,
@@ -162,7 +162,7 @@ def main():
 
             start = datetime.now()
             result = agent.invoke({
-                "user_query": user_input,
+                "user_query": sanitize_prompt_text(user_input),
                 "rewritten_query": None,
                 "alias_notes": None,
                 "conversation_history": conversation_history,
