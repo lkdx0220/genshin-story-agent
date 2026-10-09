@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "mode": "dry-run",
+  "schedule_time": "18:00",
+  "paths": {
+    "logs_dir": "logs/kb_auto_update",
+    "manifest": "logs/kb_auto_update/detection_manifest.json"
+  },
+  "sources": {
+    "bwiki": {
+      "enabled": true,
+      "categories": {
+        "roles": "角色",
+        "npcs": "NPC",
+        "quests": "任务",
+        "weapons": "武器",
+        "artifacts": "圣遗物套装",
+        "materials": "材料",
+        "monsters": "怪物",
+        "foods": "食物",
+        "books": "书籍"
+      },
+      "map_text_pages": [
+        "万国诸卷拾遗/蒙德",
+        "万国诸卷拾遗/璃月",
+        "万国诸卷拾遗/稻妻",
+        "万国诸卷拾遗/须弥",
+        "万国诸卷拾遗/枫丹",
+        "万国诸卷拾遗/纳塔",
+        "万国诸卷拾遗/挪德卡莱",
+        "万国诸卷拾遗/至冬",
+        "万国诸卷拾遗/霜月"
+      ]
+    },
+    "mihoyo": {
+      "enabled": true,
+      "channels": {
+        "roles": 25,
+        "npcs": 20,
+        "quests": 43,
+        "map_text": 251
+      }
+    }
+  },
+  "validators": {
+    "quest_min_text_len": 80,
+    "map_text_min_len": 500,
+    "map_text_min_headings": 3,
+    "mihoyo_role_min_story": 5,
+    "mihoyo_quests_min_len": 80,
+    "mihoyo_map_text_min_len": 50,
+    "mihoyo_generic_min_len": 30
+  },
+  "notification": {
+    "enabled": true,
+    "title": "原神知识库自动更新"
+  }
+}
