@@ -42,6 +42,7 @@ def _get_initial_tools():
 
 from app.tools.query import find_similar_quest_names
 from app.retrieval import _sanitize_query, _is_compound_hit, _judge_alias_sandbox_batch, TITLE_REGISTRY
+from app.agent.coref import resolve_coreference
 from app.data import (
     角色知识库, 地区知识库, 任务知识库, 武器知识库, 圣遗物知识库, 素材知识库,
     _npcs_data, _normalize_for_match, _load_content_json,
@@ -194,8 +195,11 @@ def _build_alias_notes(alias_notes_parts) -> str:
 
 
 def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
-    """入口后的第一步：查询消毒 + 别名标注（**不做同义改写、不替换问题原文**）。
+    """入口后的第一步：多轮指代消解 + 别名标注（**不做同义改写、不做关键词替换**）。
 
+    - Step 0 指代消解：有对话历史且命中指代词时调一次轻量模型，把"她/那个任务"补成具体实体；
+      命中后 user_query 被改写为自包含问题（后续提示词、检索与确定性定位链都受益）；
+      未触发、调用失败或输出异常时**严格保持原问题**，见 app/agent/coref.py。
     - 别名映射只以 alias_notes / alias_pairs 注入提示词，供模型理解社区外号；
       检索侧另有 ALIAS_MAP / CHARACTER_ALIASES 扩展兜底；
     - rewritten_query 存的是「别名扫描口径」的消毒文本（剥括号、限长 200），
@@ -209,6 +213,11 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
     print("【别名检测】检测查询中的角色别名...")
     print("=" * 50)
     print(f"  原始: {user_query}")
+
+    # Step 0: 多轮指代消解（有历史 + 命中指代词才触发；其余场景严格 no-op）
+    user_query, coref_changed = resolve_coreference(state)
+    if coref_changed:
+        print(f"  消解: {user_query}")
 
     # Step 1: 别名扫描口径的消毒（剥括号 + 限长 200，只服务于别名检测与身份直答）
     sanitized = _sanitize_query(user_query)
@@ -240,6 +249,7 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
     )
     trace_emit("rewrite", {
         "user_query": user_query,
+        "coref_changed": coref_changed,
         "rewritten_query": sanitized,
         "alias_notes": alias_notes,
         "alias_pairs": alias_pairs or [],
@@ -249,7 +259,7 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
         "batch_duration_ms": round(batch_duration_ms, 2),
         "batch_candidate_count": batch_candidate_count,
     })
-    return {"rewritten_query": sanitized, "alias_notes": alias_notes, "alias_pairs": alias_pairs or None}
+    return {"user_query": user_query, "rewritten_query": sanitized, "alias_notes": alias_notes, "alias_pairs": alias_pairs or None}
 
 
 ASSESS_PROMPT = """你是原神剧情助手的查询分类器。你的唯一任务是判断用户问题属于哪种类型。
