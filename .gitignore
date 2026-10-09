@@ -29,6 +29,9 @@ svc_*.bat
 _tools/
 *.log
 
+# 自动更新运行日志与检测基线（由 scripts/daily_wiki_update.py 生成，不入库）
+logs/
+
 # 测试结果与中间缓存
 _speed_test_results.html
 _final_test_report.json
