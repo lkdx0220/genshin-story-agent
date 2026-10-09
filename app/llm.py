@@ -360,6 +360,18 @@ mechanism_judge_llm = QwenFallbackChatOpenAI(
     extra_body={"enable_thinking": False},
 )
 
+# 指代消解专用：只做"把指代词换成实体"的短任务，关思考、限输出长度。
+coref_llm = QwenFallbackChatOpenAI(
+    model="qwen3.6-flash",
+    api_key=QWEN_API_KEY,
+    base_url=QWEN_BASE_URL,
+    temperature=0,
+    max_tokens=200,
+    request_timeout=30,
+    fallback_model="qwen-plus",
+    extra_body={"enable_thinking": False},
+)
+
 # 意图 → Answer LLM 档位：取最高优先级的意图
 # 这里只存"档位名"，取用时现查模块全局。不要改成直接存 LLM 实例：
 # 字典按值捕获实例后，任何"重绑 answer_llm_*"的配置覆盖（临时换模型、灰度切换）
