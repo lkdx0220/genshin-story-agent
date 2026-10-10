@@ -301,155 +301,108 @@ def _load_json(path: Path, default):
         return json.load(file)
 
 
-def load_local_records() -> list:
-    records = []
+def _make_record(
+    module: str,
+    record_id: str,
+    title: str,
+    text: str,
+    source_file: str,
+    index: int,
+    metadata,
+    source: str = "bilibili_wiki",
+    extra: dict | None = None,
+) -> dict:
+    """统一的记录形状：所有来源共用，避免字段增删时各处漂移。"""
+    record = {
+        "record_id": record_id,
+        "module": module,
+        "title": title,
+        "source": source,
+        "text": text,
+        "source_file": source_file,
+        "source_index": index,
+        "metadata": metadata,
+    }
+    if extra:
+        record.update(extra)
+    return record
 
-    lore = _load_json(CONTENT_DIR / "lore.json", [])
-    if isinstance(lore, list):
-        for index, item in enumerate(lore):
-            records.append(
-                {
-                    "record_id": f"lore:{index}",
-                    "module": "lore",
-                    "title": str(item.get("title") or ""),
-                    "source": str(item.get("source") or ""),
-                    "text": str(item.get("text") or ""),
-                    "source_file": "content_data/lore.json",
-                    "source_index": index,
-                    "metadata": {},
-                }
+
+# 简单列表来源表：(module, 文件名, id 前缀, id 字段, 标题字段, 正文字段, source 模式, metadata 模式)
+# source 模式：literal = 固定 bilibili_wiki；item = 取 item["source"]；item_or_default = 取不到则默认
+_LIST_SOURCES = (
+    ("lore", "lore.json", "lore", None, "title", "text", "item", "empty"),
+    ("concepts", "concepts.json", "concept", None, "名称", "正文", "literal", "type"),
+    ("books", "books.json", "book", None, "title", "text", "item_or_default", "item_metadata"),
+    ("materials", "materials.json", "material", "材料ID", "名称", "简介", "literal", "item"),
+    ("collectibles", "collectibles.json", "collectible", "采集物ID", "名称", "简介", "literal", "item"),
+    ("foods", "foods.json", "food", None, "名称", "介绍", "literal", "item"),
+    ("monsters", "monsters.json", "monster", "怪物ID", "名称", None, "literal", "item"),
+    ("recipes", "recipes.json", "recipe", "食谱ID", "名称", "简介", "literal", "item"),
+)
+
+
+def _load_list_source(records: list, spec: tuple) -> None:
+    """按来源表加载一类"列表型"内容，逐条生成记录。"""
+    module, filename, prefix, id_field, title_field, text_field, source_mode, meta_mode = spec
+    items = _load_json(CONTENT_DIR / filename, [])
+    if not isinstance(items, list):
+        return
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        if source_mode == "literal":
+            source = "bilibili_wiki"
+        elif source_mode == "item":
+            source = str(item.get("source") or "")
+        else:
+            source = str(item.get("source") or "bilibili_wiki")
+        if meta_mode == "empty":
+            metadata = {}
+        elif meta_mode == "type":
+            metadata = {"类型": item.get("类型") or ""}
+        elif meta_mode == "item_metadata":
+            metadata = item.get("metadata") or {}
+        else:
+            metadata = item
+        key = item.get(id_field) if id_field else index
+        records.append(
+            _make_record(
+                module=module,
+                record_id=f"{prefix}:{key if key is not None else index}",
+                title=str(item.get(title_field) or ""),
+                text=str(item.get(text_field) or "") if text_field else "",
+                source_file=f"content_data/{filename}",
+                index=index,
+                metadata=metadata,
+                source=source,
             )
+        )
 
-    concepts = _load_json(CONTENT_DIR / "concepts.json", [])
-    if isinstance(concepts, list):
-        for index, item in enumerate(concepts):
-            records.append(
-                {
-                    "record_id": f"concept:{index}",
-                    "module": "concepts",
-                    "title": str(item.get("名称") or ""),
-                    "source": "bilibili_wiki",
-                    "text": str(item.get("正文") or ""),
-                    "source_file": "content_data/concepts.json",
-                    "source_index": index,
-                    "metadata": {"类型": item.get("类型") or ""},
-                }
-            )
 
+def _load_npcs(records: list) -> None:
+    """NPC：来源是 dict（键为名字），正文优先 doc_for_embed、退回 dialogue。"""
     npcs = _load_json(CONTENT_DIR / "npcs_processed.json", {})
-    if isinstance(npcs, dict):
-        for index, (name, item) in enumerate(npcs.items()):
-            if not isinstance(item, dict):
-                continue
-            records.append(
-                {
-                    "record_id": f"npc:{name}",
-                    "module": "npcs",
-                    "title": str(item.get("name") or name),
-                    "source": "bilibili_wiki",
-                    "text": str(item.get("doc_for_embed") or item.get("dialogue") or ""),
-                    "source_file": "content_data/npcs_processed.json",
-                    "source_index": index,
-                    "metadata": item,
-                }
+    if not isinstance(npcs, dict):
+        return
+    for index, (name, item) in enumerate(npcs.items()):
+        if not isinstance(item, dict):
+            continue
+        records.append(
+            _make_record(
+                module="npcs",
+                record_id=f"npc:{name}",
+                title=str(item.get("name") or name),
+                text=str(item.get("doc_for_embed") or item.get("dialogue") or ""),
+                source_file="content_data/npcs_processed.json",
+                index=index,
+                metadata=item,
             )
+        )
 
-    books = _load_json(CONTENT_DIR / "books.json", [])
-    if isinstance(books, list):
-        for index, item in enumerate(books):
-            records.append(
-                {
-                    "record_id": f"book:{index}",
-                    "module": "books",
-                    "title": str(item.get("title") or ""),
-                    "source": str(item.get("source") or "bilibili_wiki"),
-                    "text": str(item.get("text") or ""),
-                    "source_file": "content_data/books.json",
-                    "source_index": index,
-                    "metadata": item.get("metadata") or {},
-                }
-            )
 
-    materials = _load_json(CONTENT_DIR / "materials.json", [])
-    if isinstance(materials, list):
-        for index, item in enumerate(materials):
-            records.append(
-                {
-                    "record_id": f"material:{item.get('材料ID') or index}",
-                    "module": "materials",
-                    "title": str(item.get("名称") or ""),
-                    "source": "bilibili_wiki",
-                    "text": str(item.get("简介") or ""),
-                    "source_file": "content_data/materials.json",
-                    "source_index": index,
-                    "metadata": item,
-                }
-            )
-
-    collectibles = _load_json(CONTENT_DIR / "collectibles.json", [])
-    if isinstance(collectibles, list):
-        for index, item in enumerate(collectibles):
-            records.append(
-                {
-                    "record_id": f"collectible:{item.get('采集物ID') or index}",
-                    "module": "collectibles",
-                    "title": str(item.get("名称") or ""),
-                    "source": "bilibili_wiki",
-                    "text": str(item.get("简介") or ""),
-                    "source_file": "content_data/collectibles.json",
-                    "source_index": index,
-                    "metadata": item,
-                }
-            )
-
-    foods = _load_json(CONTENT_DIR / "foods.json", [])
-    if isinstance(foods, list):
-        for index, item in enumerate(foods):
-            records.append(
-                {
-                    "record_id": f"food:{index}",
-                    "module": "foods",
-                    "title": str(item.get("名称") or ""),
-                    "source": "bilibili_wiki",
-                    "text": str(item.get("介绍") or ""),
-                    "source_file": "content_data/foods.json",
-                    "source_index": index,
-                    "metadata": item,
-                }
-            )
-
-    monsters = _load_json(CONTENT_DIR / "monsters.json", [])
-    if isinstance(monsters, list):
-        for index, item in enumerate(monsters):
-            records.append(
-                {
-                    "record_id": f"monster:{item.get('怪物ID') or index}",
-                    "module": "monsters",
-                    "title": str(item.get("名称") or ""),
-                    "source": "bilibili_wiki",
-                    "text": "",
-                    "source_file": "content_data/monsters.json",
-                    "source_index": index,
-                    "metadata": item,
-                }
-            )
-
-    recipes = _load_json(CONTENT_DIR / "recipes.json", [])
-    if isinstance(recipes, list):
-        for index, item in enumerate(recipes):
-            records.append(
-                {
-                    "record_id": f"recipe:{item.get('食谱ID') or index}",
-                    "module": "recipes",
-                    "title": str(item.get("名称") or ""),
-                    "source": "bilibili_wiki",
-                    "text": str(item.get("简介") or ""),
-                    "source_file": "content_data/recipes.json",
-                    "source_index": index,
-                    "metadata": item,
-                }
-            )
-
+def _load_quests(records: list) -> None:
+    """任务：遍历 quests_*.json（跳过 processed），额外带 quest_category。"""
     for path in sorted(CONTENT_DIR.glob("quests_*.json")):
         if path.name == "quests_processed.json":
             continue
@@ -457,77 +410,95 @@ def load_local_records() -> list:
         if not isinstance(quests, list):
             continue
         for index, item in enumerate(quests):
+            if not isinstance(item, dict):
+                continue
             metadata = item.get("metadata") or {}
             records.append(
-                {
-                    "record_id": f"quest:{path.name}:{index}",
-                    "module": "quests",
-                    "title": str(item.get("title") or metadata.get("任务名称") or ""),
-                    "source": str(item.get("source") or "bilibili_wiki"),
-                    "text": str(item.get("text") or ""),
-                    "source_file": f"content_data/{path.name}",
-                    "source_index": index,
-                    "metadata": metadata,
-                    "quest_category": str(item.get("category") or ""),
-                }
+                _make_record(
+                    module="quests",
+                    record_id=f"quest:{path.name}:{index}",
+                    title=str(item.get("title") or metadata.get("任务名称") or ""),
+                    text=str(item.get("text") or ""),
+                    source_file=f"content_data/{path.name}",
+                    index=index,
+                    metadata=metadata,
+                    source=str(item.get("source") or "bilibili_wiki"),
+                    extra={"quest_category": str(item.get("category") or "")},
+                )
             )
 
-    # 结构化知识库（Python 模块）
+
+# 结构化知识库（Python 模块）：(module, 模块属性, id 字段, 名称字段, source_file)
+_STRUCTURED_KB = (
+    ("roles", "角色知识库", "角色ID", "角色名称", "genshin_knowledge_base/roles.py"),
+    ("weapons", "武器知识库", "武器ID", "武器名称", "genshin_knowledge_base/weapons.py"),
+    ("artifacts", "圣遗物知识库", "圣遗物ID", "圣遗物名称", "genshin_knowledge_base/artifacts.py"),
+)
+
+
+def _load_structured_kb(records: list) -> None:
+    """结构化知识库（roles/weapons/artifacts）：导入失败时只告警不中断。"""
     try:
         from genshin_knowledge_base import artifacts as kb_artifacts
         from genshin_knowledge_base import roles as kb_roles
         from genshin_knowledge_base import weapons as kb_weapons
     except Exception as exc:  # noqa: BLE001
         print(f"[警告] 结构化知识库导入失败: {exc}")
-        kb_roles = kb_weapons = kb_artifacts = None
-
-    if kb_roles is not None:
-        for index, item in enumerate(kb_roles.角色知识库):
+        return
+    modules = {"roles": kb_roles, "weapons": kb_weapons, "artifacts": kb_artifacts}
+    for module, attr, id_field, name_field, source_file in _STRUCTURED_KB:
+        items = getattr(modules[module], attr, None)
+        if not items:
+            continue
+        for index, item in enumerate(items):
             records.append(
-                {
-                    "record_id": f"role:{item.get('角色ID') or index}",
-                    "module": "roles",
-                    "title": str(item.get("角色名称") or ""),
-                    "source": "bilibili_wiki",
-                    "text": str(item.get("简介") or ""),
-                    "source_file": "genshin_knowledge_base/roles.py",
-                    "source_index": index,
-                    "metadata": item,
-                }
-            )
-    if kb_weapons is not None:
-        for index, item in enumerate(kb_weapons.武器知识库):
-            records.append(
-                {
-                    "record_id": f"weapon:{item.get('武器ID') or index}",
-                    "module": "weapons",
-                    "title": str(item.get("武器名称") or ""),
-                    "source": "bilibili_wiki",
-                    "text": str(item.get("简介") or ""),
-                    "source_file": "genshin_knowledge_base/weapons.py",
-                    "source_index": index,
-                    "metadata": item,
-                }
-            )
-    if kb_artifacts is not None:
-        for index, item in enumerate(kb_artifacts.圣遗物知识库):
-            records.append(
-                {
-                    "record_id": f"artifact:{item.get('圣遗物ID') or index}",
-                    "module": "artifacts",
-                    "title": str(item.get("圣遗物名称") or ""),
-                    "source": "bilibili_wiki",
-                    "text": str(item.get("简介") or ""),
-                    "source_file": "genshin_knowledge_base/artifacts.py",
-                    "source_index": index,
-                    "metadata": item,
-                }
+                _make_record(
+                    module=module,
+                    record_id=f"{module[:-1] if module.endswith('s') else module}:{item.get(id_field) or index}",
+                    title=str(item.get(name_field) or ""),
+                    text=str(item.get("简介") or ""),
+                    source_file=source_file,
+                    index=index,
+                    metadata=item,
+                )
             )
 
+
+def _dedupe_identical(records: list) -> tuple[list, int]:
+    """去掉 record_id 重复且 title/text 完全相同的记录（源数据重复条目）。
+
+    只删完全同质的重复项：id 相同但内容不同的记录**保留并原样返回**，避免误删。
+    实测 monsters.json 有 10 个 id 重复、13 条多余记录。
+    """
+    seen: dict = {}
+    out: list = []
+    dropped = 0
+    for record in records:
+        key = record.get("record_id")
+        signature = (record.get("title"), record.get("text"))
+        if key in seen:
+            if seen[key] == signature:
+                dropped += 1
+                continue
+        else:
+            seen[key] = signature
+        out.append(record)
+    return out, dropped
+
+
+def load_local_records() -> list:
+    """加载本地 content_data 与结构化知识库，统一为记录列表（模块化编排）。"""
+    records: list = []
+    for spec in _LIST_SOURCES:
+        _load_list_source(records, spec)
+    _load_npcs(records)
+    _load_quests(records)
+    _load_structured_kb(records)
+    records, dropped = _dedupe_identical(records)
+    if dropped:
+        print(f"[去重] 丢弃 {dropped} 条同 id 同内容的重复记录")
     return records
 
-
-# ====== 分类逻辑 ======
 
 
 def _scope_bwiki(record: dict, reason: str) -> dict:
