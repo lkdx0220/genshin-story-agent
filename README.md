@@ -1,6 +1,6 @@
 # 原神剧情助手
 
-基于 LangGraph 的原神游戏知识问答 Agent。零训练预算下，用通用大模型 + 33 个已注册工具（32 个常规初始暴露） + 混合检索实现游戏领域复杂推理问答。
+基于 LangGraph 的原神游戏知识问答 Agent。零训练预算下，用通用大模型 + 34 个已注册工具（33 个常规初始暴露） + 混合检索实现游戏领域复杂推理问答。
 
 > **⚠️ 注意：本项目不是开箱即用的客户端应用，具有一定技术门槛。**
 >
@@ -75,18 +75,18 @@
 ```
 用户问题 → 别名检测 → 意图路由 → L1（快速回答）/ L2（深度推理）
                                     │
-L2: Plan Agent → 工具调用（33 tools，常规暴露 32）→ 熔断截断 → Answer Agent
+L2: Plan Agent → 工具调用（34 tools，常规暴露 33）→ 熔断截断 → Answer Agent
 ```
 
 - **意图路由**：三级决策分层（规则层 → 轻量LLM → 强模型），平衡准确率与成本
 - **混合检索**：关键词/BM25 文本匹配（字符串命中 + SimpleBM25 + rerank）+ 向量语义搜索，RRF 融合排序；向量库仅保留 `kb_quests_vec`、`kb_lore`、`kb_books`、`kb_characters`、`kb_regions`，`kb_quests_bm25` 已剔除
-- **工具封装**：33 个已注册工具（32 个常规初始暴露）按功能域划分（查询/列表/搜索/内容加载）
+- **工具封装**：34 个已注册工具（33 个常规初始暴露）按功能域划分（查询/列表/搜索/内容加载）
 - **熔断机制**：工具返回超阈值时截断直接生成回答，防止无限循环
 - **别名消歧**：LLM 消歧 + 人工审核双通道，处理多义别名
 - **流式回答**：Answer LLM 流式生成，SSE `answer_delta` 逐段推送；前端实时 Markdown 渲染，流式与最终结果排版一致
 - **Qwen 主备切换**：token-plan 主接口失败/401 时自动回退原 DashScope，`invoke` 与 `stream` 均生效；`.env` 优先于终端残留环境变量
 - **端口自愈**：Web 服务启动时自动关闭旧实例、绑定 `127.0.0.1`，5000 被非本项目占用时自动换 5001~5050
-- **隐藏搜索工具**：注册 33 个工具，常规初始暴露 32 个；`search_world` 仅在常规搜索碰壁后动态追加
+- **隐藏搜索工具**：注册 34 个工具，常规初始暴露 33 个；`search_world` 仅在常规搜索碰壁后动态追加
 - **Wiki 链接图**：`wiki_graph_search` / `wiki_graph_expand` / `wiki_graph_get` 三工具基于观测枢 `data-entry-id` 链接图，支持跨任务/地图文本/角色/物品多跳检索；全量图构建脚本见 `wiki_entry_graph.py` + `wiki_data_tools/_fetch_mihoyo_channel.py`
 - **L3 全景连锁**：全景正则 + ≥2 个任务标题命中后，代码确定性加载任务全文、地图文本、实体提及索引反向边、说话人与图谱一跳扩展，拼成 `[全景全文读取]`，再交给 qwen3.8-max 按 task/entity/map/synthesis 分段并行生成
 
@@ -420,7 +420,7 @@ python scripts/build_exe.py
 ```
 app/                    # 模块化核心（参照 OpenManus 分层模式）
   agent/                # LangGraph 节点与工具执行器
-  tools/                # 33 个 @tool 工具（初始暴露 32 个；query/list/search/content）
+  tools/                # 34 个 @tool 工具（初始暴露 33 个；query/list/search/content）
   config.py             # 配置常量
   llm.py                # LLM 实例池与重试
   data.py               # 知识库加载
