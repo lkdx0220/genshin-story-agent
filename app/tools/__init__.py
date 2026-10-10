@@ -7,7 +7,7 @@
 - search.py: 搜索（活动剧情、首次提及）+ 内部辅助函数（search_all/search_lore）
 - content.py: 加载完整内容（书籍/任务剧情）
 
-注：hybrid_search 和 kb_vector_search 在 app/retrieval.py 中（与检索逻辑耦合）。
+注：hybrid_search 在 app/retrieval.py 中（与检索逻辑耦合）。
 """
 
 from app.tools.query import (
@@ -42,7 +42,6 @@ from app.tools.search import (
     search_activity,
     find_first_mention,
     search_all,
-    search_lore,
     search_world,  # search_world 为碰壁后补充工具，初始不暴露
 )
 from app.tools.content import (
@@ -54,7 +53,7 @@ from app.tools.wiki_graph import (
     wiki_graph_expand,
     wiki_graph_get,
 )
-from app.retrieval import hybrid_search, kb_vector_search
+from app.retrieval import hybrid_search
 
 
 # ====== 工具列表（顺序决定 LLM 看到的工具顺序）======
@@ -104,6 +103,3 @@ tools_by_name = {t.name: t for t in tools}
 MELTDOWN_TRIGGER_TOOLS = {"load_book_content", "load_quest_content", "find_first_mention"}
 
 
-def get_tools_by_name() -> dict:
-    """返回工具名 → 函数映射的副本，避免外部修改内部映射。"""
-    return dict(tools_by_name)

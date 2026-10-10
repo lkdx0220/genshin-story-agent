@@ -320,60 +320,6 @@ def _missing_named_quotes(query: str) -> list:
     return missing
 
 
-def _relevance_threshold_or_none(backend: str):
-    """语义化别名：未标定的后端返回 None，调用方必须 fail-open。"""
-    return _relevance_thresholds(backend)
-
-
-# 常见停用字/词：关键词路禁止“只命中这些字”的候选进入 RRF。
-_COMMON_STOPWORDS = {
-    "的",
-    "了",
-    "是",
-    "人",
-    "我",
-    "你",
-    "他",
-    "她",
-    "它",
-    "我们",
-    "你们",
-    "他们",
-    "在",
-    "有",
-    "和",
-    "与",
-    "吗",
-    "呢",
-    "啊",
-    "这",
-    "那",
-    "不",
-    "也",
-    "都",
-    "就",
-    "要",
-    "会",
-    "上",
-    "下",
-    "中",
-    "大",
-    "小",
-    "谁",
-    "什么",
-    "为什么",
-    "怎么",
-    "如何",
-    "哪些",
-    "哪",
-    "多少",
-    "请",
-    "问",
-    "一下",
-    "每个",
-    "一个",
-}
-
 
 def _is_stopword_term(term: str) -> bool:
     """判断一个检索词是否只由停用字/停用词构成。"""
@@ -1221,53 +1167,6 @@ def hybrid_search(query: str, top_k: int = 10) -> str:
         lines.append("\n" + format_evidence_line(len(kw_docs), _top1, _delta))
     return "\n".join(lines)
 
-
-# kb_vector_search 允许的集合白名单（防止越界集合名被拼进后端 collection 标识）
-_ALLOWED_VECTOR_COLLECTIONS = frozenset({"quests", "lore", "books", "characters", "npcs", "regions"})
-
-# 检索工具入参上限：查询过长会放大嵌入/外呼开销，top_k 过大同样放大下游
-_MAX_TOOL_QUERY_CHARS = 1000
-_MAX_TOOL_TOP_K = 50
-
-
-@tool
-def kb_vector_search(query: str, collection: str = "", top_k: int = 5) -> str:
-    """语义搜索知识库（向量检索）。适合模糊/概念性问题。
-    query: 搜索内容（自然语言描述即可）
-    collection: 指定集合（quests/lore/books/characters/regions），为空则搜全部
-    top_k: 返回结果数，默认5"""
-    query = sanitize_prompt_text(query)[:_MAX_TOOL_QUERY_CHARS]  # 工具入口清洗 + 限长
-    collection = (collection or "").strip()
-    if collection and collection not in _ALLOWED_VECTOR_COLLECTIONS:
-        return f"不支持的集合名：「{collection}」。可用集合：quests / lore / books / characters / npcs / regions。"
-    try:
-        top_k = max(1, min(int(top_k), _MAX_TOOL_TOP_K))
-    except (TypeError, ValueError):
-        top_k = 5
-    # 延迟导入避免循环依赖
-    from app.data import _vector_store
-
-    if _vector_store is None:
-        return "向量知识库未初始化。请先运行 kb_build_index.py 构建索引。"
-    col_name = f"kb_{collection}" if collection else None
-    results = _vector_store.search(query, collection=col_name, top_k=top_k)
-    if not results:
-        return f"语义搜索未找到与「{query}」相关的内容。"
-    lines = [f"===== 语义搜索「{query}」({len(results)}条结果) ====="]
-    for _i, r in enumerate(results):
-        # 从 id 中提取类型和标题信息
-        doc_id = r.get("id", "")
-        collection = r.get("collection", "")
-        doc_preview = r.get("document", "")[:500].replace("\n", " ")
-        score = r.get("score", 0)
-        # 格式化标题
-        header = f"【{doc_id}】({collection})"
-        lines.append(header)
-        lines.append(f"  相似度: {score:.4f} | 内容: {doc_preview}...")
-    return "\n".join(lines)
-
-
-# ====== BM25 检索引擎 ======
 
 
 class SimpleBM25:

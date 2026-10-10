@@ -252,9 +252,6 @@ class GenshinRAGMemory:
     def save_conversation(self, user_query: str, assistant_response: str, session_id: str = "default") -> None:
         self.memory.add_conversation(user_query, assistant_response, metadata={"session_id": session_id})
 
-    def retrieve_for_query(self, query: str, top_k: int = 3) -> str:
-        memories = self.memory.retrieve(query, top_k=top_k, threshold=0.4)
-        return self.memory.build_context(memories)
 
     def get_stats(self) -> Dict:
         return self.memory.get_stats()

@@ -655,10 +655,6 @@ _route_cache: dict = {}
 _last_raw_response: str = ""
 
 
-def get_last_raw_response() -> str:
-    """返回路由器 LLM 最近一次原始回复，供测试脚本查看。"""
-    return _last_raw_response
-
 
 def route_intent(
     user_query: str,

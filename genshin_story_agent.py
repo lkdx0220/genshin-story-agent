@@ -109,7 +109,6 @@ from app.retrieval import (
     TITLE_REGISTRY,
     SECTION_TO_TITLE,
     hybrid_search,
-    kb_vector_search,
     SimpleBM25,
 )
 
@@ -143,7 +142,6 @@ from app.tools import (
     search_activity,
     find_first_mention,
     search_all,
-    search_lore,
     load_book_content,
     load_quest_content,
     get_book_metadata,
