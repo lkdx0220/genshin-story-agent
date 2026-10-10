@@ -19,6 +19,7 @@ from app.formatters import (
     _format_role_info, _format_npc_info, _format_region_info, _format_story_info,
 )
 from character_aliases import ALIAS_MAP, resolve_aliases
+from app.tools.vocab import CharacterSection
 
 _VOICE_PROFILE_PATH = os.path.join(CONTENT_DIR, "character_voices.json")
 _VOICE_RELATION_PATH = os.path.join(CONTENT_DIR, "voice_relations.json")
@@ -159,8 +160,8 @@ TRIBAL_CHRONICLES = {
 
 
 @tool
-def query_character(name: str, section: str = "") -> str:
-    """查询原神角色详细信息。section 可选，填“语音”时返回角色语音档案。name: 角色名称或常用别名。"""
+def query_character(name: str, section: CharacterSection = "") -> str:
+    """查询原神角色详细信息。section 可选，填“语音”时返回角色语音档案（取值见 Schema）。name: 角色名称或常用别名。"""
     section = (section or "").strip()
     voice_mode = section in ("语音", "voice", "语音档案", "档案")
     candidates = []
