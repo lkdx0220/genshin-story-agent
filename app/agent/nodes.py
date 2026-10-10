@@ -2964,56 +2964,46 @@ def _attempted_read_names(messages) -> set:
     return names
 
 
-def _maybe_auto_full_text_read(state, messages, routed_tools, iteration, response=None):
-    """题面点名了具体任务/书籍，而 Planner 想零工具收工时，代码强制补一次读全文。
-
-    返回 None 表示无需介入。只在挂载点B（response 非空）介入：挂载点A 会抢 Planner 的
-    检索决策，而这里要治的是「明明点名了却只拿片段就收工」。
-    """
-    if response is None:
-        return None
-    original_query = state.get("user_query", "") or state.get("rewritten_query", "")
-    if not original_query:
-        return None
-    tool_names = {getattr(t, "name", str(t)) for t in routed_tools}
-    if not any(name in tool_names for name in _READ_FULL_TOOLS):
-        return None
-    if iteration + 1 >= MAX_AGENT_ITERATIONS:
-        return None
-    probe = _auto_read_probe_text(state, messages)
-    if not probe:
-        return None
-    attempted = _attempted_read_names(messages)
-
+def _auto_read_character_calls(probe: str, attempted: set) -> list:
+    """身份类问题：点名角色时优先补读角色词条（带同角色去重）。"""
     calls = []
-    # 身份类问题（XX2 实测）：点名角色时优先读角色词条——Planner 常只搜片段就收工，
-    # 漏掉「执行官」这类只写在角色档案里的身份信息。
-    if "query_character" in tool_names and _AUTO_READ_IDENTITY_RE.search(probe):
-        for canon, norm in _auto_read_character_names():
-            if len(calls) >= _AUTO_READ_MAX:
-                break
-            if norm in attempted or norm not in probe:
-                continue
-            if any(canon == c[2] for c in calls):
-                continue
-            calls.append(("query_character", "name", canon, norm))
-    if not calls:
-        for raw, norm in _auto_read_book_titles():
-            if len(calls) >= _AUTO_READ_MAX:
-                break
-            if norm in attempted or norm not in probe:
-                continue
-            calls.append(("load_book_content", "book_name", raw, norm))
-    if len(calls) < _AUTO_READ_MAX:
-        for raw, norm in _auto_read_quest_titles():
-            if len(calls) >= _AUTO_READ_MAX:
-                break
-            if norm in attempted or norm not in probe:
-                continue
-            calls.append(("load_quest_content", "quest_name", raw, norm))
-    if not calls:
-        return None
+    for canon, norm in _auto_read_character_names():
+        if len(calls) >= _AUTO_READ_MAX:
+            break
+        if norm in attempted or norm not in probe:
+            continue
+        if any(canon == c[2] for c in calls):
+            continue
+        calls.append(("query_character", "name", canon, norm))
+    return calls
 
+
+def _auto_read_named_calls(probe: str, attempted: set, titles_fn, tool_name: str, arg_key: str) -> list:
+    """按目录函数给出的（原名, 归一化名）挑选要补读的书籍/任务。"""
+    calls = []
+    for raw, norm in titles_fn():
+        if len(calls) >= _AUTO_READ_MAX:
+            break
+        if norm in attempted or norm not in probe:
+            continue
+        calls.append((tool_name, arg_key, raw, norm))
+    return calls
+
+
+def _auto_read_plan(probe: str, attempted: set, tool_names: set) -> list:
+    """决定本轮补读哪些内容：角色（身份类） > 书籍 > 任务，总量不超过上限。"""
+    calls = []
+    if "query_character" in tool_names and _AUTO_READ_IDENTITY_RE.search(probe):
+        calls = _auto_read_character_calls(probe, attempted)
+    if not calls:
+        calls = _auto_read_named_calls(probe, attempted, _auto_read_book_titles, "load_book_content", "book_name")
+    if len(calls) < _AUTO_READ_MAX:
+        calls += _auto_read_named_calls(probe, attempted, _auto_read_quest_titles, "load_quest_content", "quest_name")
+    return calls
+
+
+def _auto_read_payload(calls: list, original_query: str, iteration: int, state) -> dict:
+    """构造"确定性补读"要注入的消息与执行计划。"""
     tool_calls = []
     content_parts = [
         "【执行报告】",
@@ -3033,7 +3023,39 @@ def _maybe_auto_full_text_read(state, messages, routed_tools, iteration, respons
         )
         kind = "书籍" if tool_name == "load_book_content" else "任务"
         content_parts.append(f"{i}. 读取{kind}《{raw}》全文")
-    content = "\n".join(content_parts)
+    content = chr(10).join(content_parts)
+    return {
+        "messages": [AIMessage(content=content, tool_calls=tool_calls)],
+        "execution_plan": content,
+        "iteration": iteration + 1,
+        "intent_labels": state.get("intent_labels", []),
+    }
+
+
+def _maybe_auto_full_text_read(state, messages, routed_tools, iteration, response=None):
+    """题面点名了具体任务/书籍，而 Planner 想零工具收工时，代码强制补一次读全文。
+
+    返回 None 表示无需介入。只在挂载点B（response 非空）介入：挂载点A 会抢 Planner 的
+    检索决策，而这里要治的是「明明点名了却只拿片段就收工」。
+    """
+    if response is None:
+        return None
+    original_query = state.get("user_query", "") or state.get("rewritten_query", "")
+    if not original_query:
+        return None
+    tool_names = {getattr(t, "name", str(t)) for t in routed_tools}
+    if not any(name in tool_names for name in _READ_FULL_TOOLS):
+        return None
+    if iteration + 1 >= MAX_AGENT_ITERATIONS:
+        return None
+    probe = _auto_read_probe_text(state, messages)
+    if not probe:
+        return None
+
+    calls = _auto_read_plan(probe, _attempted_read_names(messages), tool_names)
+    if not calls:
+        return None
+
     print(f"  -> [读全文补全] 点名但未读全文，确定性补读：{[(n, r) for n, _, r, _ in calls]}")
     trace_emit(
         "auto_full_text_read",
@@ -3043,12 +3065,8 @@ def _maybe_auto_full_text_read(state, messages, routed_tools, iteration, respons
             "iteration": iteration + 1,
         },
     )
-    return {
-        "messages": [AIMessage(content=content, tool_calls=tool_calls)],
-        "execution_plan": content,
-        "iteration": iteration + 1,
-        "intent_labels": state.get("intent_labels", []),
-    }
+    return _auto_read_payload(calls, original_query, iteration, state)
+
 
 
 def _maybe_auto_graph_map_texts(state, messages, routed_tools, iteration, response=None):
@@ -4351,7 +4369,7 @@ def _trigger_tool_meltdown(messages, failures: int, rejected: int, no_progress: 
         if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
             msg.tool_calls = []
             msg.additional_kwargs = {}
-            msg.content = (msg.content or "") + hint
+            msg.content = str(msg.content or "") + hint
             break
 
 
@@ -4398,7 +4416,7 @@ def _build_fallback_answer(messages: list, original_query: str) -> str:
     if not parts:
         return f"关于「{original_query}」，当前知识库中未找到相关信息，请尝试更具体的查询或联系开发者补充数据。"
     # 简单拼接所有工具返回
-    combined = "\n\n---\n\n".join(parts)
+    combined = "\n\n---\n\n".join(str(p) for p in parts)
     return f"关于「{original_query}」，以下是知识库中检索到的相关内容：\n\n{combined}\n\n（注：以上为机器提取的原始数据，未经过 AI 整理。）"
 
 
@@ -4894,7 +4912,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     original_query = state.get("user_query", "")
     alias_notes = state.get("alias_notes", "")
     intent_labels = state.get("intent_labels", [])
-    answer_llm = _select_answer_llm(intent_labels)
+    answer_llm = _select_answer_llm(intent_labels or [])
     # “介绍/讲讲/性格/经历”等综合叙述题，改用 medium 模型，避免轻量模型偶发误判未收录。
     if _should_synthesize_answer(original_query):
         answer_llm = answer_llm_medium

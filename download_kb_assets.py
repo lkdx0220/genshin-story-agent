@@ -18,6 +18,9 @@ import zipfile
 
 
 def _download(url: str, dest: str) -> None:
+    # 只允许 https：不把非受信 URL（或可能被注入的地址）交给 urlopen
+    if not str(url).startswith("https://"):
+        raise ValueError(f"只允许 https 下载：{url}")
     req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})
     with urllib.request.urlopen(req, timeout=600) as resp, open(dest, "wb") as f:
         shutil.copyfileobj(resp, f)

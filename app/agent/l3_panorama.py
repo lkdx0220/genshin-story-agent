@@ -153,7 +153,8 @@ def _emit_progress(event: str, data: dict) -> None:
 def _find_panorama_text(messages) -> str:
     for msg in messages:
         if isinstance(msg, ToolMessage):
-            content = msg.content if hasattr(msg, "content") else str(msg)
+            raw = msg.content if hasattr(msg, "content") else msg
+            content = raw if isinstance(raw, str) else str(raw)
             if content.strip().startswith(_FULL_TEXT_HEADER):
                 return content
     return ""
