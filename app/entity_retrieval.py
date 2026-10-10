@@ -1,14 +1,17 @@
 # -*- coding: utf-8 -*-
-"""实体检索原语：把"谁参与过什么"变成集合运算（LLM Wiki 结构化层从 L3 下放到 L2 的第一步）。
+"""实体检索原语 v2：把"谁参与过什么"变成集合运算（LLM Wiki 结构化层下放 L2 的第一步）。
+
+v2 相对 v1 的两处关键修正（来自人工抽查反馈）：
+1. **语境污染必须剔除**：任务文本里的「任务概述 / 前情提要 / B站词条元数据」写的是**上一章**剧情
+   或元信息，既不能算提及、也不能当证据（实测 780/2354 个任务的 story_text 含此类区域）。
+   → 统一走 `story_body()` 得到"本任务剧情正文"，提及次数/台词/动作/证据全部只在正文上统计。
+2. **出场人物表是权威关系**：B站词条在每个任务开头列出「出场人物：A、B、C」，
+   这就是"谁参与了本段剧情"的一手数据，不该由启发式去猜。
+   → 有表时以表为准（在表内 = 强证据；不在表内 = 直接排除）；无表时才退回"有台词"推定。
 
 数据源（只读，进程内缓存）：
-- `kb_vectors/wiki_entity_mention_index.json`：实体 → 被哪些条目提及（含次数）——**关系来源**
-- `kb_vectors/wiki_entry_graph.json`：词条元数据（entry_type / filters 任务类型 / story_text）
-
-处理链：实体归一 → 文档级集合 → 双源去重（实体画像 Jaccard）→ 证据分级 → 覆盖度声明。
-
-为什么不追求"图上的参与边"：词条图的 links 是 wiki 页面超链接（角色页往往为空），
-真正可用的关系是**反向提及索引**；分级则回答"是出场还是被提到"。
+- `kb_vectors/wiki_entity_mention_index.json`：实体 → 被哪些条目提及（提供候选集合）
+- `kb_vectors/wiki_entry_graph.json`：词条元数据与正文
 """
 from __future__ import annotations
 
@@ -20,25 +23,33 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-# 项目根（app/ 的上一级）；不依赖 app.config（那里没有 BASE_DIR）
 _BASE_DIR = Path(__file__).resolve().parents[1]
-
 GRAPH_PATH = _BASE_DIR / "kb_vectors" / "wiki_entry_graph.json"
 MENTION_PATH = _BASE_DIR / "kb_vectors" / "wiki_entity_mention_index.json"
 
-# 角色类实体（其余类型不参与实体检索：任务/物品同名词条会造成误召回）
 _CHARACTER_TYPES = {"character", "npc", "character_anecdote"}
-
 _VARIANT_RE = re.compile(r"【[^】]*】")
 _SPEAKER_RE = re.compile(r"(?:^|\n)\s*\*?\s*([\u4e00-\u9fff·]{2,10})\s*[：:]")
-_ACTION_WORDS = ("说", "问", "笑", "道", "喊", "答", "看", "点头", "摇头", "皱眉", "递", "接",
-                 "走", "跑", "站", "坐", "抬头", "低头", "沉默", "叹气", "解释", "提醒")
+# 动作词只收"物理动作"：说/道/问/喊/答 这类转述动词会命中"行秋说想约大家一起聚一聚"
+# （香菱转述行秋的话，行秋并不在场）→ 实测误判，故剔除。
+_ACTION_WORDS = ("笑", "点头", "摇头", "皱眉", "递", "接", "走", "跑", "站", "坐",
+                 "抬头", "低头", "沉默", "叹气", "解释", "提醒")
 
-# 证据分级（回答"出场 vs 仅被提及"）
-LEVEL_STRONG = "强·有台词"
-LEVEL_MEDIUM = "中·有动作"
+# 出场人物表（权威）：B站词条元数据里的「出场人物：A、B、C」
+_CAST_RE = re.compile(r"出场人物\s*[:：]\s*([^/\n]{2,200})")
+# 元数据行（逐行剔除）：这些是页面信息框字段，不是剧情正文
+_META_LINE_RE = re.compile(
+    r"^\s*(任务名称|任务描述|任务条件|前置任务|后续任务|出场人物|任务地区|所属版本|任务编号"
+    r"|相关活动|开放等级|任务类型|起始NPC|结束NPC|起始npc|结束npc|chapter_name|act_name"
+    r"|时间|奖励|任务过程|任务概述)\s*[:：]"
+)
+
+# 证据分级
+LEVEL_CAST = "强·出场人物表"
+LEVEL_LINE = "强·有台词"
+LEVEL_ACTION = "中·有动作"
 LEVEL_WEAK = "弱·仅文字提及"
-LEVEL_ORDER = {LEVEL_STRONG: 3, LEVEL_MEDIUM: 2, LEVEL_WEAK: 1}
+LEVEL_ORDER = {LEVEL_CAST: 3, LEVEL_LINE: 3, LEVEL_ACTION: 2, LEVEL_WEAK: 1}
 
 
 @dataclass
@@ -50,7 +61,7 @@ class EntityHit:
     count: int
     level: str
     evidence: str
-    variants: Tuple[str, ...] = ()
+    cast_size: int = 0  # 该任务出场人物表的大小（0 = 无表，走推定）
 
     @property
     def weight(self) -> int:
@@ -59,22 +70,22 @@ class EntityHit:
 
 @dataclass
 class EntityDocsResult:
-    """实体检索结果（含覆盖度声明，供回答"没参与"时使用）。"""
-
-    query_kind: str  # "docs"（单实体）| "intersect"（双实体）
+    query_kind: str  # "docs" | "intersect"
     display: str
     hits: List[EntityHit] = field(default_factory=list)
     total_rows: int = 0
     deduped_rows: int = 0
     scanned_tasks: int = 0
-    others: List[str] = field(default_factory=list)  # intersect 时的另一个实体名
+    cast_tasks: int = 0  # 其中带权威出场人物表的任务数
+    others: List[str] = field(default_factory=list)
 
     @property
     def coverage_note(self) -> str:
-        """覆盖度声明：所有否定结论都必须带上它。"""
-        return (f"覆盖度：本次在已收录的 {self.scanned_tasks} 个任务条目中比对，"
-                f"原始命中 {self.total_rows} 条、双源去重后 {len(self.hits)} 条。"
-                f"未出现 ≠ 游戏内不存在，只表示当前知识库未收录相关剧情。")
+        """覆盖度声明：所有否定结论都必须带上。"""
+        ratio = f"{self.cast_tasks}/{self.scanned_tasks}"
+        return (f"覆盖度：本次在已收录的 {self.scanned_tasks} 个任务条目中比对（其中 {ratio} 个带权威"
+                f"出场人物表），原始命中 {self.total_rows} 条、双源去重后 {len(self.hits)} 条。"
+                f"未出现 ≠ 游戏内不存在，只表示当前知识库未收录（或缺出场人物表、无法权威判定）。")
 
 
 @lru_cache(maxsize=1)
@@ -86,7 +97,6 @@ def _graph_and_index():
 
 
 def _base_name(name: str) -> str:
-    """实体归一：去掉【…】后缀与 · 之后修饰（如 行秋【逸闻】 → 行秋）。"""
     cleaned = _VARIANT_RE.sub("", str(name or "")).strip()
     return cleaned.split("·")[0].strip() if cleaned else cleaned
 
@@ -116,8 +126,80 @@ def normalize_entity(name: str) -> Tuple[str, List[str]]:
     return query, []
 
 
+def parse_cast(full_text: str) -> set:
+    """解析权威出场人物表；丢弃明显错位的取值（实测存在 `出场人物：所属版本=1.0` 这类脏数据）。"""
+    names = set()
+    for m in _CAST_RE.finditer(str(full_text or "")):
+        for chunk in re.split(r"[、,，/]", m.group(1)):
+            name = chunk.strip().strip("[]【】")
+            if not name or len(name) > 12:
+                continue
+            if "=" in name or "版本" in name or "任务" in name:
+                continue
+            names.add(name)
+    return names
+
+
+def story_body(entry: dict) -> str:
+    """只取"本任务剧情正文"：剔除元数据块与前情提要/任务概述（它们写的是上一章剧情）。"""
+    text = str(entry.get("story_text") or "") or str(entry.get("full_text") or "")
+    # mihoyo 风格：[任务概述] … [任务过程] 之后才是本任务正文
+    idx = text.find("[任务过程]")
+    if idx >= 0:
+        text = text[idx + len("[任务过程]"):]
+    # bwiki 风格：正文从【B站词条元数据】块（以"任务编号"结尾）之后开始
+    marker = text.find("【B站词条元数据】")
+    if marker >= 0:
+        end = text.find("任务编号", marker)
+        text = text[text.find("\n", end) + 1:] if end > 0 else text[marker:]
+    lines = [line for line in text.splitlines() if not _META_LINE_RE.match(line)]
+    return "\n".join(lines)
+
+
+def _speaker_hits(body: str, names: Sequence[str]) -> int:
+    return sum(1 for m in _SPEAKER_RE.finditer(body) if m.group(1) in names)
+
+
+def _action_hits(body: str, names: Sequence[str]) -> int:
+    total = 0
+    for name in names:
+        for word in _ACTION_WORDS:
+            total += len(re.findall(re.escape(name) + r"[^\n。！？]{0,6}?" + word, body))
+    return total
+
+
+def _snippet(body: str, names: Sequence[str], width: int = 170) -> str:
+    """证据片段：优先该角色的台词行（强/中证据），否则首次提及上下文（弱证据）。"""
+    for match in _SPEAKER_RE.finditer(body):
+        if match.group(1) in names:
+            start = match.start()
+            return body[start:start + width].replace("\n", " ").strip()
+    for name in names:
+        idx = body.find(name)
+        if idx >= 0:
+            return body[max(0, idx - 25): idx + width].replace("\n", " ").strip()
+    return body[:width].replace("\n", " ").strip()
+
+
+def grade_body(entry: dict, names: Sequence[str], cast: set) -> Tuple[Optional[str], str, int, int]:
+    """返回 (等级 | None, 证据, 正文提及次数, 表大小)。
+
+    None 表示**权威排除**：该任务有出场人物表，但表里没有这个角色 → 不算参与。
+    """
+    body = story_body(entry)
+    count = sum(body.count(n) for n in names if n)
+    if cast:
+        if any(n in cast for n in names):
+            return LEVEL_CAST, _snippet(body, names), count, len(cast)
+        return None, "", count, len(cast)
+    if _speaker_hits(body, names) > 0:
+        return LEVEL_LINE, _snippet(body, names), count, 0
+    if _action_hits(body, names) > 0:
+        return LEVEL_ACTION, _snippet(body, names), count, 0
+    return LEVEL_WEAK, _snippet(body, names), count, 0
+
+
 def _entity_tasks(name: str) -> Tuple[str, Dict[str, dict]]:
-    """实体 → {条目 id: {count, variants}}，只保留 task 类型条目。"""
     by_id, mention = _graph_and_index()
     base, eids = normalize_entity(name)
     tasks: Dict[str, dict] = {}
@@ -133,54 +215,8 @@ def _entity_tasks(name: str) -> Tuple[str, Dict[str, dict]]:
     return base, tasks
 
 
-def _speaker_hits(entry: dict, names: Sequence[str]) -> int:
-    text = entry.get("story_text") or ""
-    return sum(1 for m in _SPEAKER_RE.finditer(text) if m.group(1) in names)
-
-
-def _action_hits(entry: dict, names: Sequence[str]) -> int:
-    text = entry.get("story_text") or ""
-    total = 0
-    for name in names:
-        for word in _ACTION_WORDS:
-            total += len(re.findall(re.escape(name) + r"[^\n。！？]{0,6}?" + word, text))
-    return total
-
-
-def _snippet(entry: dict, names: Sequence[str], width: int = 110) -> str:
-    """挑证据片段：**优先该角色的台词行**，没有台词再退回首次提及上下文。
-
-    为什么要按这个顺序：'强·有台词' 的条目若只截首次提及，常截到"别人提到他"的那句
-    （如"果然和钟离说的一样"），人工抽检和 LLM 都会误判为"只是被提到"。
-    """
-    text = entry.get("story_text") or entry.get("full_text") or ""
-    for match in _SPEAKER_RE.finditer(text):
-        if match.group(1) in names:
-            start = match.start()
-            return text[start:start + width].replace("\n", " ")
-    for name in names:
-        idx = text.find(name)
-        if idx >= 0:
-            return text[max(0, idx - 25): idx + width].replace("\n", " ")
-    return text[:width].replace("\n", " ")
-
-
-def grade_entry(entry: dict, names: Sequence[str]) -> str:
-    """分级：有台词 > 有动作 > 仅文字提及。"""
-    if _speaker_hits(entry, names) > 0:
-        return LEVEL_STRONG
-    if _action_hits(entry, names) > 0:
-        return LEVEL_MEDIUM
-    return LEVEL_WEAK
-
-
-def _norm_title(title: str) -> str:
-    return re.sub(r"[\s「」（）()·：:，,。！？?！\-—0-9]", "", str(title or ""))
-
-
 @lru_cache(maxsize=1)
 def _title_index() -> Dict[str, dict]:
-    """标题 → 词条（用于取正文长度与实体画像，避免每次线性扫描全图）。"""
     by_id, _ = _graph_and_index()
     idx: Dict[str, dict] = {}
     for entry in by_id.values():
@@ -201,14 +237,16 @@ def _title_to_id() -> Dict[str, str]:
     return idx
 
 
+def _norm_title(title: str) -> str:
+    return re.sub(r"[\s「」（）()·：:，,。！？?！\-—0-9]", "", str(title or ""))
+
+
 def dedupe_variants(rows: List[EntityHit], mention: dict, jaccard: float = 0.7,
                     min_ratio: float = 0.6) -> List[EntityHit]:
-    """双源去重（与已验证的探针口径一致）：标题同族 + **长度量级相当** + 实体画像 Jaccard 高。
+    """双源去重（与已验证探针口径一致）：标题同族 + 长度量级相当 + 实体画像 Jaccard 高。
 
-    要点（踩过坑）：
-    - 必须按正文长度降序比较，否则"短 ⊂ 长"的方向不成立，会把同系列的**不同幕**合并；
-    - 必须有长度量级门槛（实测同一任务的两种转写长度相近，而不同幕差异大）；
-    - 主信号用实体画像而非文本覆盖度：实测两源同一任务正文重合仅 19.7%，画像 Jaccard 0.87。
+    要点（踩过坑）：必须按正文长度降序比较；必须有长度量级门槛；主信号用实体画像
+    （实测同任务两源正文重合仅 19.7%，画像 Jaccard 0.87）。
     """
     inverted = mention.get("inverted") or {}
     idx, t2i = _title_index(), _title_to_id()
@@ -230,7 +268,7 @@ def dedupe_variants(rows: List[EntityHit], mention: dict, jaccard: float = 0.7,
                 continue
             longest = max(1, max(len(s_text), len(l_text)))
             if min(len(s_text), len(l_text)) / longest < min_ratio:
-                continue  # 长度量级差太多 → 不是同一任务的两种转写
+                continue
             a = set(map(str, inverted.get(t2i.get(short.title, "")) or []))
             b = set(map(str, inverted.get(t2i.get(long.title, "")) or []))
             if len(a & b) / max(1, len(a | b)) >= jaccard:
@@ -239,63 +277,64 @@ def dedupe_variants(rows: List[EntityHit], mention: dict, jaccard: float = 0.7,
     return [r for r in rows if r.title not in dropped]
 
 
-def _collect_hits(name: str, task_type: Optional[str]) -> Tuple[str, List[EntityHit], int, int]:
+def _collect_rows(name: str, task_type: Optional[str]) -> Tuple[str, List[EntityHit], int, int, int]:
     by_id, mention = _graph_and_index()
     base, tasks = _entity_tasks(name)
     rows: List[EntityHit] = []
+    cast_tasks = 0
     for sid, info in tasks.items():
         entry = by_id.get(sid) or {}
         ttype = _task_type_of(entry)
         if task_type and task_type not in ttype:
             continue
         names = [base] + [v for v in info["variants"] if v]
-        rows.append(
-            EntityHit(
-                title=str(entry.get("title") or ""),
-                task_type=ttype or "?",
-                count=int(info["count"]),
-                level=grade_entry(entry, names),
-                evidence=_snippet(entry, names),
-                variants=tuple(sorted(info["variants"])),
-            )
-        )
+        cast = parse_cast(str(entry.get("full_text") or ""))
+        if cast:
+            cast_tasks += 1
+        level, evidence, count, cast_size = grade_body(entry, names, cast)
+        if level is None:
+            continue  # 权威排除：有表但表中无此角色
+        rows.append(EntityHit(title=str(entry.get("title") or ""), task_type=ttype or "?",
+                              count=count, level=level, evidence=evidence, cast_size=cast_size))
     total = len(rows)
     rows = dedupe_variants(rows, mention)
     rows.sort(key=lambda r: (-r.weight, -r.count))
-    return base, rows, total, total - len(rows)
+    return base, rows, total, total - len(rows), cast_tasks
 
 
 def entity_docs(entity: str, task_type: Optional[str] = None, min_level: Optional[str] = None,
                 top_k: int = 8) -> EntityDocsResult:
-    """单实体检索：该实体参与/被提及的剧情文档（按证据强度排序）。"""
-    base, rows, total, deduped = _collect_hits(entity, task_type)
+    """单实体检索：该实体参与/被提及的剧情文档（权威出场人物表优先，按证据强度排序）。"""
+    base, rows, total, deduped, cast_tasks = _collect_rows(entity, task_type)
     if min_level:
         floor = LEVEL_ORDER.get(min_level, 0)
         rows = [r for r in rows if r.weight >= floor]
     scanned = len(_entity_tasks(entity)[1])
-    return EntityDocsResult("docs", base, rows[:top_k], total, deduped, scanned)
+    return EntityDocsResult("docs", base, rows[:top_k], total, deduped, scanned, cast_tasks)
 
 
 def entity_intersect(entity_a: str, entity_b: str, task_type: Optional[str] = None,
-                     top_k: int = 8) -> EntityDocsResult:
-    """双实体求交：两人共同出现（或被同时提及）的任务。"""
-    base_a, rows_a, total_a, _ = _collect_hits(entity_a, task_type)
-    base_b, rows_b, total_b, _ = _collect_hits(entity_b, task_type)
-    key = lambda r: r.title
-    map_a, map_b = {key(r): r for r in rows_a}, {key(r): r for r in rows_b}
-    common = [map_a[k] for k in map_a.keys() & map_b.keys()]
-    # 交集用"两侧证据都更强"的那条，证据片段取 A 侧
-    merged = []
-    for hit in common:
-        other = map_b[hit.title]
-        stronger = hit if hit.weight >= other.weight else EntityHit(
-            title=hit.title, task_type=hit.task_type, count=max(hit.count, other.count),
-            level=other.level, evidence=hit.evidence, variants=hit.variants,
-        )
-        merged.append(stronger)
-    merged.sort(key=lambda r: (-r.weight, -(r.count)))
+                     top_k: int = 8, require_both_strong: bool = True) -> EntityDocsResult:
+    """双实体求交：两人**都在场**的任务。
+
+    require_both_strong=True（默认）：只保留**双方都有强证据**（出场人物表或正文台词）的任务。
+    实测教训：放宽到"中·有动作"会把"只有一方在场、另一方被转述提及"的条目混进交集
+    （如「往生堂三日无主」里香菱转述"行秋说想约大家一起聚一聚"，行秋并不在场）。
+    """
+    base_a, rows_a, total_a, _, cast_a = _collect_rows(entity_a, task_type)
+    base_b, rows_b, total_b, _, cast_b = _collect_rows(entity_b, task_type)
+    map_a, map_b = {r.title: r for r in rows_a}, {r.title: r for r in rows_b}
+    merged: List[EntityHit] = []
+    floor = LEVEL_ORDER[LEVEL_LINE] if require_both_strong else LEVEL_ORDER[LEVEL_ACTION]
+    for title in map_a.keys() & map_b.keys():
+        hit_a, hit_b = map_a[title], map_b[title]
+        if min(hit_a.weight, hit_b.weight) < floor:
+            continue  # 至少要"强"（表/台词），避免"一方仅被提及/被转述"
+        merged.append(hit_a if hit_a.weight >= hit_b.weight else hit_b)
+    merged.sort(key=lambda r: (-r.weight, -r.count))
     result = EntityDocsResult("intersect", f"{base_a} ∩ {base_b}", merged[:top_k],
-                              total_a + total_b, 0, len(_entity_tasks(entity_a)[1]))
+                              total_a + total_b, 0, len(_entity_tasks(entity_a)[1]),
+                              min(cast_a, cast_b))
     result.others = [base_b]
     return result
 
@@ -303,14 +342,15 @@ def entity_intersect(entity_a: str, entity_b: str, task_type: Optional[str] = No
 def format_entity_docs(result: EntityDocsResult) -> str:
     """渲染成给 LLM 的文本：分级 + 证据片段 + 覆盖度声明（否定结论必须带上）。"""
     if result.query_kind == "intersect":
-        head = f"===== 实体检索（交集）「{result.display}」({len(result.hits)}个共同任务) ====="
+        head = f"===== 实体检索（交集）「{result.display}」({len(result.hits)}个双方在场的任务) ====="
     else:
         head = f"===== 实体检索「{result.display}」({len(result.hits)}条剧情文档) ====="
     lines = [head]
     if not result.hits:
         lines.append("（本次未检出命中）")
     for i, hit in enumerate(result.hits, 1):
-        lines.append(f"{i}. [{hit.level}] {hit.title}（{hit.task_type}，提及 {hit.count} 次）")
-        lines.append(f"   证据：{hit.evidence[:160]}")
+        src = f"出场人物表 {hit.cast_size} 人" if hit.cast_size else "正文推定"
+        lines.append(f"{i}. [{hit.level}] {hit.title}（{hit.task_type}，正文提及 {hit.count} 次，{src}）")
+        lines.append(f"   证据：{hit.evidence[:170]}")
     lines.append(result.coverage_note)
     return "\n".join(lines)
