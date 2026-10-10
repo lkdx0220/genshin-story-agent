@@ -17,6 +17,10 @@ from app.data import (
 )
 from app.progress import _emit_progress
 from character_aliases import resolve_aliases
+from app.tools.vocab import (
+    Element, ELEMENTS, CharacterRegion, CHARACTER_REGIONS,
+    WeaponType, WEAPON_TYPES, Rarity, CollectibleRegion, COLLECTIBLE_REGIONS,
+)
 
 # 缓存目录常量
 _DIR_CACHE_TTL = 86400  # 24 小时
@@ -28,23 +32,21 @@ _QUEST_SERIES_CACHE_TTL = 86400  # 24 小时
 
 
 @tool
-def list_characters_by_element(element: str) -> str:
-    """按元素类型列出所有角色。element: 元素类型（火/水/风/雷/冰/岩/草）"""
-    element_map = {"火": "火", "水": "水", "风": "风", "雷": "雷", "冰": "冰", "岩": "岩", "草": "草"}
-    target = element_map.get(element, element)
-    matched = [r for r in 角色知识库 if r.get("神之眼") == target]
+def list_characters_by_element(element: Element) -> str:
+    """按元素类型列出所有角色。element: 元素类型（取值见 Schema）"""
+    matched = [r for r in 角色知识库 if r.get("神之眼") == element]
     if matched:
         print(f"[工具] 按元素列出: {element}")
-        lines = [f"\n【{target}元素角色列表】({len(matched)}位)", "-" * 40]
+        lines = [f"\n【{element}元素角色列表】({len(matched)}位)", "-" * 40]
         for r in matched:
             lines.append(f"  {r['角色名称']}（{r.get('称号','')}）| {r.get('武器类型','')} | {r.get('所属','')}")
         return "\n".join(lines)
-    return f"知识库中暂无{target}元素角色数据。"
+    return f"知识库中暂无{element}元素角色数据。可选元素：{'/'.join(ELEMENTS)}"
 
 
 @tool
-def list_characters_by_region(region: str) -> str:
-    """按所属地区列出所有角色。region: 地区名称（蒙德/璃月/稻妻/须弥/枫丹/纳塔/至冬/其他）"""
+def list_characters_by_region(region: CharacterRegion) -> str:
+    """按所属地区列出所有角色。region: 地区名称（取值见 Schema，含 其他/坎瑞亚/挪德卡莱）"""
     matched = [r for r in 角色知识库 if r.get("所属") == region]
     if matched:
         print(f"[工具] 按地区列出: {region}")
@@ -52,12 +54,12 @@ def list_characters_by_region(region: str) -> str:
         for r in matched:
             lines.append(f"  {r['角色名称']}（{r.get('称号','')}）| {r.get('神之眼','')} | {r.get('武器类型','')} | {r.get('稀有度','')}星")
         return "\n".join(lines)
-    return f"知识库中暂无{region}角色数据。"
+    return f"知识库中暂无{region}角色数据。可选地区：{'/'.join(CHARACTER_REGIONS)}"
 
 
 @tool
-def list_characters_by_weapon(weapon_type: str) -> str:
-    """按武器类型列出所有角色。weapon_type: 武器类型（单手剑/双手剑/长柄武器/法器/弓）"""
+def list_characters_by_weapon(weapon_type: WeaponType) -> str:
+    """按武器类型列出所有角色。weapon_type: 武器类型（取值见 Schema）"""
     matched = [r for r in 角色知识库 if r.get("武器类型") == weapon_type]
     if matched:
         print(f"[工具] 按武器列出: {weapon_type}")
@@ -65,16 +67,13 @@ def list_characters_by_weapon(weapon_type: str) -> str:
         for r in matched:
             lines.append(f"  {r['角色名称']}（{r.get('称号','')}）| {r.get('神之眼','')} | {r.get('所属','')} | {r.get('稀有度','')}星")
         return "\n".join(lines)
-    return f"知识库中暂无{weapon_type}角色数据。"
+    return f"知识库中暂无{weapon_type}角色数据。可选武器类型：{'/'.join(WEAPON_TYPES)}"
 
 
 @tool
-def list_characters_by_rarity(rarity: str) -> str:
-    """按稀有度列出所有角色。rarity: 稀有度（4或5）"""
-    try:
-        target = int(rarity)
-    except ValueError:
-        return f"稀有度参数无效：{rarity}，请传入 4 或 5。"
+def list_characters_by_rarity(rarity: Rarity) -> str:
+    """按稀有度列出所有角色。rarity: 稀有度（4 或 5，取值见 Schema）"""
+    target = int(rarity)  # Schema 已限定为 "4" / "5"
     matched = [r for r in 角色知识库 if r.get("稀有度") == target]
     if matched:
         print(f"[工具] 按稀有度列出: {rarity}星")
@@ -407,15 +406,15 @@ def list_all_game_items() -> str:
 
 
 @tool
-def list_collectibles_by_region(region: str) -> str:
-    """按地区列出所有区域特产。region: 地区名称（蒙德/璃月/稻妻/须弥/枫丹/纳塔/挪德卡莱）"""
+def list_collectibles_by_region(region: CollectibleRegion) -> str:
+    """按地区列出所有区域特产。region: 地区名称（取值见 Schema，含 至冬）"""
     collectibles = _load_content_json("collectibles")
     if not collectibles:
         return "采集物数据库为空。"
     keyword = f"{region}区域特产"
     matched = [c for c in collectibles if keyword in c.get("类型", "")]
     if not matched:
-        return f"未找到{region}区域特产数据。"
+        return f"未找到{region}区域特产数据。可选地区：{'/'.join(COLLECTIBLE_REGIONS)}"
     lines = [f"\n【{region}区域特产】({len(matched)}种)", "-" * 40]
     for c in matched:
         name = c.get("名称") or ""
