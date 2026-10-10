@@ -26,17 +26,44 @@ CONTENT_DIR = os.path.join(BASE_DIR, "content_data")
 RAW_PATH = os.path.join(CONTENT_DIR, "mihoyo_tasks_raw.json")
 
 STANDARD_MODULES = {
-    "任务概述", "任务过程", "任务奖励", "地图说明", "攻略方法",
-    "剧情对话", "任务流程", "任务概览", "任务目标",
+    "任务概述",
+    "任务过程",
+    "任务奖励",
+    "地图说明",
+    "攻略方法",
+    "剧情对话",
+    "任务流程",
+    "任务概览",
+    "任务目标",
 }
 
 SKIP_DATA_KEYS = {
-    "root_id", "child_ids", "image", "icon", "tab_name",
-    "component_id", "style", "layout", "id", "switch",
-    "is_show_switch", "without_border", "repeated", "is_submodule",
-    "origin_module_id", "can_delete", "is_hidden", "rich_text_editing",
-    "is_poped", "is_customize_name", "is_abstract", "show_switch",
-    "module_id", "module_name", "name", "component_type",
+    "root_id",
+    "child_ids",
+    "image",
+    "icon",
+    "tab_name",
+    "component_id",
+    "style",
+    "layout",
+    "id",
+    "switch",
+    "is_show_switch",
+    "without_border",
+    "repeated",
+    "is_submodule",
+    "origin_module_id",
+    "can_delete",
+    "is_hidden",
+    "rich_text_editing",
+    "is_poped",
+    "is_customize_name",
+    "is_abstract",
+    "show_switch",
+    "module_id",
+    "module_name",
+    "name",
+    "component_type",
 }
 
 VALUE_EMPTY = {"", "暂无", "无", "-", "—"}
@@ -238,7 +265,7 @@ def group_text(group):
 
 
 def parse_filters(item):
-    text = (item.get("filters", {}).get("filters_text", "") or "")
+    text = item.get("filters", {}).get("filters_text", "") or ""
     if not text:
         return {}
     try:
@@ -332,7 +359,7 @@ _TITLE_SUFFIX_RE = re.compile(
     r"[·•‧]\s*(其[一二三四五六七八九十]+|第[一二三四五六七八九十]+[幕回日]|上|中|下|序|初篇|终篇|篇)\s*$"
 )
 _TITLE_NUM_PAREN_RE = re.compile(r"[（(][一二三四五六七八九十\d]+[)）]")
-_TITLE_PUNCT_RE = re.compile(r'[·•‧、，。！？?!：:；;／/“”‘’「」『』【】《》<>\[\]{}()（）\s\-—.…⋯]+')
+_TITLE_PUNCT_RE = re.compile(r"[·•‧、，。！？?!：:；;／/“”‘’「」『』【】《》<>\[\]{}()（）\s\-—.…⋯]+")
 
 
 def normalize_title(s):
@@ -444,14 +471,16 @@ def main():
     for idx, item in enumerate(items):
         page = item.get("page")
         if not isinstance(page, dict):
-            logs.append(f"[{idx}] 无页面：{item.get('title','')}")
+            logs.append(f"[{idx}] 无页面：{item.get('title', '')}")
             continue
         filters = parse_filters(item)
         task_type = filters.get("任务类型", "")
         series = item.get("title", "").strip()
         groups = group_modules_from_page(page)
         module_names = [group_title(g) for g in groups if group_title(g)]
-        is_container = len(set(module_names)) > 1 or (series.startswith("至冬 ") and len(module_names) >= 1 and module_names[0] != series)
+        is_container = len(set(module_names)) > 1 or (
+            series.startswith("至冬 ") and len(module_names) >= 1 and module_names[0] != series
+        )
         if len(module_names) == 1 and module_names[0] == series:
             is_container = False
 
@@ -538,21 +567,25 @@ def main():
                     meta["任务描述"] = (meta.get("任务描述", "") + "\n" + t["任务描述"]).strip()
 
         if kind == "world":
-            world_entries.append({
-                "title": title,
-                "text": text,
-                "metadata": meta,
-                "category": "世界任务",
-            })
+            world_entries.append(
+                {
+                    "title": title,
+                    "text": text,
+                    "metadata": meta,
+                    "category": "世界任务",
+                }
+            )
         else:
-            activity_entries.append({
-                "source": "米游社观测枢",
-                "category": "活动剧情",
-                "title": title,
-                "pageid": m["pageids"][0],
-                "metadata": meta,
-                "text": text,
-            })
+            activity_entries.append(
+                {
+                    "source": "米游社观测枢",
+                    "category": "活动剧情",
+                    "title": title,
+                    "pageid": m["pageids"][0],
+                    "metadata": meta,
+                    "text": text,
+                }
+            )
 
     log(f"待新增世界任务: {len(world_entries)}，活动任务: {len(activity_entries)}")
     log(f"跳过已存在: {len(skipped_existing)}，跳过主线已有: {len(skipped_main)}")
@@ -570,6 +603,7 @@ def main():
         bk = world_path + f".bak-before-mihoyo-parse-{time.strftime('%Y%m%d')}"
         if not os.path.exists(bk):
             import shutil
+
             shutil.copy2(world_path, bk)
             log(f"备份: {bk}")
         data = load_json(world_path)
@@ -582,6 +616,7 @@ def main():
         bk = act_path + f".bak-before-mihoyo-parse-{time.strftime('%Y%m%d')}"
         if not os.path.exists(bk):
             import shutil
+
             shutil.copy2(act_path, bk)
             log(f"备份: {bk}")
         data = load_json(act_path)

@@ -17,10 +17,10 @@ os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 # Windows 兼容
-if sys.platform == 'win32':
+if sys.platform == "win32":
     try:
         if sys.stdout is not None:
-            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
@@ -37,9 +37,12 @@ class GenshinConversationMemory:
     _chroma_checked: bool = False
     _chroma_available: bool = False
 
-    def __init__(self, persist_directory: str = "./conversation_memory",
-                 embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2",
-                 collection_name: str = "genshin_conversations"):
+    def __init__(
+        self,
+        persist_directory: str = "./conversation_memory",
+        embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2",
+        collection_name: str = "genshin_conversations",
+    ):
         self.persist_dir = persist_directory
         self.embedding_model_name = embedding_model
         self.collection_name = collection_name
@@ -55,6 +58,7 @@ class GenshinConversationMemory:
         if not self._st_checked:
             try:
                 from sentence_transformers import SentenceTransformer
+
                 self.__class__._sentence_transformer = SentenceTransformer
                 self.__class__._st_available = True
                 self.__class__._st_checked = True
@@ -72,6 +76,7 @@ class GenshinConversationMemory:
         if not self._chroma_checked:
             try:
                 import chromadb
+
                 self.__class__._chroma_available = True
                 self.__class__._chroma_checked = True
                 print("[记忆] ChromaDB 就绪")
@@ -100,12 +105,14 @@ class GenshinConversationMemory:
                 if os.path.exists(db_file):
                     try:
                         import stat
+
                         os.chmod(db_file, stat.S_IWRITE | stat.S_IREAD)
                     except Exception:
                         pass
 
                 if not self._chroma_client:
                     import chromadb
+
                     self.__class__._chroma_client = chromadb.PersistentClient(path=self.persist_dir)
 
                 # 检查或创建集合
@@ -116,14 +123,13 @@ class GenshinConversationMemory:
                         self._chroma_client.delete_collection(self.collection_name)
                         col = self._chroma_client.create_collection(
                             name=self.collection_name,
-                            metadata={"description": "原神剧情对话记忆", "hnsw:space": "cosine"}
+                            metadata={"description": "原神剧情对话记忆", "hnsw:space": "cosine"},
                         )
                     else:
                         col = existing
                 except Exception:
                     col = self._chroma_client.create_collection(
-                        name=self.collection_name,
-                        metadata={"description": "原神剧情对话记忆", "hnsw:space": "cosine"}
+                        name=self.collection_name, metadata={"description": "原神剧情对话记忆", "hnsw:space": "cosine"}
                     )
 
                 self._collection = col
@@ -141,8 +147,9 @@ class GenshinConversationMemory:
         self._ensure_init()
         return self._st_available and self._chroma_available and self._collection is not None
 
-    def add_conversation(self, user_query: str, assistant_response: str,
-                         metadata: Optional[Dict] = None) -> Optional[str]:
+    def add_conversation(
+        self, user_query: str, assistant_response: str, metadata: Optional[Dict] = None
+    ) -> Optional[str]:
         self._ensure_init()
         if not self.is_available:
             return None
@@ -151,10 +158,12 @@ class GenshinConversationMemory:
         text = f"用户: {user_query}\n\n助手: {assistant_response}"
 
         meta = metadata or {}
-        meta.update({
-            "timestamp": datetime.now().isoformat(),
-            "user_preview": user_query[:100],
-        })
+        meta.update(
+            {
+                "timestamp": datetime.now().isoformat(),
+                "user_preview": user_query[:100],
+            }
+        )
 
         try:
             ST = self._sentence_transformer
@@ -192,11 +201,13 @@ class GenshinConversationMemory:
                     distance = results["distances"][0][i] if results.get("distances") else 1.0
                     similarity = 1 - distance
                     if similarity >= threshold:
-                        memories.append({
-                            "content": doc,
-                            "similarity": similarity,
-                            "timestamp": results["metadatas"][0][i].get("timestamp", ""),
-                        })
+                        memories.append(
+                            {
+                                "content": doc,
+                                "similarity": similarity,
+                                "timestamp": results["metadatas"][0][i].get("timestamp", ""),
+                            }
+                        )
             return memories
         except Exception as e:
             print(f"[记忆] 检索失败: {e}")
@@ -238,10 +249,8 @@ class GenshinRAGMemory:
             collection_name="genshin_conversations",
         )
 
-    def save_conversation(self, user_query: str, assistant_response: str,
-                          session_id: str = "default") -> None:
-        self.memory.add_conversation(user_query, assistant_response,
-                                     metadata={"session_id": session_id})
+    def save_conversation(self, user_query: str, assistant_response: str, session_id: str = "default") -> None:
+        self.memory.add_conversation(user_query, assistant_response, metadata={"session_id": session_id})
 
     def retrieve_for_query(self, query: str, top_k: int = 3) -> str:
         memories = self.memory.retrieve(query, top_k=top_k, threshold=0.4)

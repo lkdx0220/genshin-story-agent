@@ -13,12 +13,14 @@
 - 任何字段缺失都返回 ok=False + reasons，不做自动修补；
 - 不执行外部命令、不访问网络。
 """
+
 import json
 import re
 from typing import Any, Dict, List, Tuple
 
 
 # ====== 通用工具 ======
+
 
 def clean_wiki_markup(text: str) -> str:
     """去掉注释、常见模板、HTML 标签和链接语法，只保留可读文本。"""
@@ -91,6 +93,7 @@ def _result(ok: bool, reasons: List[str], details: Dict[str, Any] = None) -> Dic
 
 # ====== B站 Wiki 校验 ======
 
+
 def validate_bwiki(category: str, title: str, wikitext: str, rules: Dict[str, Any]) -> Dict[str, Any]:
     """B站 Wiki 原始 wikitext 按分类校验。"""
     if not wikitext or not wikitext.strip():
@@ -137,9 +140,7 @@ def _validate_bwiki_npc(title: str, wikitext: str, rules: Dict[str, Any]) -> Dic
     strong_fields = ["职业", "所属组织", "种族", "对话赠礼", "相关系统"]
     values = {field: wiki_template_field(wikitext, field) for field in strong_fields}
     has_dialogue = bool(
-        "{{NPC对话" in wikitext
-        or "==NPC对话==" in wikitext
-        or nonempty(wiki_template_field(wikitext, "对话"), 1)
+        "{{NPC对话" in wikitext or "==NPC对话==" in wikitext or nonempty(wiki_template_field(wikitext, "对话"), 1)
     )
     nonempty_fields = [field for field, value in values.items() if nonempty(value, 1)]
     reasons = []
@@ -204,6 +205,7 @@ def _validate_bwiki_generic(category: str, title: str, wikitext: str, rules: Dic
 
 # ====== 米游社观测枢校验 ======
 
+
 def _mihoyo_module_texts(page: Dict[str, Any]) -> Dict[str, str]:
     """把 entry_page 的 modules 提取为 模块名 -> 纯文本。"""
     result: Dict[str, str] = {}
@@ -260,7 +262,25 @@ def validate_mihoyo(channel: str, title: str, page: Dict[str, Any], rules: Dict[
             nonempty(text, 20)
             for name, text in modules.items()
             if name not in {"角色详细", "角色故事1", "角色故事2", "角色故事3", "角色故事4", "角色故事5"}
-            and name not in {"基础信息", "角色突破", "推荐装备", "攻略推荐", "天赋", "命之座", "角色展示", "名片", "特殊料理", "角色CV", "配音展示", "角色宣发时间轴", "角色媒体资料", "关联词条", "天赋演示", "角色关系网"}
+            and name
+            not in {
+                "基础信息",
+                "角色突破",
+                "推荐装备",
+                "攻略推荐",
+                "天赋",
+                "命之座",
+                "角色展示",
+                "名片",
+                "特殊料理",
+                "角色CV",
+                "配音展示",
+                "角色宣发时间轴",
+                "角色媒体资料",
+                "关联词条",
+                "天赋演示",
+                "角色关系网",
+            }
         )
         if not has_special:
             reasons.append("缺少神之眼/特殊档案内容")

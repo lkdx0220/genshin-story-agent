@@ -9,44 +9,90 @@
 
 注：hybrid_search 和 kb_vector_search 在 app/retrieval.py 中（与检索逻辑耦合）。
 """
+
 from app.tools.query import (
-    query_character, query_voice_relation, query_region, query_story, query_weapon, query_quest,
-    query_monster, query_artifact, query_material, query_collectible,
-    query_recipe, query_food, get_book_metadata,
+    query_character,
+    query_voice_relation,
+    query_region,
+    query_story,
+    query_weapon,
+    query_quest,
+    query_monster,
+    query_artifact,
+    query_material,
+    query_collectible,
+    query_recipe,
+    query_food,
+    get_book_metadata,
 )
 from app.tools.list import (
-    list_characters_by_element, list_characters_by_region,
-    list_characters_by_weapon, list_characters_by_rarity,
-    list_all_quest_series, list_all_books, list_all_lore_entries,
-    list_all_weapons_and_artifacts, list_all_game_items,
-    list_collectibles_by_region, count_character_lines,
+    list_characters_by_element,
+    list_characters_by_region,
+    list_characters_by_weapon,
+    list_characters_by_rarity,
+    list_all_quest_series,
+    list_all_books,
+    list_all_lore_entries,
+    list_all_weapons_and_artifacts,
+    list_all_game_items,
+    list_collectibles_by_region,
+    count_character_lines,
 )
 from app.tools.search import (
-    search_activity, find_first_mention,
-    search_all, search_lore, search_world,  # search_world 为碰壁后补充工具，初始不暴露
+    search_activity,
+    find_first_mention,
+    search_all,
+    search_lore,
+    search_world,  # search_world 为碰壁后补充工具，初始不暴露
 )
 from app.tools.content import (
-    load_book_content, load_quest_content,
+    load_book_content,
+    load_quest_content,
 )
 from app.tools.wiki_graph import (
-    wiki_graph_search, wiki_graph_expand, wiki_graph_get,
+    wiki_graph_search,
+    wiki_graph_expand,
+    wiki_graph_get,
 )
 from app.retrieval import hybrid_search, kb_vector_search
 
 
 # ====== 工具列表（顺序决定 LLM 看到的工具顺序）======
 tools = [
-    query_character, query_voice_relation, query_region, query_story, query_weapon, query_quest,
-    list_characters_by_element, list_characters_by_region, list_characters_by_weapon, list_characters_by_rarity,
+    query_character,
+    query_voice_relation,
+    query_region,
+    query_story,
+    query_weapon,
+    query_quest,
+    list_characters_by_element,
+    list_characters_by_region,
+    list_characters_by_weapon,
+    list_characters_by_rarity,
     list_all_quest_series,
-    list_all_books, list_all_lore_entries, list_all_weapons_and_artifacts, list_all_game_items,
-    search_activity, search_all, search_world,
-    load_book_content, load_quest_content, get_book_metadata,
-    count_character_lines, find_first_mention,
-    query_monster, query_artifact, query_material, query_collectible, list_collectibles_by_region, query_recipe,
+    list_all_books,
+    list_all_lore_entries,
+    list_all_weapons_and_artifacts,
+    list_all_game_items,
+    search_activity,
+    search_all,
+    search_world,
+    load_book_content,
+    load_quest_content,
+    get_book_metadata,
+    count_character_lines,
+    find_first_mention,
+    query_monster,
+    query_artifact,
+    query_material,
+    query_collectible,
+    list_collectibles_by_region,
+    query_recipe,
     query_food,
     hybrid_search,
-    wiki_graph_search, wiki_graph_expand, wiki_graph_get,
+    wiki_graph_search,
+    wiki_graph_expand,
+    wiki_graph_get,
 ]
 
 # ====== 工具名 → 函数映射（供意图路由器动态注入）======

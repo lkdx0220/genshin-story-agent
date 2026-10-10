@@ -15,6 +15,7 @@
 - 不写 content_data，只写 logs/kb_auto_update；
 - 所有网络请求失败都会进入报告，不会静默忽略。
 """
+
 import argparse
 import hashlib
 import importlib.util
@@ -53,6 +54,7 @@ BWIKI_REVISION_BATCH = 20
 
 
 # ====== 基础工具 ======
+
 
 def setup_logging(log_path: str):
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -104,10 +106,16 @@ def curl_to_file(url: str, headers, timeout: int, retries: int = 3) -> str:
     os.close(fd)
     for attempt in range(retries):
         args = [
-            "curl.exe", "-s", "--compressed",
-            "-L", "--max-time", str(timeout),
-            "-o", tmp_path,
-            "-w", "%{http_code}",
+            "curl.exe",
+            "-s",
+            "--compressed",
+            "-L",
+            "--max-time",
+            str(timeout),
+            "-o",
+            tmp_path,
+            "-w",
+            "%{http_code}",
             url,
         ]
         for header in headers or []:
@@ -123,7 +131,7 @@ def curl_to_file(url: str, headers, timeout: int, retries: int = 3) -> str:
             if code == "200":
                 return tmp_path
             if code in {"000", "", "429", "567"} or code.startswith("5"):
-                wait = 5 * (2 ** attempt)
+                wait = 5 * (2**attempt)
                 LOGGER.warning("HTTP %s，%s 秒后重试 (%s/%s): %s", code or "(空)", wait, attempt + 1, retries, url)
                 time.sleep(wait)
                 continue
@@ -171,6 +179,7 @@ def curl_text(url: str, timeout: int = 30, headers=None) -> str:
 
 # ====== B站 Wiki ======
 
+
 def bwiki_category_pages(category_name: str):
     """返回 (titles, errors)。"""
     titles = []
@@ -207,7 +216,7 @@ def bwiki_revisions(titles):
     result = {}
     errors = []
     for start in range(0, len(titles), BWIKI_REVISION_BATCH):
-        batch = titles[start:start + BWIKI_REVISION_BATCH]
+        batch = titles[start : start + BWIKI_REVISION_BATCH]
         data = curl_json(
             BWIKI_API,
             {
@@ -333,6 +342,7 @@ def _validate_bwiki_change(category, title, change_type, config, manifest, repor
 
 # ====== 米游社观测枢 ======
 
+
 def load_mihoyo_module():
     path = os.path.join(PROJECT_DIR, "wiki_data_tools", "_fetch_mihoyo_channel.py")
     spec = importlib.util.spec_from_file_location("daily_mihoyo_channel", path)
@@ -384,7 +394,9 @@ def scan_mihoyo_channel(helper, channel_key, channel_id, config, manifest, repor
 
     removed_ids = sorted(set(seen) - current_ids)
     if removed_ids:
-        report["removed"].append({"source": "mihoyo", "category": channel_key, "ids": removed_ids[:50], "count": len(removed_ids)})
+        report["removed"].append(
+            {"source": "mihoyo", "category": channel_key, "ids": removed_ids[:50], "count": len(removed_ids)}
+        )
         for content_id in removed_ids:
             seen.pop(content_id, None)
 
@@ -416,6 +428,7 @@ def _validate_mihoyo_change(helper, channel_key, content_id, title, change_type,
 
 
 # ====== pending 合并与复查 ======
+
 
 def _merge_pending(manifest, item):
     key = f"{item['source']}:{item['category']}:{item['id']}"
@@ -470,6 +483,7 @@ def recheck_pending(config, manifest, report):
 
 # ====== 报告与通知 ======
 
+
 def build_report(manifest, report):
     blockers = [p for p in manifest["pending"] if not (p.get("validation") or {}).get("ok")]
     complete_changes = [c for c in report["changes"] if (c.get("validation") or {}).get("ok")]
@@ -506,10 +520,16 @@ def notify_windows(config, title: str, message: str):
     try:
         subprocess.run(
             [
-                "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                "-File", script,
-                "-Title", title,
-                "-Message", message,
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                script,
+                "-Title",
+                title,
+                "-Message",
+                message,
             ],
             capture_output=True,
             text=True,
@@ -530,19 +550,16 @@ def format_notification(report) -> str:
         return f"知识库检测未完成：扫描错误 {summary['error_count']} 个，本次不更新。"
     if summary["change_count"] == 0:
         return f"知识库无更新。新增/变化 0 个，错误 {summary['error_count']} 个。"
-    return (
-        f"知识库检测到 {summary['change_count']} 个新增/变化，"
-        f"完整性通过，dry-run 未写入数据。"
-    )
+    return f"知识库检测到 {summary['change_count']} 个新增/变化，完整性通过，dry-run 未写入数据。"
 
 
 # ====== 主流程 ======
 
+
 def main():
     parser = argparse.ArgumentParser(description="知识库自动更新检测器（Phase 1 dry-run）")
     parser.add_argument("--config", default=DEFAULT_CONFIG)
-    parser.add_argument("--mode", default="dry-run", choices=["dry-run"],
-                        help="Phase 1 只支持 dry-run")
+    parser.add_argument("--mode", default="dry-run", choices=["dry-run"], help="Phase 1 只支持 dry-run")
     parser.add_argument("--no-notify", action="store_true")
     args = parser.parse_args()
 
@@ -555,7 +572,9 @@ def main():
         return 30
 
     logs_dir = os.path.join(PROJECT_DIR, config.get("paths", {}).get("logs_dir", "logs/kb_auto_update"))
-    manifest_path = os.path.join(PROJECT_DIR, config.get("paths", {}).get("manifest", "logs/kb_auto_update/detection_manifest.json"))
+    manifest_path = os.path.join(
+        PROJECT_DIR, config.get("paths", {}).get("manifest", "logs/kb_auto_update/detection_manifest.json")
+    )
     day = datetime.now().strftime("%Y-%m-%d")
     log_path = os.path.join(logs_dir, f"{day}.log")
     report_path = os.path.join(logs_dir, f"{day}.json")
@@ -568,15 +587,18 @@ def main():
         LOGGER.error("Phase 1 只允许 dry-run")
         return 30
 
-    manifest = load_json(manifest_path, {
-        "version": 1,
-        "created_at": now_text(),
-        "updated_at": now_text(),
-        "bwiki": {},
-        "mihoyo": {},
-        "initialized": {},
-        "pending": [],
-    })
+    manifest = load_json(
+        manifest_path,
+        {
+            "version": 1,
+            "created_at": now_text(),
+            "updated_at": now_text(),
+            "bwiki": {},
+            "mihoyo": {},
+            "initialized": {},
+            "pending": [],
+        },
+    )
     manifest.setdefault("bwiki", {})
     manifest.setdefault("mihoyo", {})
     manifest.setdefault("initialized", {})
@@ -607,10 +629,15 @@ def main():
     atomic_write_json(report_path, report)
 
     summary = report["summary"]
-    LOGGER.info("检测完成: 变化 %s，完整 %s，不完整 %s，pending %s，gate=%s，错误 %s",
-                summary["change_count"], summary["complete_change_count"],
-                summary["incomplete_change_count"], summary["pending_count"],
-                summary["gate"], summary["error_count"])
+    LOGGER.info(
+        "检测完成: 变化 %s，完整 %s，不完整 %s，pending %s，gate=%s，错误 %s",
+        summary["change_count"],
+        summary["complete_change_count"],
+        summary["incomplete_change_count"],
+        summary["pending_count"],
+        summary["gate"],
+        summary["error_count"],
+    )
     LOGGER.info("报告: %s", report_path)
 
     if not args.no_notify:

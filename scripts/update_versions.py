@@ -12,8 +12,14 @@ QUESTS_FILE = os.path.join(BASE_DIR, "content_data", "quests_活动剧情.json")
 
 # 版本号映射：6.x -> 月之x
 VERSION_MAP_6X = {
-    "6.0": "月之一", "6.1": "月之二", "6.2": "月之三", "6.3": "月之四",
-    "6.4": "月之五", "6.5": "月之六", "6.6": "月之七", "6.7": "月之八",
+    "6.0": "月之一",
+    "6.1": "月之二",
+    "6.2": "月之三",
+    "6.3": "月之四",
+    "6.4": "月之五",
+    "6.5": "月之六",
+    "6.6": "月之七",
+    "6.7": "月之八",
 }
 
 
@@ -36,16 +42,16 @@ def decode_unicode_escapes(text):
     result = []
     i = 0
     while i < len(text):
-        if text[i:i+2] == '\\u' and i + 6 <= len(text):
+        if text[i : i + 2] == "\\u" and i + 6 <= len(text):
             try:
-                result.append(chr(int(text[i+2:i+6], 16)))
+                result.append(chr(int(text[i + 2 : i + 6], 16)))
                 i += 6
                 continue
             except ValueError:
                 pass
         result.append(text[i])
         i += 1
-    return ''.join(result)
+    return "".join(result)
 
 
 def parse_wiki_data(filepath):
@@ -105,11 +111,11 @@ def fix_truncated_json_and_parse(filepath):
     # 找到最后一个完整的 displaytitle 条目截断
     last_displaytitle = content.rfind('"displaytitle":""')
     if last_displaytitle >= 0:
-        after = content[last_displaytitle + len('"displaytitle":""'):]
+        after = content[last_displaytitle + len('"displaytitle":""') :]
         idx = after.find("}")
         if idx >= 0:
             cut_pos = last_displaytitle + len('"displaytitle":""') + idx + 1
-            content = content[:cut_pos] + '}}}'
+            content = content[:cut_pos] + "}}}"
 
     try:
         data = json.loads(content)

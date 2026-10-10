@@ -14,7 +14,7 @@ import socket
 import urllib.parse
 
 # 确定项目根目录（开发模式用脚本所在目录，打包模式用 exe 所在目录）
-if getattr(sys, 'frozen', False):
+if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -58,6 +58,7 @@ def _shutdown_old_server(port: int):
     """尝试关闭端口上的旧 Flask 实例"""
     try:
         import urllib.request
+
         url = _ensure_local_url(f"http://127.0.0.1:{port}/api/shutdown")
         urllib.request.urlopen(url, timeout=2)
     except Exception:
@@ -104,6 +105,7 @@ def main():
     # ---- 等待 Flask 就绪 ----
     print(f"[启动器] 等待 Flask 服务启动 (端口 {PORT})...")
     import urllib.request
+
     max_wait = 60
     for _ in range(max_wait):
         try:
@@ -137,8 +139,7 @@ def main():
 
     print(f"[启动器] 窗口已打开: {chat_url}")
     webview.start(
-        private_mode=False,
-        storage_path=os.path.join(os.environ['LOCALAPPDATA'], 'GenshinStoryAssistant', 'WebView2')
+        private_mode=False, storage_path=os.path.join(os.environ["LOCALAPPDATA"], "GenshinStoryAssistant", "WebView2")
     )
     print("[启动器] 窗口已关闭，退出。")
     os._exit(0)

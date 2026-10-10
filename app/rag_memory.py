@@ -4,8 +4,10 @@
 封装 GenshinRAGMemory 的可用性检测与实例化，
 对 agent 层屏蔽 RAG_AVAILABLE=False 的情况。
 """
+
 try:
     from memory_manager import GenshinRAGMemory
+
     RAG_AVAILABLE = True
     print("[初始化] RAG记忆系统已加载")
 except ImportError:

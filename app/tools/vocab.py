@@ -13,6 +13,7 @@
 - 好处：签名即文档（可读性），非法取值由 Schema 在调用前拦下（契约），
   错误文案与校验共用同一份元组（不会漂移）。
 """
+
 from typing import Literal, get_args
 
 # ====== 角色 ======
@@ -20,7 +21,16 @@ Element = Literal["火", "水", "风", "雷", "冰", "岩", "草"]
 ELEMENTS = get_args(Element)
 
 CharacterRegion = Literal[
-    "蒙德", "璃月", "稻妻", "须弥", "枫丹", "纳塔", "至冬", "坎瑞亚", "挪德卡莱", "其他",
+    "蒙德",
+    "璃月",
+    "稻妻",
+    "须弥",
+    "枫丹",
+    "纳塔",
+    "至冬",
+    "坎瑞亚",
+    "挪德卡莱",
+    "其他",
 ]
 CHARACTER_REGIONS = get_args(CharacterRegion)
 

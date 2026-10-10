@@ -22,6 +22,7 @@ LLM: 通义千问 qwen3.7-max
 
 兼容性导出：保留 web_api.py 等历史调用方所需的符号。
 """
+
 import sys
 import warnings
 from datetime import datetime
@@ -30,36 +31,64 @@ warnings.filterwarnings("ignore")
 
 # ====== 通过 app.config 完成环境初始化（HF 镜像、LangSmith、UTF-8、.env）======
 from app.config import (
-    CONTENT_DIR, PROMPTS_DIR,
-    QWEN_API_KEY, QWEN_BASE_URL,
-    RECENT_TURNS, SUMMARY_TRIGGER,
-    MAX_AGENT_ITERATIONS, MAX_PLAN_RETRIES, MAX_FAST_ITERATIONS,
+    CONTENT_DIR,
+    PROMPTS_DIR,
+    QWEN_API_KEY,
+    QWEN_BASE_URL,
+    RECENT_TURNS,
+    SUMMARY_TRIGGER,
+    MAX_AGENT_ITERATIONS,
+    MAX_PLAN_RETRIES,
+    MAX_FAST_ITERATIONS,
 )
 
 # ====== 知识库（供 web_api.py 等导入）======
 from app.data import (
-    角色知识库, 地区知识库, 主线剧情知识库, 武器知识库,
-    任务知识库, 素材知识库, 圣遗物知识库,
-    ACT_TO_QUESTS, ACTIVITY_LEGENDARY_ALIAS, FORCE_ACTIVITY_TITLES, TERM_ALIASES,
-    _npcs_data, _vector_store, _load_content_json, _load_processed_data,
-    _quests_processed, _normalize_for_match, _match_all_in,
-    _build_quest_header, _extract_scenes, _extract_characters,
+    角色知识库,
+    地区知识库,
+    主线剧情知识库,
+    武器知识库,
+    任务知识库,
+    素材知识库,
+    圣遗物知识库,
+    ACT_TO_QUESTS,
+    ACTIVITY_LEGENDARY_ALIAS,
+    FORCE_ACTIVITY_TITLES,
+    TERM_ALIASES,
+    _npcs_data,
+    _vector_store,
+    _load_content_json,
+    _load_processed_data,
+    _quests_processed,
+    _normalize_for_match,
+    _match_all_in,
+    _build_quest_header,
+    _extract_scenes,
+    _extract_characters,
 )
 
 # ====== LLM 实例 ======
 from app.llm import (
-    llm, plan_llm, plan_llm_l2,
-    answer_llm_light, answer_llm_medium, answer_llm_deep,
+    llm,
+    plan_llm,
+    plan_llm_l2,
+    answer_llm_light,
+    answer_llm_medium,
+    answer_llm_deep,
     _select_answer_llm,
-    alias_judge_llm, assess_llm,
+    alias_judge_llm,
+    assess_llm,
     llm_invoke_with_retry,
 )
 
 # ====== 系统 Prompt & 状态 ======
 from app.schema import (
     GenshinAdvisorState,
-    AGENT_SYSTEM_PROMPT_PLAN, AGENT_SYSTEM_PROMPT_ANSWER, AGENT_SYSTEM_PROMPT_FAST,
-    HELP_TEXT, _load_prompt,
+    AGENT_SYSTEM_PROMPT_PLAN,
+    AGENT_SYSTEM_PROMPT_ANSWER,
+    AGENT_SYSTEM_PROMPT_FAST,
+    HELP_TEXT,
+    _load_prompt,
 )
 
 # ====== RAG 记忆 ======
@@ -67,40 +96,82 @@ from app.rag_memory import rag_memory, RAG_AVAILABLE
 
 # ====== 检索层 ======
 from app.retrieval import (
-    sanitize_prompt_text, _sanitize_query, _is_compound_hit, _judge_alias_sandbox,
-    _expand_query_with_aliases, _rerank,
-    _keyword_search_docs, _rrf_fusion, _get_doc_key,
-    _build_title_registry, TITLE_REGISTRY, SECTION_TO_TITLE,
-    hybrid_search, kb_vector_search, SimpleBM25,
+    sanitize_prompt_text,
+    _sanitize_query,
+    _is_compound_hit,
+    _judge_alias_sandbox,
+    _expand_query_with_aliases,
+    _rerank,
+    _keyword_search_docs,
+    _rrf_fusion,
+    _get_doc_key,
+    _build_title_registry,
+    TITLE_REGISTRY,
+    SECTION_TO_TITLE,
+    hybrid_search,
+    kb_vector_search,
+    SimpleBM25,
 )
 
 # ====== 格式化函数 ======
 from app.formatters import (
-    _format_role_info, _format_npc_info, _format_region_info, _format_story_info,
+    _format_role_info,
+    _format_npc_info,
+    _format_region_info,
+    _format_story_info,
 )
 
 # ====== 工具列表 ======
 from app.tools import (
-    tools, tools_by_name, MELTDOWN_TRIGGER_TOOLS,
-    query_character, query_region, query_story, query_weapon, query_quest,
-    list_characters_by_element, list_characters_by_region,
-    list_characters_by_weapon, list_characters_by_rarity,
-    list_all_quest_series, list_all_books, list_all_lore_entries,
-    list_all_weapons_and_artifacts, list_all_game_items,
-    search_activity, find_first_mention, search_all, search_lore,
-    load_book_content, load_quest_content, get_book_metadata,
+    tools,
+    tools_by_name,
+    MELTDOWN_TRIGGER_TOOLS,
+    query_character,
+    query_region,
+    query_story,
+    query_weapon,
+    query_quest,
+    list_characters_by_element,
+    list_characters_by_region,
+    list_characters_by_weapon,
+    list_characters_by_rarity,
+    list_all_quest_series,
+    list_all_books,
+    list_all_lore_entries,
+    list_all_weapons_and_artifacts,
+    list_all_game_items,
+    search_activity,
+    find_first_mention,
+    search_all,
+    search_lore,
+    load_book_content,
+    load_quest_content,
+    get_book_metadata,
     count_character_lines,
-    query_monster, query_artifact, query_material, query_collectible,
-    list_collectibles_by_region, query_recipe, query_food,
+    query_monster,
+    query_artifact,
+    query_material,
+    query_collectible,
+    list_collectibles_by_region,
+    query_recipe,
+    query_food,
 )
 
 # ====== Agent 节点 ======
 from app.agent import (
-    rewrite_query, assess_query, route_after_assess,
-    fast_agent, route_after_fast,
-    plan_agent, route_after_plan,
-    route_after_tools, answer_agent, tool_executor,
-    _summarize_conversation, _build_fallback_answer, _is_not_found,
+    rewrite_query,
+    assess_query,
+    route_after_assess,
+    fast_agent,
+    route_after_fast,
+    plan_agent,
+    route_after_plan,
+    route_after_tools,
+    answer_agent,
+    tool_executor,
+    _summarize_conversation,
+    _build_fallback_answer,
+    _is_not_found,
     ASSESS_PROMPT,
 )
 
@@ -161,16 +232,18 @@ def main():
             print("\n  ... 正在查询...")
 
             start = datetime.now()
-            result = agent.invoke({
-                "user_query": sanitize_prompt_text(user_input),
-                "rewritten_query": None,
-                "alias_notes": None,
-                "conversation_history": conversation_history,
-                "conversation_summary": conversation_summary,
-                "messages": [],
-                "final_response": None,
-                "iteration": 0,
-            })
+            result = agent.invoke(
+                {
+                    "user_query": sanitize_prompt_text(user_input),
+                    "rewritten_query": None,
+                    "alias_notes": None,
+                    "conversation_history": conversation_history,
+                    "conversation_summary": conversation_summary,
+                    "messages": [],
+                    "final_response": None,
+                    "iteration": 0,
+                }
+            )
             elapsed = (datetime.now() - start).total_seconds()
 
             response = result.get("final_response", "未生成回答")

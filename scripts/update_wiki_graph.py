@@ -14,6 +14,7 @@
           然后更新 manifest、重建图、保存报告。
   不自动删除词条：列表里消失的 ID 在 manifest 里标成 stale。
 """
+
 import argparse
 import json
 import shutil
@@ -87,9 +88,7 @@ def run(cmd, cwd=None):
         if arg.startswith("-") and arg not in allowed_options:
             raise ValueError(f"不允许的参数: {arg}")
     print("  $", " ".join(args), flush=True)
-    return subprocess.run(
-        args, cwd=str(cwd or BASE_DIR), shell=False
-    )
+    return subprocess.run(args, cwd=str(cwd or BASE_DIR), shell=False)
 
 
 def backup_file(path: Path):
@@ -282,7 +281,9 @@ def cmd_check(args):
     if manifest is None:
         log("首次运行：初始化 manifest 基线（拉列表，不抓详情）...")
         manifest = build_initial_manifest(channels)
-        print_check_report({"checked_at": now(), "channels": {}, "total_new": 0, "total_updated": 0, "total_removed": 0})
+        print_check_report(
+            {"checked_at": now(), "channels": {}, "total_new": 0, "total_updated": 0, "total_removed": 0}
+        )
         print("\nmanifest 初始化完成，后续 --check 将基于此基线对比。")
         return 0
     report = compare_manifest(manifest, channels)
@@ -313,11 +314,15 @@ def cmd_apply(args):
         with open(IDS_FILE, "w", encoding="utf-8") as f:
             json.dump({"ids": changed_ids, "generated_at": now()}, f, ensure_ascii=False, indent=2)
         fetch_cmd = [
-            sys.executable, str(FETCH_SCRIPT),
-            "--ids", str(IDS_FILE),
+            sys.executable,
+            str(FETCH_SCRIPT),
+            "--ids",
+            str(IDS_FILE),
             "--force",
-            "--tier", args.tier,
-            "--delay", str(args.delay),
+            "--tier",
+            args.tier,
+            "--delay",
+            str(args.delay),
         ]
         ret = run(fetch_cmd)
         if ret.returncode not in (0, 2):

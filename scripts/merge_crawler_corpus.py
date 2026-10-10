@@ -42,9 +42,7 @@ SUPPORTED_MODULES = ("task", "map_text", "npc")
 NORMALIZE_RE = re.compile(r"\s+")
 LOCATION_RE = re.compile(r"【(.+?)】")
 ACT_PREFIX_RE = re.compile(r"^第[一二三四五六七八九十百]+幕")
-TASK_PAGE_RE = re.compile(
-    r"^(开场动画|序章|间章|空月之歌|第[一二三四五六七八九十百]+章)(?:\s*(.+))?$"
-)
+TASK_PAGE_RE = re.compile(r"^(开场动画|序章|间章|空月之歌|第[一二三四五六七八九十百]+章)(?:\s*(.+))?$")
 
 
 def _normalize(text: str) -> str:
@@ -187,6 +185,7 @@ def _parse_chapter_act_from_series(series: str) -> tuple:
 
 # ====== B站数据加载 ======
 
+
 def load_bwiki_tasks(content_dir: Path):
     records = []
     for path in sorted(content_dir.glob("quests_*.json")):
@@ -209,25 +208,27 @@ def load_bwiki_tasks(content_dir: Path):
             if not chapter and not act:
                 chapter, act = _parse_chapter_act_from_series(series)
             key = f"bwiki:task:{pageid}" if pageid else f"bwiki:task:{_short_hash(path.name + '|' + name)}"
-            records.append({
-                "key": key,
-                "module": "task",
-                "name": name,
-                "norm_name": _normalize(name),
-                "title": title,
-                "chapter": chapter,
-                "act": act,
-                "norm_chapter": _normalize(chapter),
-                "norm_act": _normalize(act),
-                "act_core": _act_core(act),
-                "region": metadata.get("任务地区") or "",
-                "version": metadata.get("所属版本") or "",
-                "category": item.get("category") or "",
-                "pageid": pageid,
-                "source_file": path.name,
-                "text": item.get("text") or "",
-                "metadata": metadata,
-            })
+            records.append(
+                {
+                    "key": key,
+                    "module": "task",
+                    "name": name,
+                    "norm_name": _normalize(name),
+                    "title": title,
+                    "chapter": chapter,
+                    "act": act,
+                    "norm_chapter": _normalize(chapter),
+                    "norm_act": _normalize(act),
+                    "act_core": _act_core(act),
+                    "region": metadata.get("任务地区") or "",
+                    "version": metadata.get("所属版本") or "",
+                    "category": item.get("category") or "",
+                    "pageid": pageid,
+                    "source_file": path.name,
+                    "text": item.get("text") or "",
+                    "metadata": metadata,
+                }
+            )
     return records
 
 
@@ -247,17 +248,19 @@ def load_bwiki_map_text(content_dir: Path):
             continue
         text = item.get("text") or ""
         key = f"bwiki:map_text:{_short_hash(region + '|' + location + '|' + text[:120])}"
-        records.append({
-            "key": key,
-            "module": "map_text",
-            "region": region,
-            "location": location,
-            "norm_region": _normalize(region),
-            "norm_location": _normalize(location),
-            "title": title,
-            "text": text,
-            "source": item.get("source") or "",
-        })
+        records.append(
+            {
+                "key": key,
+                "module": "map_text",
+                "region": region,
+                "location": location,
+                "norm_region": _normalize(region),
+                "norm_location": _normalize(location),
+                "title": title,
+                "text": text,
+                "source": item.get("source") or "",
+            }
+        )
     return records
 
 
@@ -276,25 +279,38 @@ def load_bwiki_npcs(content_dir: Path):
             if index > 0:
                 base_name = base_name[:index]
         text = item.get("doc_for_embed") or item.get("dialogue") or ""
-        records.append({
-            "key": f"bwiki:npc:{name}",
-            "module": "npc",
-            "name": name,
-            "norm_name": _normalize(name),
-            "base_name": base_name,
-            "norm_base_name": _normalize(base_name),
-            "text": text,
-            "metadata": item,
-        })
+        records.append(
+            {
+                "key": f"bwiki:npc:{name}",
+                "module": "npc",
+                "name": name,
+                "norm_name": _normalize(name),
+                "base_name": base_name,
+                "norm_base_name": _normalize(base_name),
+                "text": text,
+                "metadata": item,
+            }
+        )
     return records
 
 
 # ====== 通用合并结果构造 ======
 
-def _base_record(canonical_id: str, module: str, title: str, primary_source: str,
-                 merge_status: str, text: str, metadata: dict, sources: list,
-                 supplement_text: str = "", supplement_metadata=None,
-                 aliases=None, merge_notes=None) -> dict:
+
+def _base_record(
+    canonical_id: str,
+    module: str,
+    title: str,
+    primary_source: str,
+    merge_status: str,
+    text: str,
+    metadata: dict,
+    sources: list,
+    supplement_text: str = "",
+    supplement_metadata=None,
+    aliases=None,
+    merge_notes=None,
+) -> dict:
     return {
         "canonical_id": canonical_id,
         "module": module,
@@ -330,17 +346,23 @@ def merge_tasks(official: list, bwiki: list, coverage_threshold: float, review: 
             if subtask and _normalize(subtask) != norm_name:
                 candidates = list(index.get(_normalize(subtask), []))
         if not candidates:
-            output.append(_base_record(
-                canonical_id=f"official:{off['doc_id']}",
-                module="task",
-                title=official_name,
-                primary_source="official_hoyowiki",
-                merge_status="official_only",
-                text=off.get("text") or "",
-                metadata=metadata,
-                sources=[_source_ref("official_hoyowiki", off["doc_id"], official_name, off.get("content_hash", ""), "primary")],
-                merge_notes=["no_bwiki_candidate"],
-            ))
+            output.append(
+                _base_record(
+                    canonical_id=f"official:{off['doc_id']}",
+                    module="task",
+                    title=official_name,
+                    primary_source="official_hoyowiki",
+                    merge_status="official_only",
+                    text=off.get("text") or "",
+                    metadata=metadata,
+                    sources=[
+                        _source_ref(
+                            "official_hoyowiki", off["doc_id"], official_name, off.get("content_hash", ""), "primary"
+                        )
+                    ],
+                    merge_notes=["no_bwiki_candidate"],
+                )
+            )
             counts["official_only"] += 1
             continue
 
@@ -355,54 +377,78 @@ def merge_tasks(official: list, bwiki: list, coverage_threshold: float, review: 
             filtered.append(candidate)
 
         if (chapter_norm or act_core) and not filtered:
-            review.append({
-                "module": "task",
-                "reason": "chapter_act_filtered_all_bwiki_candidates",
-                "official": {
-                    "doc_id": off["doc_id"],
-                    "title": official_name,
-                    "chapter": metadata.get("chapter_name"),
-                    "act": metadata.get("act_name"),
-                },
-                "candidates": [
-                    {"key": item["key"], "title": item["name"], "chapter": item["chapter"], "act": item["act"]}
-                    for item in candidates
-                ],
-            })
-            output.append(_base_record(
-                canonical_id=f"official:{off['doc_id']}",
-                module="task",
-                title=official_name,
-                primary_source="official_hoyowiki",
-                merge_status="review",
-                text=off.get("text") or "",
-                metadata=metadata,
-                sources=[_source_ref("official_hoyowiki", off["doc_id"], official_name, off.get("content_hash", ""), "primary")],
-                merge_notes=["chapter_act_filtered_all_bwiki_candidates"],
-            ))
+            review.append(
+                {
+                    "module": "task",
+                    "reason": "chapter_act_filtered_all_bwiki_candidates",
+                    "official": {
+                        "doc_id": off["doc_id"],
+                        "title": official_name,
+                        "chapter": metadata.get("chapter_name"),
+                        "act": metadata.get("act_name"),
+                    },
+                    "candidates": [
+                        {"key": item["key"], "title": item["name"], "chapter": item["chapter"], "act": item["act"]}
+                        for item in candidates
+                    ],
+                }
+            )
+            output.append(
+                _base_record(
+                    canonical_id=f"official:{off['doc_id']}",
+                    module="task",
+                    title=official_name,
+                    primary_source="official_hoyowiki",
+                    merge_status="review",
+                    text=off.get("text") or "",
+                    metadata=metadata,
+                    sources=[
+                        _source_ref(
+                            "official_hoyowiki", off["doc_id"], official_name, off.get("content_hash", ""), "primary"
+                        )
+                    ],
+                    merge_notes=["chapter_act_filtered_all_bwiki_candidates"],
+                )
+            )
             counts["review"] += 1
             continue
 
         candidates = filtered
 
         if len(candidates) > 1:
-            review.append({
-                "module": "task",
-                "reason": "ambiguous_bwiki_candidates",
-                "official": {"doc_id": off["doc_id"], "title": official_name, "chapter": metadata.get("chapter_name"), "act": metadata.get("act_name")},
-                "candidates": [{"key": item["key"], "title": item["name"], "chapter": item["chapter"], "act": item["act"]} for item in candidates],
-            })
-            output.append(_base_record(
-                canonical_id=f"official:{off['doc_id']}",
-                module="task",
-                title=official_name,
-                primary_source="official_hoyowiki",
-                merge_status="review",
-                text=off.get("text") or "",
-                metadata=metadata,
-                sources=[_source_ref("official_hoyowiki", off["doc_id"], official_name, off.get("content_hash", ""), "primary")],
-                merge_notes=["ambiguous_bwiki_candidates"],
-            ))
+            review.append(
+                {
+                    "module": "task",
+                    "reason": "ambiguous_bwiki_candidates",
+                    "official": {
+                        "doc_id": off["doc_id"],
+                        "title": official_name,
+                        "chapter": metadata.get("chapter_name"),
+                        "act": metadata.get("act_name"),
+                    },
+                    "candidates": [
+                        {"key": item["key"], "title": item["name"], "chapter": item["chapter"], "act": item["act"]}
+                        for item in candidates
+                    ],
+                }
+            )
+            output.append(
+                _base_record(
+                    canonical_id=f"official:{off['doc_id']}",
+                    module="task",
+                    title=official_name,
+                    primary_source="official_hoyowiki",
+                    merge_status="review",
+                    text=off.get("text") or "",
+                    metadata=metadata,
+                    sources=[
+                        _source_ref(
+                            "official_hoyowiki", off["doc_id"], official_name, off.get("content_hash", ""), "primary"
+                        )
+                    ],
+                    merge_notes=["ambiguous_bwiki_candidates"],
+                )
+            )
             counts["review"] += 1
             continue
 
@@ -412,20 +458,22 @@ def merge_tasks(official: list, bwiki: list, coverage_threshold: float, review: 
             _source_ref("official_hoyowiki", off["doc_id"], official_name, off.get("content_hash", ""), "primary"),
             _source_ref("bilibili_wiki", candidate["key"], candidate["name"], "", "supplement"),
         ]
-        output.append(_base_record(
-            canonical_id=f"official:{off['doc_id']}",
-            module="task",
-            title=official_name,
-            primary_source="official_hoyowiki",
-            merge_status="merged",
-            text=off.get("text") or "",
-            metadata=metadata,
-            sources=sources,
-            supplement_text=supplement,
-            supplement_metadata=candidate["metadata"],
-            aliases=[candidate["title"], candidate["name"], candidate["pageid"]],
-            merge_notes=["matched_by_quest_name"],
-        ))
+        output.append(
+            _base_record(
+                canonical_id=f"official:{off['doc_id']}",
+                module="task",
+                title=official_name,
+                primary_source="official_hoyowiki",
+                merge_status="merged",
+                text=off.get("text") or "",
+                metadata=metadata,
+                sources=sources,
+                supplement_text=supplement,
+                supplement_metadata=candidate["metadata"],
+                aliases=[candidate["title"], candidate["name"], candidate["pageid"]],
+                merge_notes=["matched_by_quest_name"],
+            )
+        )
         used.add(candidate["key"])
         counts["merged"] += 1
         if supplement:
@@ -434,18 +482,20 @@ def merge_tasks(official: list, bwiki: list, coverage_threshold: float, review: 
     for record in bwiki:
         if record["key"] in used:
             continue
-        output.append(_base_record(
-            canonical_id=record["key"],
-            module="task",
-            title=record["name"],
-            primary_source="bilibili_wiki",
-            merge_status="bwiki_only",
-            text=record["text"],
-            metadata=record["metadata"],
-            sources=[_source_ref("bilibili_wiki", record["key"], record["name"], "", "primary")],
-            aliases=[record["title"], record["pageid"]],
-            merge_notes=["no_official_counterpart"],
-        ))
+        output.append(
+            _base_record(
+                canonical_id=record["key"],
+                module="task",
+                title=record["name"],
+                primary_source="bilibili_wiki",
+                merge_status="bwiki_only",
+                text=record["text"],
+                metadata=record["metadata"],
+                sources=[_source_ref("bilibili_wiki", record["key"], record["name"], "", "primary")],
+                aliases=[record["title"], record["pageid"]],
+                merge_notes=["no_official_counterpart"],
+            )
+        )
         counts["bwiki_only"] += 1
     return output, counts
 
@@ -480,47 +530,69 @@ def merge_map_text(official: list, bwiki: list, coverage_threshold: float, revie
         if not candidates and norm_location:
             location_candidates = list(by_location.get(norm_location, []))
             if len({item["norm_region"] for item in location_candidates}) > 1:
-                review.append({
-                    "module": "map_text",
-                    "reason": "location_in_multiple_regions",
-                    "official": {
-                        "doc_id": off["doc_id"],
-                        "title": off.get("page_title") or off.get("title"),
-                        "region": region,
-                        "location": location,
-                    },
-                    "candidates": [
-                        {"key": item["key"], "region": item["region"], "location": item["location"]}
-                        for item in location_candidates[:10]
-                    ],
-                })
-                output.append(_base_record(
-                    canonical_id=f"official:{off['doc_id']}",
-                    module="map_text",
-                    title=off.get("page_title") or off.get("title") or "",
-                    primary_source="official_hoyowiki",
-                    merge_status="review",
-                    text=off.get("text") or "",
-                    metadata=metadata,
-                    sources=[_source_ref("official_hoyowiki", off["doc_id"], off.get("title") or "", off.get("content_hash", ""), "primary")],
-                    merge_notes=["location_in_multiple_regions"],
-                ))
+                review.append(
+                    {
+                        "module": "map_text",
+                        "reason": "location_in_multiple_regions",
+                        "official": {
+                            "doc_id": off["doc_id"],
+                            "title": off.get("page_title") or off.get("title"),
+                            "region": region,
+                            "location": location,
+                        },
+                        "candidates": [
+                            {"key": item["key"], "region": item["region"], "location": item["location"]}
+                            for item in location_candidates[:10]
+                        ],
+                    }
+                )
+                output.append(
+                    _base_record(
+                        canonical_id=f"official:{off['doc_id']}",
+                        module="map_text",
+                        title=off.get("page_title") or off.get("title") or "",
+                        primary_source="official_hoyowiki",
+                        merge_status="review",
+                        text=off.get("text") or "",
+                        metadata=metadata,
+                        sources=[
+                            _source_ref(
+                                "official_hoyowiki",
+                                off["doc_id"],
+                                off.get("title") or "",
+                                off.get("content_hash", ""),
+                                "primary",
+                            )
+                        ],
+                        merge_notes=["location_in_multiple_regions"],
+                    )
+                )
                 counts["review"] += 1
                 continue
             candidates = location_candidates
 
         if not candidates:
-            output.append(_base_record(
-                canonical_id=f"official:{off['doc_id']}",
-                module="map_text",
-                title=off.get("page_title") or off.get("title") or "",
-                primary_source="official_hoyowiki",
-                merge_status="official_only",
-                text=off.get("text") or "",
-                metadata=metadata,
-                sources=[_source_ref("official_hoyowiki", off["doc_id"], off.get("title") or "", off.get("content_hash", ""), "primary")],
-                merge_notes=["no_bwiki_candidate"],
-            ))
+            output.append(
+                _base_record(
+                    canonical_id=f"official:{off['doc_id']}",
+                    module="map_text",
+                    title=off.get("page_title") or off.get("title") or "",
+                    primary_source="official_hoyowiki",
+                    merge_status="official_only",
+                    text=off.get("text") or "",
+                    metadata=metadata,
+                    sources=[
+                        _source_ref(
+                            "official_hoyowiki",
+                            off["doc_id"],
+                            off.get("title") or "",
+                            off.get("content_hash", ""),
+                            "primary",
+                        )
+                    ],
+                    merge_notes=["no_bwiki_candidate"],
+                )
+            )
             counts["official_only"] += 1
             continue
 
@@ -535,85 +607,150 @@ def merge_map_text(official: list, bwiki: list, coverage_threshold: float, revie
         near_best = [item for item in scored if item[0] >= best_score - 0.05]
 
         if best_score < coverage_threshold:
-            review.append({
-                "module": "map_text",
-                "reason": "location_matched_but_low_text_overlap",
-                "official": {"doc_id": off["doc_id"], "title": off.get("page_title") or off.get("title"), "region": region, "location": location},
-                "candidates": [{"key": candidate["key"], "score": round(score, 4), "text_head": candidate["text"][:80]} for score, candidate in scored[:5]],
-            })
-            output.append(_base_record(
-                canonical_id=f"official:{off['doc_id']}",
-                module="map_text",
-                title=off.get("page_title") or off.get("title") or "",
-                primary_source="official_hoyowiki",
-                merge_status="review",
-                text=off.get("text") or "",
-                metadata=metadata,
-                sources=[_source_ref("official_hoyowiki", off["doc_id"], off.get("title") or "", off.get("content_hash", ""), "primary")],
-                merge_notes=["low_text_overlap"],
-            ))
+            review.append(
+                {
+                    "module": "map_text",
+                    "reason": "location_matched_but_low_text_overlap",
+                    "official": {
+                        "doc_id": off["doc_id"],
+                        "title": off.get("page_title") or off.get("title"),
+                        "region": region,
+                        "location": location,
+                    },
+                    "candidates": [
+                        {"key": candidate["key"], "score": round(score, 4), "text_head": candidate["text"][:80]}
+                        for score, candidate in scored[:5]
+                    ],
+                }
+            )
+            output.append(
+                _base_record(
+                    canonical_id=f"official:{off['doc_id']}",
+                    module="map_text",
+                    title=off.get("page_title") or off.get("title") or "",
+                    primary_source="official_hoyowiki",
+                    merge_status="review",
+                    text=off.get("text") or "",
+                    metadata=metadata,
+                    sources=[
+                        _source_ref(
+                            "official_hoyowiki",
+                            off["doc_id"],
+                            off.get("title") or "",
+                            off.get("content_hash", ""),
+                            "primary",
+                        )
+                    ],
+                    merge_notes=["low_text_overlap"],
+                )
+            )
             counts["review"] += 1
             continue
 
         if len(near_best) > 1:
-            review.append({
-                "module": "map_text",
-                "reason": "multiple_bwiki_candidates_with_similar_score",
-                "official": {"doc_id": off["doc_id"], "title": off.get("page_title") or off.get("title"), "region": region, "location": location},
-                "candidates": [{"key": candidate["key"], "score": round(score, 4), "text_head": candidate["text"][:80]} for score, candidate in near_best[:5]],
-            })
-            output.append(_base_record(
-                canonical_id=f"official:{off['doc_id']}",
-                module="map_text",
-                title=off.get("page_title") or off.get("title") or "",
-                primary_source="official_hoyowiki",
-                merge_status="review",
-                text=off.get("text") or "",
-                metadata=metadata,
-                sources=[_source_ref("official_hoyowiki", off["doc_id"], off.get("title") or "", off.get("content_hash", ""), "primary")],
-                merge_notes=["multiple_candidates"],
-            ))
+            review.append(
+                {
+                    "module": "map_text",
+                    "reason": "multiple_bwiki_candidates_with_similar_score",
+                    "official": {
+                        "doc_id": off["doc_id"],
+                        "title": off.get("page_title") or off.get("title"),
+                        "region": region,
+                        "location": location,
+                    },
+                    "candidates": [
+                        {"key": candidate["key"], "score": round(score, 4), "text_head": candidate["text"][:80]}
+                        for score, candidate in near_best[:5]
+                    ],
+                }
+            )
+            output.append(
+                _base_record(
+                    canonical_id=f"official:{off['doc_id']}",
+                    module="map_text",
+                    title=off.get("page_title") or off.get("title") or "",
+                    primary_source="official_hoyowiki",
+                    merge_status="review",
+                    text=off.get("text") or "",
+                    metadata=metadata,
+                    sources=[
+                        _source_ref(
+                            "official_hoyowiki",
+                            off["doc_id"],
+                            off.get("title") or "",
+                            off.get("content_hash", ""),
+                            "primary",
+                        )
+                    ],
+                    merge_notes=["multiple_candidates"],
+                )
+            )
             counts["review"] += 1
             continue
 
         if best_candidate["key"] in used:
-            review.append({
-                "module": "map_text",
-                "reason": "bwiki_candidate_already_used",
-                "official": {"doc_id": off["doc_id"], "title": off.get("page_title") or off.get("title"), "region": region, "location": location},
-                "candidates": [{"key": best_candidate["key"], "score": round(best_score, 4)}],
-            })
-            output.append(_base_record(
-                canonical_id=f"official:{off['doc_id']}",
-                module="map_text",
-                title=off.get("page_title") or off.get("title") or "",
-                primary_source="official_hoyowiki",
-                merge_status="review",
-                text=off.get("text") or "",
-                metadata=metadata,
-                sources=[_source_ref("official_hoyowiki", off["doc_id"], off.get("title") or "", off.get("content_hash", ""), "primary")],
-                merge_notes=["candidate_already_used"],
-            ))
+            review.append(
+                {
+                    "module": "map_text",
+                    "reason": "bwiki_candidate_already_used",
+                    "official": {
+                        "doc_id": off["doc_id"],
+                        "title": off.get("page_title") or off.get("title"),
+                        "region": region,
+                        "location": location,
+                    },
+                    "candidates": [{"key": best_candidate["key"], "score": round(best_score, 4)}],
+                }
+            )
+            output.append(
+                _base_record(
+                    canonical_id=f"official:{off['doc_id']}",
+                    module="map_text",
+                    title=off.get("page_title") or off.get("title") or "",
+                    primary_source="official_hoyowiki",
+                    merge_status="review",
+                    text=off.get("text") or "",
+                    metadata=metadata,
+                    sources=[
+                        _source_ref(
+                            "official_hoyowiki",
+                            off["doc_id"],
+                            off.get("title") or "",
+                            off.get("content_hash", ""),
+                            "primary",
+                        )
+                    ],
+                    merge_notes=["candidate_already_used"],
+                )
+            )
             counts["review"] += 1
             continue
 
         supplement = _unique_supplement(off.get("text") or "", best_candidate["text"], min_line_len)
-        output.append(_base_record(
-            canonical_id=f"official:{off['doc_id']}",
-            module="map_text",
-            title=off.get("page_title") or off.get("title") or "",
-            primary_source="official_hoyowiki",
-            merge_status="merged",
-            text=off.get("text") or "",
-            metadata=metadata,
-            sources=[
-                _source_ref("official_hoyowiki", off["doc_id"], off.get("title") or "", off.get("content_hash", ""), "primary"),
-                _source_ref("bilibili_wiki", best_candidate["key"], best_candidate["title"], "", "supplement"),
-            ],
-            supplement_text=supplement,
-            aliases=[best_candidate["location"], region],
-            merge_notes=[f"text_score={round(best_score, 4)}"],
-        ))
+        output.append(
+            _base_record(
+                canonical_id=f"official:{off['doc_id']}",
+                module="map_text",
+                title=off.get("page_title") or off.get("title") or "",
+                primary_source="official_hoyowiki",
+                merge_status="merged",
+                text=off.get("text") or "",
+                metadata=metadata,
+                sources=[
+                    _source_ref(
+                        "official_hoyowiki",
+                        off["doc_id"],
+                        off.get("title") or "",
+                        off.get("content_hash", ""),
+                        "primary",
+                    ),
+                    _source_ref("bilibili_wiki", best_candidate["key"], best_candidate["title"], "", "supplement"),
+                ],
+                supplement_text=supplement,
+                aliases=[best_candidate["location"], region],
+                merge_notes=[f"text_score={round(best_score, 4)}"],
+            )
+        )
         used.add(best_candidate["key"])
         counts["merged"] += 1
         if supplement:
@@ -622,18 +759,20 @@ def merge_map_text(official: list, bwiki: list, coverage_threshold: float, revie
     for record in bwiki:
         if record["key"] in used:
             continue
-        output.append(_base_record(
-            canonical_id=record["key"],
-            module="map_text",
-            title=record["location"],
-            primary_source="bilibili_wiki",
-            merge_status="bwiki_only",
-            text=record["text"],
-            metadata={"地区": record["region"], "地点": record["location"]},
-            sources=[_source_ref("bilibili_wiki", record["key"], record["location"], "", "primary")],
-            aliases=[record["title"]],
-            merge_notes=["no_official_counterpart"],
-        ))
+        output.append(
+            _base_record(
+                canonical_id=record["key"],
+                module="map_text",
+                title=record["location"],
+                primary_source="bilibili_wiki",
+                merge_status="bwiki_only",
+                text=record["text"],
+                metadata={"地区": record["region"], "地点": record["location"]},
+                sources=[_source_ref("bilibili_wiki", record["key"], record["location"], "", "primary")],
+                aliases=[record["title"]],
+                merge_notes=["no_official_counterpart"],
+            )
+        )
         counts["bwiki_only"] += 1
     return output, counts
 
@@ -657,60 +796,78 @@ def merge_npcs(official: list, bwiki: list, min_line_len: int, review: list):
         if not candidates:
             candidates = list(by_base.get(norm_name, []))
         if not candidates:
-            output.append(_base_record(
-                canonical_id=f"official:{off['doc_id']}",
-                module="npc",
-                title=official_name,
-                primary_source="official_hoyowiki",
-                merge_status="official_only",
-                text=off.get("text") or "",
-                metadata=metadata,
-                sources=[_source_ref("official_hoyowiki", off["doc_id"], official_name, off.get("content_hash", ""), "primary")],
-                merge_notes=["no_bwiki_candidate"],
-            ))
+            output.append(
+                _base_record(
+                    canonical_id=f"official:{off['doc_id']}",
+                    module="npc",
+                    title=official_name,
+                    primary_source="official_hoyowiki",
+                    merge_status="official_only",
+                    text=off.get("text") or "",
+                    metadata=metadata,
+                    sources=[
+                        _source_ref(
+                            "official_hoyowiki", off["doc_id"], official_name, off.get("content_hash", ""), "primary"
+                        )
+                    ],
+                    merge_notes=["no_bwiki_candidate"],
+                )
+            )
             counts["official_only"] += 1
             continue
 
         if len(candidates) > 1:
-            review.append({
-                "module": "npc",
-                "reason": "ambiguous_bwiki_candidates",
-                "official": {"doc_id": off["doc_id"], "title": official_name},
-                "candidates": [{"key": item["key"], "title": item["name"]} for item in candidates],
-            })
-            output.append(_base_record(
-                canonical_id=f"official:{off['doc_id']}",
-                module="npc",
-                title=official_name,
-                primary_source="official_hoyowiki",
-                merge_status="review",
-                text=off.get("text") or "",
-                metadata=metadata,
-                sources=[_source_ref("official_hoyowiki", off["doc_id"], official_name, off.get("content_hash", ""), "primary")],
-                merge_notes=["ambiguous_bwiki_candidates"],
-            ))
+            review.append(
+                {
+                    "module": "npc",
+                    "reason": "ambiguous_bwiki_candidates",
+                    "official": {"doc_id": off["doc_id"], "title": official_name},
+                    "candidates": [{"key": item["key"], "title": item["name"]} for item in candidates],
+                }
+            )
+            output.append(
+                _base_record(
+                    canonical_id=f"official:{off['doc_id']}",
+                    module="npc",
+                    title=official_name,
+                    primary_source="official_hoyowiki",
+                    merge_status="review",
+                    text=off.get("text") or "",
+                    metadata=metadata,
+                    sources=[
+                        _source_ref(
+                            "official_hoyowiki", off["doc_id"], official_name, off.get("content_hash", ""), "primary"
+                        )
+                    ],
+                    merge_notes=["ambiguous_bwiki_candidates"],
+                )
+            )
             counts["review"] += 1
             continue
 
         candidate = candidates[0]
         supplement = _unique_supplement(off.get("text") or "", candidate["text"], min_line_len)
-        output.append(_base_record(
-            canonical_id=f"official:{off['doc_id']}",
-            module="npc",
-            title=official_name,
-            primary_source="official_hoyowiki",
-            merge_status="merged",
-            text=off.get("text") or "",
-            metadata=metadata,
-            sources=[
-                _source_ref("official_hoyowiki", off["doc_id"], official_name, off.get("content_hash", ""), "primary"),
-                _source_ref("bilibili_wiki", candidate["key"], candidate["name"], "", "supplement"),
-            ],
-            supplement_text=supplement,
-            supplement_metadata=candidate["metadata"],
-            aliases=[candidate["name"]],
-            merge_notes=["matched_by_npc_name"],
-        ))
+        output.append(
+            _base_record(
+                canonical_id=f"official:{off['doc_id']}",
+                module="npc",
+                title=official_name,
+                primary_source="official_hoyowiki",
+                merge_status="merged",
+                text=off.get("text") or "",
+                metadata=metadata,
+                sources=[
+                    _source_ref(
+                        "official_hoyowiki", off["doc_id"], official_name, off.get("content_hash", ""), "primary"
+                    ),
+                    _source_ref("bilibili_wiki", candidate["key"], candidate["name"], "", "supplement"),
+                ],
+                supplement_text=supplement,
+                supplement_metadata=candidate["metadata"],
+                aliases=[candidate["name"]],
+                merge_notes=["matched_by_npc_name"],
+            )
+        )
         used.add(candidate["key"])
         counts["merged"] += 1
         if supplement:
@@ -719,31 +876,37 @@ def merge_npcs(official: list, bwiki: list, min_line_len: int, review: list):
     for record in bwiki:
         if record["key"] in used:
             continue
-        output.append(_base_record(
-            canonical_id=record["key"],
-            module="npc",
-            title=record["name"],
-            primary_source="bilibili_wiki",
-            merge_status="bwiki_only",
-            text=record["text"],
-            metadata=record["metadata"],
-            sources=[_source_ref("bilibili_wiki", record["key"], record["name"], "", "primary")],
-            merge_notes=["no_official_counterpart"],
-        ))
+        output.append(
+            _base_record(
+                canonical_id=record["key"],
+                module="npc",
+                title=record["name"],
+                primary_source="bilibili_wiki",
+                merge_status="bwiki_only",
+                text=record["text"],
+                metadata=record["metadata"],
+                sources=[_source_ref("bilibili_wiki", record["key"], record["name"], "", "primary")],
+                merge_notes=["no_official_counterpart"],
+            )
+        )
         counts["bwiki_only"] += 1
     return output, counts
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="B站 Wiki 与官方 crawler 语料的保守合并 v1")
-    parser.add_argument("--official-dir", default=DEFAULT_OFFICIAL_DIR, help="官方适配层目录，默认 content_data/crawler_corpus")
+    parser.add_argument(
+        "--official-dir", default=DEFAULT_OFFICIAL_DIR, help="官方适配层目录，默认 content_data/crawler_corpus"
+    )
     parser.add_argument("--bwiki-dir", default=DEFAULT_BWIKI_DIR, help="B站数据目录，默认 content_data")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR, help="合并输出目录，默认 content_data/merged")
     parser.add_argument("--modules", default="task,map_text,npc", help="要处理的模块，多个用逗号分隔")
     parser.add_argument("--coverage-threshold", type=float, default=0.8, help="map_text 正文重合度阈值，默认 0.8")
     parser.add_argument("--min-line-length", type=int, default=4, help="纳入重合度计算的正文最小行长，默认 4")
     parser.add_argument("--review-limit", type=int, default=3000, help="复核清单最多写入条数，默认 3000")
-    parser.add_argument("--allow-empty-official", action="store_true", help="允许官方层某模块为空，仅输出该模块的 B站记录")
+    parser.add_argument(
+        "--allow-empty-official", action="store_true", help="允许官方层某模块为空，仅输出该模块的 B站记录"
+    )
     parser.add_argument("--dry-run", action="store_true", help="只计算和报告，不写文件")
     args = parser.parse_args()
 
@@ -800,7 +963,9 @@ def main() -> int:
         }
         if not args.dry_run:
             _atomic_write_jsonl(out_dir / "task.jsonl", merged)
-        print(f"[task] 官方 {len(official)} / B站 {len(bwiki)} -> 合并 {counts.get('merged', 0)}，B站独有 {counts.get('bwiki_only', 0)}，复核 {counts.get('review', 0)}")
+        print(
+            f"[task] 官方 {len(official)} / B站 {len(bwiki)} -> 合并 {counts.get('merged', 0)}，B站独有 {counts.get('bwiki_only', 0)}，复核 {counts.get('review', 0)}"
+        )
 
     if "map_text" in modules:
         official = official_layers["map_text"]
@@ -817,7 +982,9 @@ def main() -> int:
         }
         if not args.dry_run:
             _atomic_write_jsonl(out_dir / "map_text.jsonl", merged)
-        print(f"[map_text] 官方 {len(official)} / B站 {len(bwiki)} -> 合并 {counts.get('merged', 0)}，B站独有 {counts.get('bwiki_only', 0)}，复核 {counts.get('review', 0)}")
+        print(
+            f"[map_text] 官方 {len(official)} / B站 {len(bwiki)} -> 合并 {counts.get('merged', 0)}，B站独有 {counts.get('bwiki_only', 0)}，复核 {counts.get('review', 0)}"
+        )
 
     if "npc" in modules:
         official = official_layers["npc"]
@@ -834,14 +1001,16 @@ def main() -> int:
         }
         if not args.dry_run:
             _atomic_write_jsonl(out_dir / "npc.jsonl", merged)
-        print(f"[npc] 官方 {len(official)} / B站 {len(bwiki)} -> 合并 {counts.get('merged', 0)}，B站独有 {counts.get('bwiki_only', 0)}，复核 {counts.get('review', 0)}")
+        print(
+            f"[npc] 官方 {len(official)} / B站 {len(bwiki)} -> 合并 {counts.get('merged', 0)}，B站独有 {counts.get('bwiki_only', 0)}，复核 {counts.get('review', 0)}"
+        )
 
     summary["review_total"] = len(review)
     summary["review_written"] = min(len(review), args.review_limit)
     if not args.dry_run:
         out_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write_json(out_dir / "_summary.json", summary)
-        _atomic_write_json(out_dir / "_review.json", review[:args.review_limit])
+        _atomic_write_json(out_dir / "_review.json", review[: args.review_limit])
     print(f"复核清单: {len(review)} 条（写入 {min(len(review), args.review_limit)} 条）")
     if args.dry_run:
         print("dry-run：未写入任何文件")

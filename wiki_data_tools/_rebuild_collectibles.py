@@ -3,6 +3,7 @@
 """
 从 materials.json 重建 collectibles.json，补全类型/分布地区等元数据
 """
+
 import json
 import re
 import os
@@ -20,6 +21,7 @@ if os.path.exists(old_path):
     with open(old_path, "r", encoding="utf-8") as f:
         for item in json.load(f):
             old_col[item.get("名称", "")] = item
+
 
 def parse_wiki_type(desc):
     """从简介的 wiki 模板中提取关键字段"""
@@ -43,6 +45,7 @@ def parse_wiki_type(desc):
             if val:
                 result[key] = val
     return result
+
 
 new_collectibles = []
 seen_names = set()
@@ -72,15 +75,17 @@ for m in materials:
     # 提取分布地区
     source = wiki.get("来源", "")
 
-    new_collectibles.append({
-        "采集物ID": col_id,
-        "名称": name,
-        "类型": col_type,
-        "分布地区": source,
-        "刷新时间": old.get("刷新时间", "48小时"),
-        "用途": wiki.get("用处", ""),
-        "简介": wiki.get("介绍", ""),
-    })
+    new_collectibles.append(
+        {
+            "采集物ID": col_id,
+            "名称": name,
+            "类型": col_type,
+            "分布地区": source,
+            "刷新时间": old.get("刷新时间", "48小时"),
+            "用途": wiki.get("用处", ""),
+            "简介": wiki.get("介绍", ""),
+        }
+    )
 
 # 写入 collectibles.json
 out_path = os.path.join(BASE, "content_data", "collectibles.json")
@@ -91,6 +96,7 @@ print(f"[完成] 从 {len(materials)} 条材料中筛选出 {len(new_collectible
 print(f"  输出: {out_path}")
 # 按地区分组统计
 from collections import Counter
+
 region_counter = Counter()
 for c in new_collectibles:
     t = c["类型"]

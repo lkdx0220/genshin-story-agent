@@ -1,28 +1,50 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """生成最终对比测试的 HTML 片段"""
+
 import json, html as html_mod
 
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-data = json.load(open(BASE_DIR / '_final_test_report.json', encoding='utf-8'))
+data = json.load(open(BASE_DIR / "_final_test_report.json", encoding="utf-8"))
 
 # 成对输出 Q1-Q8
-pairs = [(data[i], data[i+1]) for i in range(0, len(data), 2)]
+pairs = [(data[i], data[i + 1]) for i in range(0, len(data), 2)]
 
 # 手动构建已知的工具调用摘要（从输出日志中提取）
 tool_summaries = {
-    ("Q1-多源冲突消歧", "修改用"): "R1: hybrid_search+load_quest_content(未完成的喜剧→3子任务)+load_book_content(雷穆利亚衰亡史) → R2: 进入回答",
-    ("Q1-多源冲突消歧", "稳定版"): "R1: load_quest_content(未找到)+load_book_content+hybrid_search(截断) → R2-R5: hybrid_search×8 → R6: 回答",
-    ("Q2-非实体概念具象化", "修改用"): "R1: hybrid_search(原始胎海之水)+load_quest_content(当一切回归于水/审判日) → R2: 回答",
-    ("Q2-非实体概念具象化", "稳定版"): "R1: hybrid_search×3 → R2-R3: hybrid_search×3+load_quest_content(聚光灯下谎言成影/审判日) → R4: 回答",
+    (
+        "Q1-多源冲突消歧",
+        "修改用",
+    ): "R1: hybrid_search+load_quest_content(未完成的喜剧→3子任务)+load_book_content(雷穆利亚衰亡史) → R2: 进入回答",
+    (
+        "Q1-多源冲突消歧",
+        "稳定版",
+    ): "R1: load_quest_content(未找到)+load_book_content+hybrid_search(截断) → R2-R5: hybrid_search×8 → R6: 回答",
+    (
+        "Q2-非实体概念具象化",
+        "修改用",
+    ): "R1: hybrid_search(原始胎海之水)+load_quest_content(当一切回归于水/审判日) → R2: 回答",
+    (
+        "Q2-非实体概念具象化",
+        "稳定版",
+    ): "R1: hybrid_search×3 → R2-R3: hybrid_search×3+load_quest_content(聚光灯下谎言成影/审判日) → R4: 回答",
     ("Q3-反事实推理验证", "修改用"): "R1: load_quest_content(大梦的醒转→3子任务) → R2: 回答",
     ("Q3-反事实推理验证", "稳定版"): "R1: hybrid_search+load_quest_content → R2: 回答",
-    ("Q4-长尾知识精准召回", "修改用"): "R1: hybrid_search(石板铭文 雷穆利亚)+query_concept → R2-R3: hybrid_search×3 → R4: 回答(知识库无此数据)",
-    ("Q4-长尾知识精准召回", "稳定版"): "R1: hybrid_search×2+query_concept+list_collectibles_by_region → R2-R3: hybrid_search×3 → R4: 回答(不存在石板铭文类别)",
+    (
+        "Q4-长尾知识精准召回",
+        "修改用",
+    ): "R1: hybrid_search(石板铭文 雷穆利亚)+query_concept → R2-R3: hybrid_search×3 → R4: 回答(知识库无此数据)",
+    (
+        "Q4-长尾知识精准召回",
+        "稳定版",
+    ): "R1: hybrid_search×2+query_concept+list_collectibles_by_region → R2-R3: hybrid_search×3 → R4: 回答(不存在石板铭文类别)",
     ("Q5-模糊查询意图澄清", "修改用"): "R1: hybrid_search(枫丹 画家)+load_quest_content(生命万岁) → R2: 回答",
-    ("Q5-模糊查询意图澄清", "稳定版"): "R1: hybrid_search×3 → R2-R3: hybrid_search×4+load_quest_content → R4: 回答(6个候选)",
+    (
+        "Q5-模糊查询意图澄清",
+        "稳定版",
+    ): "R1: hybrid_search×3 → R2-R3: hybrid_search×4+load_quest_content → R4: 回答(6个候选)",
     ("Q6-多跳因果链构建", "修改用"): "R1: load_quest_content(古老的颜色→3子任务) → R2: 回答",
     ("Q6-多跳因果链构建", "稳定版"): "R1: load_quest_content+hybrid_search×2 → R2-R3: hybrid_search×3 → R4: 回答",
     ("Q7-简单清单", "修改用"): "R1: load_quest_content(未完成的喜剧→3子任务) → R2: 回答(NPC列表21条)",
@@ -32,7 +54,7 @@ tool_summaries = {
 }
 
 html_parts = []
-html_parts.append('''
+html_parts.append("""
 <!-- ====== 最终对比测试 (Q1-Q8) ====== -->
 <div style="margin-top:40px;padding-top:20px;border-top:2px solid #64b5f6;">
 <h1>最终对比测试 (Q1-Q8 综合题)</h1>
@@ -56,7 +78,7 @@ html_parts.append('''
     <div class="value" style="color:#66bb6a">-60%</div>
   </div>
 </div>
-''')
+""")
 
 for mod, sta in pairs:
     qid = mod["qid"]
@@ -70,13 +92,13 @@ for mod, sta in pairs:
     tool_mod = tool_summaries.get((qid, "修改用"), "N/A")
     tool_sta = tool_summaries.get((qid, "稳定版"), "N/A")
 
-    html_parts.append(f'''
-<div class="test" style="border-left: 3px solid #{'66bb6a' if mod['elapsed'] < sta['elapsed'] else 'ff5252'};">
+    html_parts.append(f"""
+<div class="test" style="border-left: 3px solid #{"66bb6a" if mod["elapsed"] < sta["elapsed"] else "ff5252"};">
   <div class="test-header">
     <h3>{qid}</h3>
     <div>
-      <span class="badge" style="background:{'#2e7d32' if mod['elapsed'] < sta['elapsed'] else '#c62828'};color:{'#a5d6a7' if mod['elapsed'] < sta['elapsed'] else '#ffcdd2'};">修改用 {mod["elapsed"]}s / {mod["response_len"]}字</span>
-      <span class="badge" style="background:{'#c62828' if sta['elapsed'] > mod['elapsed'] else '#2e7d32'};color:{'#ffcdd2' if sta['elapsed'] > mod['elapsed'] else '#a5d6a7'};">稳定版 {sta["elapsed"]}s / {sta["response_len"]}字</span>
+      <span class="badge" style="background:{"#2e7d32" if mod["elapsed"] < sta["elapsed"] else "#c62828"};color:{"#a5d6a7" if mod["elapsed"] < sta["elapsed"] else "#ffcdd2"};">修改用 {mod["elapsed"]}s / {mod["response_len"]}字</span>
+      <span class="badge" style="background:{"#c62828" if sta["elapsed"] > mod["elapsed"] else "#2e7d32"};color:{"#ffcdd2" if sta["elapsed"] > mod["elapsed"] else "#a5d6a7"};">稳定版 {sta["elapsed"]}s / {sta["response_len"]}字</span>
     </div>
   </div>
   <div class="test-body">
@@ -98,9 +120,9 @@ for mod, sta in pairs:
       </div>
     </div>
   </div>
-</div>''')
+</div>""")
 
-html_parts.append('''
+html_parts.append("""
 <!-- 关键发现 -->
 <div class="test" style="border-color: #ff9800;">
   <div class="test-header" style="background: #3e2723;">
@@ -118,10 +140,10 @@ html_parts.append('''
 </div>
 
 </div>
-''')
+""")
 
 # 写入
-output = '\n'.join(html_parts)
-with open(BASE_DIR / '_final_html_section.html', 'w', encoding='utf-8') as f:
+output = "\n".join(html_parts)
+with open(BASE_DIR / "_final_html_section.html", "w", encoding="utf-8") as f:
     f.write(output)
 print(f"Generated {len(output)} chars")

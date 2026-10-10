@@ -9,6 +9,7 @@
 L1（快速路径）：合并 Plan/Answer，最多 MAX_FAST_ITERATIONS 轮工具调用
 L2（完整路径）：Plan → Tool 循环 → Answer，最多 MAX_AGENT_ITERATIONS 轮迭代
 """
+
 from langgraph.graph import StateGraph, END
 
 from app.schema import GenshinAdvisorState

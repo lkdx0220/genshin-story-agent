@@ -3,6 +3,7 @@
 
 所有模块的配置中心，不依赖其他 app/ 模块。
 """
+
 import os
 import sys
 import warnings
@@ -12,9 +13,9 @@ warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
 
 # ====== .env 加载（兼容 PyInstaller 打包模式）======
-if getattr(sys, 'frozen', False):
+if getattr(sys, "frozen", False):
     # exe 模式：从 exe 同目录读取外部 .env，避免把密钥打进成品。
-    _ENV_PATH = os.path.join(os.path.dirname(sys.executable), '.env')
+    _ENV_PATH = os.path.join(os.path.dirname(sys.executable), ".env")
     if os.path.exists(_ENV_PATH):
         load_dotenv(_ENV_PATH, override=True)
 else:
@@ -31,10 +32,10 @@ os.environ["LANGCHAIN_API_KEY"] = ""
 os.environ["LANGCHAIN_PROJECT"] = ""
 
 # ====== Windows 控制台 UTF-8 ======
-if sys.platform == 'win32':
+if sys.platform == "win32":
     try:
         if sys.stdout is not None:
-            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
@@ -56,10 +57,10 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
 # ====== 多轮记忆配置 ======
-RECENT_TURNS = 3       # 最近 N 轮完整保留
-SUMMARY_TRIGGER = 5    # 总轮数超过此值时触发摘要
+RECENT_TURNS = 3  # 最近 N 轮完整保留
+SUMMARY_TRIGGER = 5  # 总轮数超过此值时触发摘要
 
 # ====== Agent 迭代上限 ======
 MAX_AGENT_ITERATIONS = 10
-MAX_PLAN_RETRIES = 2       # Plan Agent 无工具调用时的最大强制重试次数
-MAX_FAST_ITERATIONS = 2    # 快速路径的最大工具调用轮次
+MAX_PLAN_RETRIES = 2  # Plan Agent 无工具调用时的最大强制重试次数
+MAX_FAST_ITERATIONS = 2  # 快速路径的最大工具调用轮次

@@ -48,7 +48,9 @@ def build():
     print(f"[打包] 开始构建 {EXE_NAME}.exe ...")
 
     args = [
-        sys.executable, "-m", "PyInstaller",
+        sys.executable,
+        "-m",
+        "PyInstaller",
         "launcher.py",
         "--onefile",
         "--windowed",

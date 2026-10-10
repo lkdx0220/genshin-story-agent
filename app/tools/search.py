@@ -3,6 +3,7 @@
 
 辅助函数 search_all / search_lore 保留供内部使用（已通过 hybrid_search 替代主搜索路径）。
 """
+
 import os
 import re
 import json
@@ -11,13 +12,23 @@ from langchain_core.tools import tool
 
 from app.config import CONTENT_DIR
 from app.data import (
-    角色知识库, 地区知识库, 主线剧情知识库, 武器知识库, 任务知识库,
-    圣遗物知识库, _npcs_data, _match_all_in, _load_content_json,
+    角色知识库,
+    地区知识库,
+    主线剧情知识库,
+    武器知识库,
+    任务知识库,
+    圣遗物知识库,
+    _npcs_data,
+    _match_all_in,
+    _load_content_json,
 )
 from app.formatters import (
-    _format_role_info, _format_region_info, _format_story_info,
+    _format_role_info,
+    _format_region_info,
+    _format_story_info,
 )
 from app.retrieval import _expand_query_with_aliases, _rerank
+
 
 def _quest_files(sorted_by_activity: bool = False) -> list:
     """任务类原始文件列表。
@@ -65,7 +76,7 @@ def _activity_snippet(text: str, matched_term: str) -> str:
     idx = text.find(first_kw)
     start = max(0, idx - 80)
     end = min(len(text), idx + len(matched_term) + 120)
-    return text[start:end].replace('\n', ' ').strip()
+    return text[start:end].replace("\n", " ").strip()
 
 
 def _activity_matches(keyword: str, activity_name: str) -> list:
@@ -98,11 +109,13 @@ def _activity_matches(keyword: str, activity_name: str) -> list:
                 if activity_name not in title and activity_name not in meta_text and activity_name not in category:
                     continue
 
-            results.append({
-                "title": title,
-                "category": q.get("category", ""),
-                "snippet": _activity_snippet(text, matched_term),
-            })
+            results.append(
+                {
+                    "title": title,
+                    "category": q.get("category", ""),
+                    "snippet": _activity_snippet(text, matched_term),
+                }
+            )
     return results
 
 
@@ -184,17 +197,21 @@ def _mention_scan(keyword: str, type_priority: dict) -> list:
             idx = text.find(first_kw)
             start = max(0, idx - 100)
             end = min(len(text), idx + len(keyword) + 100)
-            snippet = text[start:end].replace('\n', ' ').strip()
-            speaker_match = re.search(r'\*「?([^」\n：]{1,10})」?：', text[max(0, idx-200):idx+50])
-            all_matches.append({
-                "title": title, "category": category,
-                "version": version, "version_str": version_str,
-                "priority": type_priority.get(category, 99),
-                "speaker": speaker_match.group(1) if speaker_match else "未知",
-                "snippet": snippet,
-                "chapter_name": metadata.get("chapter_name", ""),
-                "act_name": metadata.get("act_name", ""),
-            })
+            snippet = text[start:end].replace("\n", " ").strip()
+            speaker_match = re.search(r"\*「?([^」\n：]{1,10})」?：", text[max(0, idx - 200) : idx + 50])
+            all_matches.append(
+                {
+                    "title": title,
+                    "category": category,
+                    "version": version,
+                    "version_str": version_str,
+                    "priority": type_priority.get(category, 99),
+                    "speaker": speaker_match.group(1) if speaker_match else "未知",
+                    "snippet": snippet,
+                    "chapter_name": metadata.get("chapter_name", ""),
+                    "act_name": metadata.get("act_name", ""),
+                }
+            )
     return all_matches
 
 
@@ -210,7 +227,7 @@ def _render_first_mention(first: dict, total: int, others: list) -> str:
     if first.get("chapter_name") == "开场动画":
         hierarchy_parts.append("开场动画")
     hierarchy_str = "，".join(hierarchy_parts) + "，" if hierarchy_parts else ""
-    if first['version_str']:
+    if first["version_str"]:
         result += f"任务: {first['title']}（{first['category']}，{hierarchy_str}版本 {first['version_str']}）\n"
     else:
         result += f"任务: {first['title']}（{first['category']}）\n"
@@ -219,7 +236,7 @@ def _render_first_mention(first: dict, total: int, others: list) -> str:
     if total > 1:
         result += f"\n其他提及位置（共{total}处）:\n"
         for m in others:
-            v = f"（版本 {m['version_str']}）" if m['version_str'] else ""
+            v = f"（版本 {m['version_str']}）" if m["version_str"] else ""
             result += f"  - {m['title']}（{m['category']}）{v}\n"
     return result
 
@@ -246,13 +263,16 @@ def find_first_mention(keyword: str) -> str:
 # search_all 已注册为正式工具：当 query_quest/load_quest_content 未命中任务名时，
 # 代码层会先强制调用它做全局检索；search_lore 仍保留为内部辅助函数。
 
+
 def _search_roles(query: str) -> list:
     """角色知识库：角色名称/称号/身份任一命中，输出 ("角色", 文本)。"""
     results = []
     for role in 角色知识库:
-        if (_match_all_in(query, role.get("角色名称", ""))
-                or _match_all_in(query, role.get("称号", ""))
-                or _match_all_in(query, str(role.get("身份", [])))):
+        if (
+            _match_all_in(query, role.get("角色名称", ""))
+            or _match_all_in(query, role.get("称号", ""))
+            or _match_all_in(query, str(role.get("身份", [])))
+        ):
             results.append(("角色", _format_role_info(role)))
     return results
 
@@ -270,9 +290,11 @@ def _search_story_arcs(query: str) -> list:
     """主线剧情知识库：章节名称/章节编号/所属地区任一命中。"""
     results = []
     for arc in 主线剧情知识库:
-        if (_match_all_in(query, arc.get("章节名称", ""))
-                or _match_all_in(query, arc.get("章节编号", ""))
-                or _match_all_in(query, arc.get("所属地区", ""))):
+        if (
+            _match_all_in(query, arc.get("章节名称", ""))
+            or _match_all_in(query, arc.get("章节编号", ""))
+            or _match_all_in(query, arc.get("所属地区", ""))
+        ):
             results.append(("剧情", _format_story_info(arc)))
     return results
 
@@ -290,7 +312,7 @@ def _search_weapons(query: str) -> list:
                 rarity = int(wpn.get("稀有度") or 0)
             except (TypeError, ValueError):
                 rarity = 0
-            results.append(("武器", f"\n【{name}】{'★'*rarity} {wpn.get('武器类型')}"))
+            results.append(("武器", f"\n【{name}】{'★' * rarity} {wpn.get('武器类型')}"))
     return results
 
 
@@ -304,7 +326,7 @@ def _search_artifacts(query: str) -> list:
             continue
         if _match_all_in(query, name):
             effect = (art.get("两件套效果") or "?")[:60]
-            results.append(("圣遗物", f"\n【{name}】{art.get('稀有度','')}星 | 两件套: {effect}"))
+            results.append(("圣遗物", f"\n【{name}】{art.get('稀有度', '')}星 | 两件套: {effect}"))
     return results
 
 
@@ -313,13 +335,20 @@ def _search_quest_metadata(query: str) -> list:
     results = []
     for q in 任务知识库:
         meta = q.get("metadata", {}) or {}
-        if (_match_all_in(query, q.get("任务名称", ""))
-                or _match_all_in(query, q.get("关联角色", ""))
-                or _match_all_in(query, q.get("系列任务", ""))
-                or _match_all_in(query, q.get("所属角色", ""))
-                or _match_all_in(query, str(meta.get("chapter_name", "")))
-                or _match_all_in(query, str(meta.get("act_name", "")))):
-            results.append(("任务", f"\n【{q['任务名称']}】{q.get('任务类型','')} | 关联: {q.get('关联角色','')} | {q.get('简介','')[:100]}"))
+        if (
+            _match_all_in(query, q.get("任务名称", ""))
+            or _match_all_in(query, q.get("关联角色", ""))
+            or _match_all_in(query, q.get("系列任务", ""))
+            or _match_all_in(query, q.get("所属角色", ""))
+            or _match_all_in(query, str(meta.get("chapter_name", "")))
+            or _match_all_in(query, str(meta.get("act_name", "")))
+        ):
+            results.append(
+                (
+                    "任务",
+                    f"\n【{q['任务名称']}】{q.get('任务类型', '')} | 关联: {q.get('关联角色', '')} | {q.get('简介', '')[:100]}",
+                )
+            )
     return results
 
 
@@ -331,8 +360,8 @@ def _search_concepts(query: str) -> list:
         name = c.get("名称", "")
         text_body = c.get("正文", "") + str(c.get("章节", {}))
         if _match_all_in(query, name) or _match_all_in(query, text_body):
-            preview = text_body[:500].replace('\n', ' ')
-            results.append(("概念", f"\n【{name}】（{c.get('类型','')}）\n  {preview}..."))
+            preview = text_body[:500].replace("\n", " ")
+            results.append(("概念", f"\n【{name}】（{c.get('类型', '')}）\n  {preview}..."))
     return results
 
 
@@ -342,7 +371,7 @@ def _search_monsters(query: str) -> list:
     monsters = _load_content_json("monsters")
     for m in monsters:
         if _match_all_in(query, m.get("名称", "")) or _match_all_in(query, m.get("别称", "")):
-            results.append(("怪物", f"\n【{m.get('名称','')}】{m.get('怪物类型','')} | {m.get('元素属性','')}"))
+            results.append(("怪物", f"\n【{m.get('名称', '')}】{m.get('怪物类型', '')} | {m.get('元素属性', '')}"))
     return results
 
 
@@ -351,16 +380,16 @@ def _search_simple_content(query: str) -> list:
     results = []
     for mat in _load_content_json("materials"):
         if _match_all_in(query, mat.get("名称", "")):
-            results.append(("材料", f"\n【{mat.get('名称','')}】{mat.get('类型','')} | {mat.get('用途','')[:100]}"))
+            results.append(("材料", f"\n【{mat.get('名称', '')}】{mat.get('类型', '')} | {mat.get('用途', '')[:100]}"))
     for r in _load_content_json("recipes"):
         if _match_all_in(query, r.get("名称", "")):
-            results.append(("食谱", f"\n【{r.get('名称','')}】{r.get('类型','')} | {r.get('效果','')[:80]}"))
+            results.append(("食谱", f"\n【{r.get('名称', '')}】{r.get('类型', '')} | {r.get('效果', '')[:80]}"))
     for fd in _load_content_json("foods"):
         if _match_all_in(query, fd.get("名称", "")):
-            results.append(("食物", f"\n【{fd.get('名称','')}】{fd.get('类型','')} | {fd.get('效果','')[:80]}"))
+            results.append(("食物", f"\n【{fd.get('名称', '')}】{fd.get('类型', '')} | {fd.get('效果', '')[:80]}"))
     for col in _load_content_json("collectibles"):
         if _match_all_in(query, col.get("名称", "")):
-            results.append(("采集物", f"\n【{col.get('名称','')}】"))
+            results.append(("采集物", f"\n【{col.get('名称', '')}】"))
     return results
 
 
@@ -371,7 +400,7 @@ def _search_books(query: str) -> list:
     for b in books:
         if _match_all_in(query, b.get("title", "")) or _match_all_in(query, b.get("text", "")):
             vol_count = b.get("metadata", {}).get("卷数", "")
-            results.append(("书籍", f"\n【{b.get('title', '')}】（{vol_count}）| 来源: {b.get('source','')}"))
+            results.append(("书籍", f"\n【{b.get('title', '')}】（{vol_count}）| 来源: {b.get('source', '')}"))
     return results
 
 
@@ -398,8 +427,8 @@ def _append_quest_file_candidates(filename: str, search_terms: list, candidates:
             idx = text.find(first_word)
             start = max(0, idx - 120)
             end = min(len(text), idx + len(matched_term) + 120)
-            snippet = text[start:end].replace('\n', ' ').strip()
-            category = q.get('category', '')
+            snippet = text[start:end].replace("\n", " ").strip()
+            category = q.get("category", "")
             # 去重: (title, category, snippet 前 60 字)
             dedup_key = (title, category, snippet[:60])
             if dedup_key not in seen_candidates:
@@ -534,8 +563,6 @@ def search_lore(keyword: str) -> str:
     return "\n".join(lines)
 
 
-
-
 def _search_lore_snippets(keyword: str, max_candidates: int = 5, snippet_chars: int = 400) -> str:
     """轻量世界观搜索：只返回命中条目标题与关键片段，避免把整段 lore 灌给 LLM。"""
     lore_path = os.path.join(CONTENT_DIR, "lore.json")
@@ -588,7 +615,6 @@ def _search_lore_snippets(keyword: str, max_candidates: int = 5, snippet_chars: 
     return chr(10).join(lines)
 
 
-
 def _snippet_around(text: str, keyword: str, width: int = 300) -> str:
     """返回 keyword 在 text 中命中的前后片段，用于武器/圣遗物/书籍等长文本。"""
     idx = text.find(keyword)
@@ -601,6 +627,7 @@ def _snippet_around(text: str, keyword: str, width: int = 300) -> str:
 
 
 # ====== 世界/组织背景补充检索工具（不在初始工具集中，搜索碰壁后才暴露） ======
+
 
 def _world_npc_hay(name, npc, fields: tuple) -> str:
     """NPC 匹配文本：名字 + 指定字段值；非 dict 时字段位留空（与原口径一致，含分隔空格）。"""
@@ -636,17 +663,16 @@ def _world_weapon_snippets(query: str) -> list:
     for wpn in 武器知识库:
         if not isinstance(wpn, dict):
             continue
-        weapon_hay = " ".join([
-            str(wpn.get("武器名称", "")),
-            str(wpn.get("简介", "")),
-            str(wpn.get("武器故事", "")),
-        ])
+        weapon_hay = " ".join(
+            [
+                str(wpn.get("武器名称", "")),
+                str(wpn.get("简介", "")),
+                str(wpn.get("武器故事", "")),
+            ]
+        )
         if query in weapon_hay:
             story = str(wpn.get("武器故事", ""))
-            hits.append(
-                "【武器】" + str(wpn.get("武器名称", "")) + chr(10)
-                + _snippet_around(story, query, 400)
-            )
+            hits.append("【武器】" + str(wpn.get("武器名称", "")) + chr(10) + _snippet_around(story, query, 400))
     return hits
 
 
@@ -661,7 +687,11 @@ def _world_artifact_snippets(query: str) -> list:
             for key, val in stories.items():
                 if query in str(val):
                     hits.append(
-                        "【圣遗物】" + str(art.get("圣遗物名称", "")) + " · " + str(key) + chr(10)
+                        "【圣遗物】"
+                        + str(art.get("圣遗物名称", ""))
+                        + " · "
+                        + str(key)
+                        + chr(10)
                         + _snippet_around(str(val), query, 400)
                     )
     return hits
@@ -673,13 +703,17 @@ def _world_book_snippets(query: str) -> list:
     for book in _load_content_json("books"):
         if not isinstance(book, dict):
             continue
-        book_hay = " ".join([
-            str(book.get("title", "")),
-            str(book.get("text", "")),
-        ])
+        book_hay = " ".join(
+            [
+                str(book.get("title", "")),
+                str(book.get("text", "")),
+            ]
+        )
         if query in book_hay:
             hits.append(
-                "【书籍】" + str(book.get("title", "")) + chr(10)
+                "【书籍】"
+                + str(book.get("title", ""))
+                + chr(10)
                 + _snippet_around(str(book.get("text", "")), query, 400)
             )
     return hits
@@ -755,4 +789,3 @@ def search_world(query: str) -> str:
     if not results:
         return f"在世界观设定与组织/NPC数据中未找到与「{query}」相关的内容。"
     return chr(10).join(results)
-

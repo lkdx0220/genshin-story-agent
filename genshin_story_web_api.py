@@ -24,10 +24,10 @@ if os.getenv("CLOUD_DEPLOY") != "1":
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
-if sys.platform == 'win32':
+if sys.platform == "win32":
     try:
         if sys.stdout is not None:
-            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
@@ -38,10 +38,16 @@ import re
 # 导入 Agent 工具
 try:
     from genshin_story_agent import (
-        tools, RAG_AVAILABLE,
-        角色知识库, 地区知识库, 主线剧情知识库,
-        _summarize_conversation, SUMMARY_TRIGGER, RECENT_TURNS,
+        tools,
+        RAG_AVAILABLE,
+        角色知识库,
+        地区知识库,
+        主线剧情知识库,
+        _summarize_conversation,
+        SUMMARY_TRIGGER,
+        RECENT_TURNS,
     )
+
     AGENT_OK = True
     print("[Web] Agent 模块加载成功")
 except ImportError as e:
@@ -57,8 +63,8 @@ if not _cors_origins:
     # 本机开发页可能是 http 或 https（自签），故用 https? 而不是写死 http（S5332）
     _cors_origins = [r"https?://127\.0\.0\.1:\d+", r"https?://localhost:\d+"]
 CORS(app, resources={r"/api/*": {"origins": _cors_origins}})
-app.config['JSON_AS_ASCII'] = False
-app.config['MAX_CONTENT_LENGTH'] = 64 * 1024
+app.config["JSON_AS_ASCII"] = False
+app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 
 # ====== API 访问控制 ======
 # 未配置任何口令时仅允许本机访问；配置后远程须携带 Bearer Token。
@@ -143,9 +149,7 @@ def _check_api_access():
     if not TOKEN_MAP:
         if _is_local_request():
             return None
-        return jsonify({
-            "error": "该 API 仅限本机访问。若需远程访问，请在服务端配置 API_TOKEN。"
-        }), 403
+        return jsonify({"error": "该 API 仅限本机访问。若需远程访问，请在服务端配置 API_TOKEN。"}), 403
     if not token:
         return jsonify({"error": "无效或缺失 API_TOKEN"}), 403
     return None
@@ -156,13 +160,14 @@ app.before_request(_check_api_access)
 SERVICE_VERSION = "web-1.0"
 
 
-@app.route('/api/health', methods=['GET'])
+@app.route("/api/health", methods=["GET"])
 def api_health():
     """健康检查：供云平台/隧道探活（公开可读，不含敏感信息）。"""
     kb_counts = {}
     try:
         # 统计接口在 KBVectorStore 实例上，运行时单例由 app/data.py 顶层初始化
         from app.data import _vector_store
+
         if _vector_store is not None:
             kb_counts = _vector_store.get_stats()
     except Exception as e:
@@ -184,9 +189,11 @@ def api_health():
         # kb_vector_store 会按默认值回退（kb_vectors_m3 + bge-m3），只读 env 会得到空串。
         try:
             import kb_vector_store as _kvs
+
             vector_dir = str(getattr(_kvs, "RUNTIME_VECTOR_DIR", "") or "")
             embedding_backend = str(getattr(_kvs, "RUNTIME_EMBEDDING_BACKEND", "") or "")
             from app.data import _vector_store
+
             if _vector_store is not None:
                 vector_dir = str(getattr(_vector_store, "vector_dir", "") or vector_dir)
                 embedding_backend = str(getattr(_vector_store, "embedding_backend", "") or embedding_backend)
@@ -210,8 +217,10 @@ def _get_workflow():
         with _workflow_lock:
             if _workflow_cache is None:
                 import genshin_story_agent as agent_module
+
                 _workflow_cache = agent_module.create_agent_workflow()
     return _workflow_cache
+
 
 # 取消信号映射：session_id → threading.Event
 _cancel_events: Dict[str, threading.Event] = {}
@@ -290,10 +299,16 @@ def _check_rate_limit():
         while q and q[0] <= now - window:
             q.popleft()
         if len(q) >= limit:
-            return jsonify({
-                "error": "请求过于频繁，请稍后重试",
-                "retry_after": int(window),
-            }), 429, {"Retry-After": str(int(window))}
+            return (
+                jsonify(
+                    {
+                        "error": "请求过于频繁，请稍后重试",
+                        "retry_after": int(window),
+                    }
+                ),
+                429,
+                {"Retry-After": str(int(window))},
+            )
         q.append(now)
 
     daily_limit = _get_daily_limit(request.path)
@@ -310,16 +325,21 @@ def _check_rate_limit():
                 _daily_records[dkey] = rec
             if rec[1] >= daily_limit:
                 retry_after = max(1, int(86400 - (now % 86400)))
-                return jsonify({
-                    "error": "已达到今日使用上限，请明天再试",
-                    "retry_after": retry_after,
-                }), 429, {"Retry-After": str(retry_after)}
+                return (
+                    jsonify(
+                        {
+                            "error": "已达到今日使用上限，请明天再试",
+                            "retry_after": retry_after,
+                        }
+                    ),
+                    429,
+                    {"Retry-After": str(retry_after)},
+                )
             rec[1] += 1
     return None
 
 
 app.before_request(_check_rate_limit)
-
 
 
 def _find_tool(name: str):
@@ -330,13 +350,13 @@ def _find_tool(name: str):
 
 
 # ====== 聊天 UI ======
-@app.route('/chat')
+@app.route("/chat")
 def chat_ui():
     """提供聊天客户端界面"""
-    ui_path = os.path.join(os.path.dirname(__file__), 'chat_ui.html')
+    ui_path = os.path.join(os.path.dirname(__file__), "chat_ui.html")
     if os.path.exists(ui_path):
         try:
-            with open(ui_path, 'r', encoding='utf-8') as f:
+            with open(ui_path, "r", encoding="utf-8") as f:
                 return f.read()
         except OSError as e:
             return f"<h1>读取 chat_ui.html 失败: {e}</h1>", 500
@@ -344,9 +364,10 @@ def chat_ui():
 
 
 # ====== 首页 ======
-@app.route('/')
+@app.route("/")
 def index():
-    html = """<!DOCTYPE html>
+    html = (
+        """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -370,7 +391,9 @@ pre{background:rgba(0,0,0,.3);padding:14px;border-radius:8px;overflow-x:auto;fon
 <div class="container">
 <h1>原神剧情助手 API</h1>
 <p class="sub">提瓦特冒险向导 · 剧情检索服务</p>
-<div class="status">API 运行中 | 知识库: """ + str(len(角色知识库) if AGENT_OK else 0) + """位角色</div>
+<div class="status">API 运行中 | 知识库: """
+        + str(len(角色知识库) if AGENT_OK else 0)
+        + """位角色</div>
 
 <h3 style="color:#ffd700;margin-top:20px">API 端点</h3>
 <div class="api-item"><div class="api-title">角色查询</div><div class="api-url">POST /api/character</div><div class="api-desc">{"character": "胡桃"}</div></div>
@@ -386,32 +409,35 @@ pre{background:rgba(0,0,0,.3);padding:14px;border-radius:8px;overflow-x:auto;fon
 </div>
 </body>
 </html>"""
+    )
     return render_template_string(html)
 
 
-@app.route('/api/status')
+@app.route("/api/status")
 def status():
-    return jsonify({
-        "status": "running",
-        "agent": AGENT_OK,
-        "rag": RAG_AVAILABLE if AGENT_OK else False,
-        "knowledge": {
-            "characters": len(角色知识库) if AGENT_OK else 0,
-            "regions": len(地区知识库) if AGENT_OK else 0,
-            "stories": len(主线剧情知识库) if AGENT_OK else 0,
-        },
-        "timestamp": datetime.now().isoformat(),
-    })
+    return jsonify(
+        {
+            "status": "running",
+            "agent": AGENT_OK,
+            "rag": RAG_AVAILABLE if AGENT_OK else False,
+            "knowledge": {
+                "characters": len(角色知识库) if AGENT_OK else 0,
+                "regions": len(地区知识库) if AGENT_OK else 0,
+                "stories": len(主线剧情知识库) if AGENT_OK else 0,
+            },
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
 
 
-@app.route('/api/shutdown')
+@app.route("/api/shutdown")
 def api_shutdown():
     """远程关闭服务器（launcher 调用，清理残留进程）"""
     os._exit(0)
     return ""  # unreachable, 但 Flask 需要返回值
 
 
-@app.route('/api/sessions')
+@app.route("/api/sessions")
 def api_sessions():
     """列出磁盘上已保存的会话（只列当前口令命名空间内的）"""
     sessions = []
@@ -437,16 +463,18 @@ def api_sessions():
                 title = pairs[0].get("user", "")[:30]
                 if pairs[-1].get("user"):
                     last_message = pairs[-1]["user"][:50]
-            sessions.append({
-                "id": session_id,
-                "title": title,
-                "count": len(pairs),
-                "last_message": last_message,
-            })
+            sessions.append(
+                {
+                    "id": session_id,
+                    "title": title,
+                    "count": len(pairs),
+                    "last_message": last_message,
+                }
+            )
     return jsonify({"sessions": sessions})
 
 
-@app.route('/api/cancel', methods=['POST'])
+@app.route("/api/cancel", methods=["POST"])
 def api_cancel():
     """中断当前会话的 Agent 运行"""
     data = request.get_json(silent=True) or {}
@@ -465,13 +493,13 @@ def api_cancel():
     return jsonify({"success": False, "error": "未找到运行中的会话"}), 404
 
 
-@app.route('/api/sessions/<session_id>', methods=['GET', 'DELETE'])
+@app.route("/api/sessions/<session_id>", methods=["GET", "DELETE"])
 def api_session_detail(session_id):
     """获取或删除指定会话"""
     if not _valid_session_id(session_id):
         return jsonify({"success": False, "error": "非法的 session_id"}), 400
     tenant = _current_tenant()
-    if request.method == 'DELETE':
+    if request.method == "DELETE":
         fpath = _session_file(session_id, tenant)
         if os.path.exists(fpath):
             try:
@@ -486,7 +514,7 @@ def api_session_detail(session_id):
     return jsonify(data)
 
 
-@app.route('/api/character', methods=['POST'])
+@app.route("/api/character", methods=["POST"])
 def api_character():
     tool = _find_tool("query_character")
     if not tool:
@@ -498,7 +526,7 @@ def api_character():
     return jsonify({"success": True, "result": result})
 
 
-@app.route('/api/region', methods=['POST'])
+@app.route("/api/region", methods=["POST"])
 def api_region():
     tool = _find_tool("query_region")
     if not tool:
@@ -510,7 +538,7 @@ def api_region():
     return jsonify({"success": True, "result": result})
 
 
-@app.route('/api/story', methods=['POST'])
+@app.route("/api/story", methods=["POST"])
 def api_story():
     tool = _find_tool("query_story")
     if not tool:
@@ -522,7 +550,7 @@ def api_story():
     return jsonify({"success": True, "result": result})
 
 
-@app.route('/api/weapon', methods=['POST'])
+@app.route("/api/weapon", methods=["POST"])
 def api_weapon():
     tool = _find_tool("query_weapon")
     if not tool:
@@ -537,7 +565,7 @@ def api_weapon():
     return jsonify({"success": True, "result": result})
 
 
-@app.route('/api/quest', methods=['POST'])
+@app.route("/api/quest", methods=["POST"])
 def api_quest():
     tool = _find_tool("query_quest")
     if not tool:
@@ -549,7 +577,7 @@ def api_quest():
     return jsonify({"success": True, "result": result})
 
 
-@app.route('/api/element', methods=['POST'])
+@app.route("/api/element", methods=["POST"])
 def api_element():
     tool = _find_tool("list_characters_by_element")
     if not tool:
@@ -561,7 +589,7 @@ def api_element():
     return jsonify({"success": True, "result": result})
 
 
-@app.route('/api/search', methods=['POST'])
+@app.route("/api/search", methods=["POST"])
 def api_search():
     tool = _find_tool("hybrid_search")
     if not tool:
@@ -620,9 +648,7 @@ def _session_file(session_id: str, tenant: str = None) -> str:
     不等即拒绝。语义与 _valid_session_id 完全一致（同一字符集），
     但让污点分析能确认「拼进路径的只可能是 [A-Za-z0-9_-]」。
     """
-    safe_id = "".join(
-        ch for ch in str(session_id or "") if ch.isascii() and (ch.isalnum() or ch in "_-")
-    )
+    safe_id = "".join(ch for ch in str(session_id or "") if ch.isascii() and (ch.isalnum() or ch in "_-"))
     if not safe_id or safe_id != session_id or len(safe_id) > 64:
         raise ValueError("非法的 session_id")
     return os.path.join(_tenant_session_dir(tenant), "session_" + safe_id + ".json")
@@ -673,18 +699,19 @@ def _extract_tool_calls(state: Dict) -> list:
             tool_calls = getattr(msg, "tool_calls", None)
             if tool_calls:
                 for tc in tool_calls:
-                    calls.append({
-                        "tool": tc.get("name", "?"),
-                        "args": json.dumps(tc.get("args", {}), ensure_ascii=False),
-                    })
+                    calls.append(
+                        {
+                            "tool": tc.get("name", "?"),
+                            "args": json.dumps(tc.get("args", {}), ensure_ascii=False),
+                        }
+                    )
     return calls
 
 
-
-
-@app.route('/api/chat', methods=['POST'])
+@app.route("/api/chat", methods=["POST"])
 def api_chat():
     import genshin_story_agent as agent_module
+
     data = request.get_json(silent=True)
     if not data or "message" not in data:
         return jsonify({"error": "缺少 message 参数"}), 400
@@ -718,30 +745,35 @@ def api_chat():
             agent_module.set_progress_hook(progress_hook)
             agent_module._cancel_events[run_id] = cancel_event
             agent = _get_workflow()
-            result = agent.invoke({
-                "user_query": agent_module.sanitize_prompt_text(message),
-                "rewritten_query": None,
-                "alias_notes": None,
-                "conversation_history": conv_pairs,
-                "conversation_summary": conv_summary,
-                "messages": [],
-                "final_response": None,
-                "iteration": 0,
-                "plan_retry": 0,
-                "execution_plan": None,
-                "run_id": run_id,
-            })
+            result = agent.invoke(
+                {
+                    "user_query": agent_module.sanitize_prompt_text(message),
+                    "rewritten_query": None,
+                    "alias_notes": None,
+                    "conversation_history": conv_pairs,
+                    "conversation_summary": conv_summary,
+                    "messages": [],
+                    "final_response": None,
+                    "iteration": 0,
+                    "plan_retry": 0,
+                    "execution_plan": None,
+                    "run_id": run_id,
+                }
+            )
             answer = result.get("final_response", "无结果")
             tool_calls = _extract_tool_calls(result)
-            progress_queue.put({
-                "type": "done",
-                "answer": answer,
-                "tool_calls": tool_calls,
-                "session_id": session_id,
-                "message": message,
-            })
+            progress_queue.put(
+                {
+                    "type": "done",
+                    "answer": answer,
+                    "tool_calls": tool_calls,
+                    "session_id": session_id,
+                    "message": message,
+                }
+            )
         except Exception as e:
             import traceback
+
             traceback.print_exc()
             # 只回传异常类型，完整堆栈留在服务端日志，避免向客户端泄漏内部路径
             progress_queue.put({"type": "error", "error": f"服务器内部错误（{type(e).__name__}），详情见服务端日志"})
@@ -751,6 +783,7 @@ def api_chat():
 
     # 生成运行标识并注册取消信号（完整 UUID，避免短号被猜测后取消他人任务）
     import uuid
+
     run_id = str(uuid.uuid4())
     cancel_event = threading.Event()
     _cancel_events[run_id] = cancel_event
@@ -813,10 +846,10 @@ def api_chat():
             _sessions[session_key] = {"pairs": conv_pairs, "summary": conv_summary}
             _save_session_to_disk(session_id, _sessions[session_key], tenant)
 
-    return Response(generate(), mimetype='text/event-stream')
+    return Response(generate(), mimetype="text/event-stream")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import socket
     import urllib.request
 
@@ -858,4 +891,4 @@ if __name__ == '__main__':
     print(f"  地址: http://localhost:{port}")
     print("  接口: /api/character /api/region /api/story /api/chat 等")
     print("=" * 50)
-    app.run(host='127.0.0.1', port=port, debug=os.getenv("FLASK_DEBUG", "0") == "1")
+    app.run(host="127.0.0.1", port=port, debug=os.getenv("FLASK_DEBUG", "0") == "1")

@@ -18,8 +18,8 @@ import os, sys, re, json, time, argparse
 from typing import Dict, List, Optional
 import requests
 
-if sys.platform == 'win32':
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 API = "https://wiki.biligame.com/ys/api.php"
 OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "genshin_knowledge_base", "roles.py")
@@ -31,20 +31,24 @@ MAX_RETRIES = 3
 # 创建带有正确 headers 的 session
 _api_session = None
 
+
 def _get_session():
     global _api_session
     if _api_session is None:
         _api_session = requests.Session()
-        _api_session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Referer": "https://wiki.biligame.com/ys/",
-        })
+        _api_session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Referer": "https://wiki.biligame.com/ys/",
+            }
+        )
     return _api_session
 
 
 # ========== API 工具 ==========
+
 
 def api_get(params: dict, retries: int = MAX_RETRIES) -> Optional[dict]:
     """调用 MediaWiki API，带重试"""
@@ -55,8 +59,8 @@ def api_get(params: dict, retries: int = MAX_RETRIES) -> Optional[dict]:
             if resp.status_code == 200 and resp.text.strip():
                 return resp.json()
         except Exception as e:
-            print(f"  [API] 第{attempt+1}次失败: {e}")
-        time.sleep(2 ** attempt)
+            print(f"  [API] 第{attempt + 1}次失败: {e}")
+        time.sleep(2**attempt)
     return None
 
 
@@ -68,8 +72,11 @@ def get_category_pages(category: str, limit: Optional[int] = None) -> List[Dict]
 
     while True:
         params = {
-            "action": "query", "list": "categorymembers",
-            "cmtitle": f"Category:{category}", "cmlimit": 200, "format": "json"
+            "action": "query",
+            "list": "categorymembers",
+            "cmtitle": f"Category:{category}",
+            "cmlimit": 200,
+            "format": "json",
         }
         if cmcontinue:
             params["cmcontinue"] = cmcontinue
@@ -99,9 +106,12 @@ def get_category_pages(category: str, limit: Optional[int] = None) -> List[Dict]
 def get_page_wikitext(title: str) -> Optional[str]:
     """获取页面 wikitext 源码"""
     params = {
-        "action": "query", "titles": title,
-        "prop": "revisions", "rvprop": "content", "rvslots": "main",
-        "format": "json"
+        "action": "query",
+        "titles": title,
+        "prop": "revisions",
+        "rvprop": "content",
+        "rvslots": "main",
+        "format": "json",
     }
     data = api_get(params)
     if not data:
@@ -115,22 +125,25 @@ def get_page_wikitext(title: str) -> Optional[str]:
 
 # ========== 数据清洗 ==========
 
+
 def clean_value(v: str) -> str:
     """清洗模板值：去除HTML注释、多余空白"""
-    v = re.sub(r'<!--.*?-->', '', v)  # 去除HTML注释
+    v = re.sub(r"<!--.*?-->", "", v)  # 去除HTML注释
     v = v.strip()
     return v
+
 
 def extract_star(star_str: str) -> int:
     """从稀有度字符串提取星级数字"""
     star_str = clean_value(star_str)
     if star_str == "未知" or not star_str:
         return 0
-    m = re.search(r'(\d+)', star_str)
+    m = re.search(r"(\d+)", star_str)
     return int(m.group(1)) if m else 0
 
 
 # ========== 模板解析 ==========
+
 
 def parse_template(content: str, template_name: str) -> Optional[Dict[str, str]]:
     """从 wikitext 中解析命名模板 {{template_name|key1=val1|...}}
@@ -140,11 +153,11 @@ def parse_template(content: str, template_name: str) -> Optional[Dict[str, str]]
 
     # 找到 {{template_name 开头，匹配到对应的 }}
     # 使用平衡括号匹配
-    pattern = r'\{\{' + re.escape(template_name) + r'\s*\n(.*?)\n\s*\}\}'
+    pattern = r"\{\{" + re.escape(template_name) + r"\s*\n(.*?)\n\s*\}\}"
     match = re.search(pattern, content, re.DOTALL)
     if not match:
         # 备选: 单行模板 {{template_name|...}}
-        pattern2 = r'\{\{' + re.escape(template_name) + r'([^}]*)\}\}'
+        pattern2 = r"\{\{" + re.escape(template_name) + r"([^}]*)\}\}"
         match = re.search(pattern2, content, re.DOTALL)
 
     if not match:
@@ -155,20 +168,20 @@ def parse_template(content: str, template_name: str) -> Optional[Dict[str, str]]
 
     # 按 |key=value 分割，处理多行值
     # 先找所有的 |key= 位置
-    lines = inner.strip().split('\n')
+    lines = inner.strip().split("\n")
     current_key = None
     current_value = []
 
     for line in lines:
         line = line.strip()
-        if not line or line == '}}':
+        if not line or line == "}}":
             continue
         # 检查是否是新键值对开头 |key=value
-        m = re.match(r'^\|([^=]+)=(.*)', line)
+        m = re.match(r"^\|([^=]+)=(.*)", line)
         if m:
             # 保存上一个键值对
             if current_key:
-                result[current_key.strip()] = '\n'.join(current_value).strip()
+                result[current_key.strip()] = "\n".join(current_value).strip()
             current_key = m.group(1).strip()
             current_value = [m.group(2)]
         else:
@@ -178,29 +191,30 @@ def parse_template(content: str, template_name: str) -> Optional[Dict[str, str]]
 
     # 最后一个键值对
     if current_key:
-        result[current_key.strip()] = '\n'.join(current_value).strip()
+        result[current_key.strip()] = "\n".join(current_value).strip()
 
     return result
 
 
 def extract_text_section(content: str, heading: str) -> Optional[str]:
     """提取 == heading == 下的纯文本段落"""
-    pattern = r'==\s*' + re.escape(heading) + r'\s*==\s*\n(.*?)(?:\n==|$)'
+    pattern = r"==\s*" + re.escape(heading) + r"\s*==\s*\n(.*?)(?:\n==|$)"
     match = re.search(pattern, content, re.DOTALL)
     if match:
         text = match.group(1).strip()
         # 去除 wiki 标记
-        text = re.sub(r"'''(.+?)'''", r'\1', text)  # 粗体
-        text = re.sub(r"''(.+?)''", r'\1', text)    # 斜体
-        text = re.sub(r'\[\[([^\]|]+)\]\]', r'\1', text)  # 链接
-        text = re.sub(r'\[\[[^\]|]+\|([^\]]+)\]\]', r'\1', text)  # 命名链接
-        text = re.sub(r'<[^>]+>', '', text)  # HTML标签
-        text = re.sub(r'\{\{[^}]+\}\}', '', text)  # 内联模板
+        text = re.sub(r"'''(.+?)'''", r"\1", text)  # 粗体
+        text = re.sub(r"''(.+?)''", r"\1", text)  # 斜体
+        text = re.sub(r"\[\[([^\]|]+)\]\]", r"\1", text)  # 链接
+        text = re.sub(r"\[\[[^\]|]+\|([^\]]+)\]\]", r"\1", text)  # 命名链接
+        text = re.sub(r"<[^>]+>", "", text)  # HTML标签
+        text = re.sub(r"\{\{[^}]+\}\}", "", text)  # 内联模板
         return text.strip()
     return None
 
 
 # ========== 角色解析 ==========
+
 
 def parse_character(page_title: str, wikitext: str) -> Optional[Dict]:
     """解析角色页面"""
@@ -239,7 +253,7 @@ def parse_character(page_title: str, wikitext: str) -> Optional[Dict]:
         for field in ["角色详细", "角色故事1", "角色故事2", "角色故事3", "角色故事4", "角色故事5", "神之眼"]:
             val = clean_value(story_tmpl.get(field, ""))
             if val:
-                val = re.sub(r'<[^>]+>', '', val).strip()[:1500]
+                val = re.sub(r"<[^>]+>", "", val).strip()[:1500]
                 stories[field] = val
         # Wiki 用「冒险笔记」承载角色的特殊档案（如爱可菲的「多目标烹饪机关组」）。
         # 冒险笔记名称 是这篇档案的真实标题，不能被丢掉。
@@ -248,8 +262,8 @@ def parse_character(page_title: str, wikitext: str) -> Optional[Dict]:
         if note_body:
             for br in ("<br>", "<br/>", "<br />"):
                 note_body = note_body.replace(br, "\n")
-            note_body = re.sub(r'<[^>]+>', '', note_body).strip()
-            note_body = re.sub(r'\n{3,}', '\n\n', note_body)
+            note_body = re.sub(r"<[^>]+>", "", note_body).strip()
+            note_body = re.sub(r"\n{3,}", "\n\n", note_body)
             note_unlock = clean_value(story_tmpl.get("冒险笔记解锁条件", ""))
             if note_unlock:
                 note_body = f"【解锁条件】{note_unlock}\n\n{note_body}"
@@ -258,7 +272,7 @@ def parse_character(page_title: str, wikitext: str) -> Optional[Dict]:
         if note_end and note_name:
             for br in ("<br>", "<br/>", "<br />"):
                 note_end = note_end.replace(br, "\n")
-            note_end = re.sub(r'<[^>]+>', '', note_end).strip()
+            note_end = re.sub(r"<[^>]+>", "", note_end).strip()
             if note_end:
                 stories[f"{note_name}·结束语"] = note_end[:1500]
         story_text = stories.get("角色详细", "") or stories.get("角色故事1", "")
@@ -289,6 +303,7 @@ def parse_character(page_title: str, wikitext: str) -> Optional[Dict]:
 
 # ========== 武器解析 ==========
 
+
 def parse_weapon(page_title: str, wikitext: str) -> Optional[Dict]:
     """解析武器页面 —— 完整提取：故事、数值、技能"""
     tmpl = parse_template(wikitext, "武器图鉴")
@@ -315,17 +330,37 @@ def parse_weapon(page_title: str, wikitext: str) -> Optional[Dict]:
 
     # 武器数值成长
     attack_growth = {}
-    for key in ["初始攻击力", "20突破前攻击力", "20突破后攻击力",
-                "40突破前攻击力", "40突破后攻击力", "50突破前攻击力", "50突破后攻击力",
-                "60突破前攻击力", "60突破后攻击力", "70突破前攻击力", "70突破后攻击力",
-                "80突破前攻击力", "80突破后攻击力", "90突破前攻击力"]:
+    for key in [
+        "初始攻击力",
+        "20突破前攻击力",
+        "20突破后攻击力",
+        "40突破前攻击力",
+        "40突破后攻击力",
+        "50突破前攻击力",
+        "50突破后攻击力",
+        "60突破前攻击力",
+        "60突破后攻击力",
+        "70突破前攻击力",
+        "70突破后攻击力",
+        "80突破前攻击力",
+        "80突破后攻击力",
+        "90突破前攻击力",
+    ]:
         val = clean_value(tmpl.get(key, ""))
         if val:
             attack_growth[key] = val
 
     substat_growth = {}
-    for key in ["初始副属性", "20级副属性", "40级副属性", "50级副属性",
-                "60级副属性", "70级副属性", "80级副属性", "90级副属性"]:
+    for key in [
+        "初始副属性",
+        "20级副属性",
+        "40级副属性",
+        "50级副属性",
+        "60级副属性",
+        "70级副属性",
+        "80级副属性",
+        "90级副属性",
+    ]:
         val = clean_value(tmpl.get(key, ""))
         if val:
             substat_growth[key] = val
@@ -359,6 +394,7 @@ def parse_weapon(page_title: str, wikitext: str) -> Optional[Dict]:
 
 
 # ========== 圣遗物解析 ==========
+
 
 def parse_artifact(page_title: str, wikitext: str) -> Optional[Dict]:
     """解析圣遗物套装页面 —— 完整提取：效果、五部位故事"""
@@ -397,7 +433,9 @@ def parse_artifact(page_title: str, wikitext: str) -> Optional[Dict]:
     return {
         "圣遗物ID": f"ART_{name}",
         "圣遗物名称": name,
-        "稀有度": tmpl.get("最低稀有度", "") + "-" + tmpl.get("最高稀有度", "") if tmpl.get("最高稀有度") else tmpl.get("稀有度", ""),
+        "稀有度": tmpl.get("最低稀有度", "") + "-" + tmpl.get("最高稀有度", "")
+        if tmpl.get("最高稀有度")
+        else tmpl.get("稀有度", ""),
         "两件套效果": clean_value(two_pc),
         "四件套效果": clean_value(four_pc),
         "部位名称": piece_names,
@@ -408,6 +446,7 @@ def parse_artifact(page_title: str, wikitext: str) -> Optional[Dict]:
 
 
 # ========== 任务解析 ==========
+
 
 def parse_quest(page_title: str, wikitext: str) -> Optional[Dict]:
     """解析任务页面"""
@@ -439,6 +478,7 @@ def parse_quest(page_title: str, wikitext: str) -> Optional[Dict]:
 
 # ========== 地区解析 ==========
 
+
 def parse_region(page_title: str, wikitext: str) -> Optional[Dict]:
     """解析地区页面 - Wiki 无结构化地区模板，用硬编码映射 + 提取正文"""
     # 七国硬编码映射
@@ -456,11 +496,11 @@ def parse_region(page_title: str, wikitext: str) -> Optional[Dict]:
     data = REGION_DATA.get(page_title, {"元素": "", "神明": "", "理念": ""})
 
     # 从正文提取简介（前300字符去掉模板）
-    intro_text = re.sub(r'\{\{[^}]+\}\}', '', wikitext) if wikitext else ""
-    intro_text = re.sub(r'<[^>]+>', '', intro_text)
-    intro_text = re.sub(r'\n+', ' ', intro_text)
+    intro_text = re.sub(r"\{\{[^}]+\}\}", "", wikitext) if wikitext else ""
+    intro_text = re.sub(r"<[^>]+>", "", intro_text)
+    intro_text = re.sub(r"\n+", " ", intro_text)
     # 跳过编年号、面包屑等前置内容
-    intro_text = re.sub(r'^=+[^=]*=+', '', intro_text).strip()
+    intro_text = re.sub(r"^=+[^=]*=+", "", intro_text).strip()
     intro = intro_text[:300]
 
     return {
@@ -477,8 +517,8 @@ def parse_region(page_title: str, wikitext: str) -> Optional[Dict]:
 
 # ========== 批量获取与解析 ==========
 
-def fetch_and_parse(category: str, parser_func, limit: Optional[int] = None,
-                    description: str = "") -> List[Dict]:
+
+def fetch_and_parse(category: str, parser_func, limit: Optional[int] = None, description: str = "") -> List[Dict]:
     """批量获取分类下页面并解析"""
     pages = get_category_pages(category, limit=limit)
     if not pages:
@@ -486,11 +526,11 @@ def fetch_and_parse(category: str, parser_func, limit: Optional[int] = None,
 
     results = []
     total = len(pages)
-    desc = f"[{description or category}]" 
+    desc = f"[{description or category}]"
 
     for i, page in enumerate(pages):
         title = page["title"]
-        print(f"  {desc} [{i+1}/{total}] {title}...", end=" ")
+        print(f"  {desc} [{i + 1}/{total}] {title}...", end=" ")
 
         wikitext = get_page_wikitext(title)
         if wikitext:
@@ -514,10 +554,17 @@ def fetch_and_parse(category: str, parser_func, limit: Optional[int] = None,
 
 # ========== 知识库文件生成 ==========
 
-def generate_knowledge_base(characters: List[Dict], weapons: List[Dict],
-                            artifacts: List[Dict], quests: List[Dict],
-                            regions: List[Dict], stories: List[Dict],
-                            output_path: str, characters_only: bool = False):
+
+def generate_knowledge_base(
+    characters: List[Dict],
+    weapons: List[Dict],
+    artifacts: List[Dict],
+    quests: List[Dict],
+    regions: List[Dict],
+    stories: List[Dict],
+    output_path: str,
+    characters_only: bool = False,
+):
     """生成知识库文件。
     当 characters_only=True 时，只输出角色知识库列表（用于 roles.py）。"""
 
@@ -528,10 +575,10 @@ def generate_knowledge_base(characters: List[Dict], weapons: List[Dict],
             # 用 repr 方式输出字典
             s = json.dumps(item, ensure_ascii=False, indent=2)
             # 缩进调整
-            s = '\n'.join('    ' + line for line in s.split('\n'))
+            s = "\n".join("    " + line for line in s.split("\n"))
             lines.append(s + ("," if i < len(data) - 1 else ""))
         lines.append("]")
-        return '\n'.join(lines)
+        return "\n".join(lines)
 
     # 角色专属模式：只输出角色知识库
     if characters_only:
@@ -622,6 +669,7 @@ def generate_knowledge_base(characters: List[Dict], weapons: List[Dict],
 
 # ========== 主函数 ==========
 
+
 def main():
     parser = argparse.ArgumentParser(description="原神 Wiki 知识库构建脚本")
     parser.add_argument("--limit", "-l", type=int, default=None, help="限制每类页面数量")
@@ -655,7 +703,7 @@ def main():
         for quest_cat in ["魔神任务", "传说任务", "世界任务"]:
             quests.extend(fetch_and_parse(quest_cat, parse_quest, args.limit, quest_cat))
             if args.limit and len(quests) >= args.limit:
-                quests = quests[:args.limit]
+                quests = quests[: args.limit]
                 break
 
     if all_mode or args.regions:
@@ -682,8 +730,9 @@ def main():
     stories = []  # 未来可从魔神任务页面解析
 
     # 生成
-    generate_knowledge_base(characters, weapons, artifacts, quests, regions, stories, args.output,
-                            characters_only=args.characters)
+    generate_knowledge_base(
+        characters, weapons, artifacts, quests, regions, stories, args.output, characters_only=args.characters
+    )
 
     print("\n" + "=" * 60)
     print(f"  构建完成!")

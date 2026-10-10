@@ -8,6 +8,7 @@
 
 本模块只处理数据结构、构建与查询，不负责网络抓取。
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,7 +43,7 @@ SCHEMA_VERSION = 4
 
 # 观测枢转录误字 → 正确写法（人工核对：B站同页为正确写法）
 _TEXT_FIXES = {
-    "八奇现瘴病隐": "八奇现瘴疠隐",   # 春曦画桃符 第一回
+    "八奇现瘴病隐": "八奇现瘴疠隐",  # 春曦画桃符 第一回
 }
 
 # 试点范围：灰眸四线任务 ID 及其关联地区。
@@ -50,15 +51,16 @@ PILOT_TASK_IDS = {"509533", "509538", "509592", "509591"}
 # 试点图缺失、已单独补抓的高价值词条（见 scripts/fetch_wiki_missing_entries.py）。
 PILOT_MISSING_IDS = {"509399", "509397", "509511"}
 PILOT_REGIONS = {
-    "至冬", "白冕宫", "奥古洛夫镇", "焰羽谷", "赫斯珀利德斯之馆", "白桦雪葬地",
+    "至冬",
+    "白冕宫",
+    "奥古洛夫镇",
+    "焰羽谷",
+    "赫斯珀利德斯之馆",
+    "白桦雪葬地",
 }
 
-_LINK_RE_1 = re.compile(
-    r'data-entry-id=["\'](\d+)["\'][^>]*data-entry-name=["\']([^"\']+)["\']'
-)
-_LINK_RE_2 = re.compile(
-    r'data-entry-name=["\']([^"\']+)["\'][^>]*data-entry-id=["\'](\d+)["\']'
-)
+_LINK_RE_1 = re.compile(r'data-entry-id=["\'](\d+)["\'][^>]*data-entry-name=["\']([^"\']+)["\']')
+_LINK_RE_2 = re.compile(r'data-entry-name=["\']([^"\']+)["\'][^>]*data-entry-id=["\'](\d+)["\']')
 
 
 class _TextExtractor(HTMLParser):
@@ -192,9 +194,7 @@ class WikiEntryGraph:
     meta: Dict[str, Any] = field(default_factory=dict)
     # 反向链接内存索引：target_id -> [(来源词条, 该来源的第一条指向链接), ...]。
     # 延迟构建，add() 时置脏；图规模只有一万多词条，构建一次即可复用。
-    _backlinks: Dict[str, List[Tuple[WikiEntry, WikiLink]]] = field(
-        default_factory=dict, init=False, repr=False
-    )
+    _backlinks: Dict[str, List[Tuple[WikiEntry, WikiLink]]] = field(default_factory=dict, init=False, repr=False)
     _backlinks_dirty: bool = field(default=True, init=False, repr=False)
 
     def add(self, entry: WikiEntry) -> None:
@@ -330,8 +330,11 @@ class WikiEntryGraph:
         if candidate.suffix != ".json":
             raise ValueError(f"词条图必须是 .json 文件：{candidate.name}")
         resolved = candidate.resolve()
-        roots = [BASE_DIR.resolve(), Path(os.getenv("KB_GRAPH_DIR") or BASE_DIR).resolve(),
-                 Path(tempfile.gettempdir()).resolve()]
+        roots = [
+            BASE_DIR.resolve(),
+            Path(os.getenv("KB_GRAPH_DIR") or BASE_DIR).resolve(),
+            Path(tempfile.gettempdir()).resolve(),
+        ]
         if not any(resolved == root or root in resolved.parents for root in roots):
             raise ValueError(f"词条图路径越界（只允许项目目录/KB_GRAPH_DIR/临时目录）：{resolved}")
         with open(resolved, "r", encoding="utf-8") as f:
@@ -501,42 +504,185 @@ def _extract_dialogue_text(data: Any) -> str:
 # story_text 只保留叙事类模块；玩法/数值/推荐类模块必须排除，避免玩法推荐边污染剧情图。
 # 规则顺序：先黑名单，再白名单；部分叙事型词条允许未命中黑白名单的模块名（如书籍卷名、地图告示标题）。
 _STORY_MODULE_BLACKLIST = (
-    "推荐", "装备描述", "装备展示", "成长", "数值", "属性", "基础", "突破",
-    "天赋", "命之座", "配队", "强化", "获取", "材料", "商品", "商店", "数据",
-    "图鉴", "攻略", "玩法", "奖励", "纪行", "位置", "地点", "分布", "关卡",
-    "挑战", "成就", "地图", "图片", "展示", "配音", "CV", "名片", "料理",
-    "食材", "食物", "合成", "锻造", "价格", "出售", "兑换", "来源", "获得",
-    "使用", "效果", "消耗", "冷却", "时间轴", "宣发", "媒体", "语音", "词条",
-    "导航", "战斗单位", "补充说明", "文字说明", "图片说明", "详细说明",
-    "关卡说明", "挑战说明", "纪行说明", "秘境信息", "秘境位置", "更多信息",
-    "详细信息", "活动说明", "游戏内活动说明", "玩法说明", "活动攻略",
-    "玩家攻略", "活动商店", "活动公告", "活动详情", "活动奖励", "活动玩法",
-    "活动流程", "任务奖励", "任务条件", "任务流程", "任务目标", "任务与奖励",
-    "委托奖励", "挑战目标", "挑战阵容", "挑战特殊效果", "地图说明", "地图展示",
-    "地图位置", "地图点位", "角色展示", "NPC展示", "衣装展示", "实机展示",
-    "动作展示", "立绘展示", "洞天预览", "外观", "图标", "海报", "入口",
+    "推荐",
+    "装备描述",
+    "装备展示",
+    "成长",
+    "数值",
+    "属性",
+    "基础",
+    "突破",
+    "天赋",
+    "命之座",
+    "配队",
+    "强化",
+    "获取",
+    "材料",
+    "商品",
+    "商店",
+    "数据",
+    "图鉴",
+    "攻略",
+    "玩法",
+    "奖励",
+    "纪行",
+    "位置",
+    "地点",
+    "分布",
+    "关卡",
+    "挑战",
+    "成就",
+    "地图",
+    "图片",
+    "展示",
+    "配音",
+    "CV",
+    "名片",
+    "料理",
+    "食材",
+    "食物",
+    "合成",
+    "锻造",
+    "价格",
+    "出售",
+    "兑换",
+    "来源",
+    "获得",
+    "使用",
+    "效果",
+    "消耗",
+    "冷却",
+    "时间轴",
+    "宣发",
+    "媒体",
+    "语音",
+    "词条",
+    "导航",
+    "战斗单位",
+    "补充说明",
+    "文字说明",
+    "图片说明",
+    "详细说明",
+    "关卡说明",
+    "挑战说明",
+    "纪行说明",
+    "秘境信息",
+    "秘境位置",
+    "更多信息",
+    "详细信息",
+    "活动说明",
+    "游戏内活动说明",
+    "玩法说明",
+    "活动攻略",
+    "玩家攻略",
+    "活动商店",
+    "活动公告",
+    "活动详情",
+    "活动奖励",
+    "活动玩法",
+    "活动流程",
+    "任务奖励",
+    "任务条件",
+    "任务流程",
+    "任务目标",
+    "任务与奖励",
+    "委托奖励",
+    "挑战目标",
+    "挑战阵容",
+    "挑战特殊效果",
+    "地图说明",
+    "地图展示",
+    "地图位置",
+    "地图点位",
+    "角色展示",
+    "NPC展示",
+    "衣装展示",
+    "实机展示",
+    "动作展示",
+    "立绘展示",
+    "洞天预览",
+    "外观",
+    "图标",
+    "海报",
+    "入口",
 )
 _STORY_MODULE_WHITELIST = (
-    "相关故事", "背景故事", "角色故事", "衣装故事", "故事",
-    "剧情对话", "剧情彩蛋", "剧情说明", "剧情",
-    "任务概述", "任务过程", "任务对话", "任务剧情",
-    "NPC对话", "对话", "交互文本",
-    "物品描述", "更多描述", "角色详细",
-    "神之眼", "月之轮", "神之心", "星之楔",
+    "相关故事",
+    "背景故事",
+    "角色故事",
+    "衣装故事",
+    "故事",
+    "剧情对话",
+    "剧情彩蛋",
+    "剧情说明",
+    "剧情",
+    "任务概述",
+    "任务过程",
+    "任务对话",
+    "任务剧情",
+    "NPC对话",
+    "对话",
+    "交互文本",
+    "物品描述",
+    "更多描述",
+    "角色详细",
+    "神之眼",
+    "月之轮",
+    "神之心",
+    "星之楔",
     "角色关系网",
-    "简介", "重要事件", "成员", "部族成员", "主要人物", "逸闻", "趣闻",
-    "重大事迹", "逸闻与事迹",
-    "生之花", "死之羽", "时之沙", "空之杯", "理之冠",
-    "阅读", "书籍内容", "从石碑上抄下来的文字", "鼓谱",
-    "旅行者的笔记", "解读",
-    "逸闻纪事", "彩蛋", "生日", "角色洞天对话", "角色赠礼",
-    "好感套装对话", "赠礼对话", "特殊对话", "纪念留影",
-    "相关任务", "相关角色及任务",
-    "公告板内容", "告示板内容", "留言板内容", "告示", "留言", "通知",
-    "日志", "手记", "笔记", "秘闻",
-    "月下纪闻", "聚所纪事", "世界任务", "纪闻",
-    "行迹", "见闻", "影域",
-    "秘境详情", "简述", "臻冰造物", "活动简述",
+    "简介",
+    "重要事件",
+    "成员",
+    "部族成员",
+    "主要人物",
+    "逸闻",
+    "趣闻",
+    "重大事迹",
+    "逸闻与事迹",
+    "生之花",
+    "死之羽",
+    "时之沙",
+    "空之杯",
+    "理之冠",
+    "阅读",
+    "书籍内容",
+    "从石碑上抄下来的文字",
+    "鼓谱",
+    "旅行者的笔记",
+    "解读",
+    "逸闻纪事",
+    "彩蛋",
+    "生日",
+    "角色洞天对话",
+    "角色赠礼",
+    "好感套装对话",
+    "赠礼对话",
+    "特殊对话",
+    "纪念留影",
+    "相关任务",
+    "相关角色及任务",
+    "公告板内容",
+    "告示板内容",
+    "留言板内容",
+    "告示",
+    "留言",
+    "通知",
+    "日志",
+    "手记",
+    "笔记",
+    "秘闻",
+    "月下纪闻",
+    "聚所纪事",
+    "世界任务",
+    "纪闻",
+    "行迹",
+    "见闻",
+    "影域",
+    "秘境详情",
+    "简述",
+    "臻冰造物",
+    "活动简述",
 )
 # 这些类型的词条以叙事为主：未命中黑白名单的模块名也纳入 story_text。
 # book 需要卷名/自定义书名模块，map_text 需要告示/广告板自定义标题，
@@ -620,11 +766,11 @@ def _link_context(normalized: str, match_start: int, match_end: int, width: int 
     if a_start >= 0:
         a_end = normalized.find("</a>", match_end)
         if a_end >= 0:
-            anchor_text = _strip_html(normalized[a_start:a_end + 4])
+            anchor_text = _strip_html(normalized[a_start : a_end + 4])
             anchor_text = re.sub(r"\s+", " ", anchor_text).strip()
             if anchor_text:
                 return anchor_text[:width]
-    window = normalized[max(0, match_start - width):match_end + width]
+    window = normalized[max(0, match_start - width) : match_end + width]
     text = _strip_html(window)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:width]
@@ -660,10 +806,7 @@ def _extract_links(page: Dict[str, Any], entry_type: str) -> List[WikiLink]:
     # 脏链接（实测 509226 同时被标成石兽如幽灵般端坐/普洛克路斯忒斯的寝床/
     # 望向入梦的白冕等多个名字，而 entry_page 接口显示 509226 实际是「旅行者·冰」）。
     # 这种 ID 不是真实词条 ID，必须整条丢弃，否则图会指向错误词条。
-    return [
-        link for tid, link in sorted(found.items())
-        if tid != own_id and len(names_by_id.get(tid, set())) == 1
-    ]
+    return [link for tid, link in sorted(found.items()) if tid != own_id and len(names_by_id.get(tid, set())) == 1]
 
 
 def _parse_filters(item: Dict[str, Any]) -> List[str]:
@@ -725,7 +868,7 @@ def _derive_title_aliases(title: str, region: str) -> List[str]:
     if not title:
         return out
     if region and title.startswith(region + " "):
-        add(title[len(region) + 1:])
+        add(title[len(region) + 1 :])
     m = re.match(r"^(.*?)(?:【[^】]*】|（[^（）]*）|\([^()]*\))\s*$", title)
     if m:
         add(m.group(1))
@@ -842,8 +985,18 @@ def _norm_meta_key(text: str) -> str:
 
 
 _BWIKI_ALLOWED_TYPES = (
-    "世界任务", "传说任务", "魔神任务", "活动剧情", "部族纪闻", "委托任务",
-    "地图事件", "其他任务", "隐藏任务", "伴月纪闻", "游逸旅闻", "彩蛋剧情",
+    "世界任务",
+    "传说任务",
+    "魔神任务",
+    "活动剧情",
+    "部族纪闻",
+    "委托任务",
+    "地图事件",
+    "其他任务",
+    "隐藏任务",
+    "伴月纪闻",
+    "游逸旅闻",
+    "彩蛋剧情",
 )
 _BWIKI_EXCLUDE_TITLE_KEYWORDS = ("额外对话/彩蛋", "教程", "活动说明", "NPC对话")
 _ACT_NAME_RE = re.compile(r"第[一二三四五六七八九十0-9]+(?:幕|回|章)|尾声|序奏|序章|间章|幕间")
@@ -857,7 +1010,7 @@ def _parse_title_meta(title: str):
         return _norm_meta_key(t), "", ""
     act = m.group(0)
     chapter = t[: m.start()].strip(" 　-—_·「」『』《》")
-    task = t[m.end():].strip(" 　-—_·「」『』《》")
+    task = t[m.end() :].strip(" 　-—_·「」『』《》")
     return _norm_meta_key(chapter), _norm_meta_key(act), _norm_meta_key(task or t)
 
 
@@ -869,9 +1022,20 @@ def _bwiki_meta_header(md: Dict[str, Any]) -> str:
     """
     lines: List[str] = ["【B站词条元数据】"]
     for key in (
-        "任务名称", "系列任务", "chapter_name", "act_name",
-        "前置任务", "后续任务", "任务条件", "触发条件",
-        "任务描述", "出场人物", "任务地区", "任务区域", "所属版本", "任务编号",
+        "任务名称",
+        "系列任务",
+        "chapter_name",
+        "act_name",
+        "前置任务",
+        "后续任务",
+        "任务条件",
+        "触发条件",
+        "任务描述",
+        "出场人物",
+        "任务地区",
+        "任务区域",
+        "所属版本",
+        "任务编号",
     ):
         value = md.get(key)
         if isinstance(value, str) and value.strip():
@@ -979,11 +1143,13 @@ def _load_bwiki_entries() -> List[Dict[str, Any]]:
                 same_title = _norm_meta_key(old["title"]) == _norm_meta_key(title)
                 if len(text) > len(old["text"]):
                     entries[key] = row
-                    if (not same_title and len(old["text"]) >= _SIBLING_MIN_CHARS
-                            and not _text_covered(old["text"], text)):
+                    if (
+                        not same_title
+                        and len(old["text"]) >= _SIBLING_MIN_CHARS
+                        and not _text_covered(old["text"], text)
+                    ):
                         entries[key + ("sibling", _norm_meta_key(old["title"]))] = old
-                elif (not same_title and len(text) >= _SIBLING_MIN_CHARS
-                        and not _text_covered(text, old["text"])):
+                elif not same_title and len(text) >= _SIBLING_MIN_CHARS and not _text_covered(text, old["text"]):
                     entries[key + ("sibling", _norm_meta_key(title))] = row
 
     # quests_processed.json 中 raw 文件没有覆盖到的任务，用 chunks 补建。
@@ -1028,8 +1194,11 @@ def _load_bwiki_entries() -> List[Dict[str, Any]]:
             if keeper is None:
                 continue
             same_title = _norm_meta_key(keeper["title"]) == _norm_meta_key(row["title"])
-            if (not same_title and len(row["text"]) >= _SIBLING_MIN_CHARS
-                    and not _text_covered(row["text"], keeper["text"])):
+            if (
+                not same_title
+                and len(row["text"]) >= _SIBLING_MIN_CHARS
+                and not _text_covered(row["text"], keeper["text"])
+            ):
                 continue  # 兄弟页，保留
             del entries[key]
     return list(entries.values())
@@ -1080,7 +1249,7 @@ def _text_covered(needle: str, haystack: str, samples: int = 20, frag: int = 24)
     hits = total = 0
     for start in range(0, len(n) - frag, step):
         total += 1
-        if n[start:start + frag] in h:
+        if n[start : start + frag] in h:
             hits += 1
         if total >= samples:
             break
@@ -1153,9 +1322,7 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
                     stats["merged"] += 1
                     continue
             # 一对多/弱匹配：保留图节点，落成新的 B 站节点。
-        entry_id = "bwiki_" + hashlib.sha1(
-            f"{chapter}|{act}|{task}|{row['title']}".encode("utf-8")
-        ).hexdigest()[:12]
+        entry_id = "bwiki_" + hashlib.sha1(f"{chapter}|{act}|{task}|{row['title']}".encode("utf-8")).hexdigest()[:12]
         if entry_id in graph.entries:
             stats["skipped"] += 1
             continue
@@ -1214,12 +1381,14 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
             fetched_at = str(doc.get("fetched_at") or "")
             item_count = len(doc.get("items") or [])
             docs.append((entry_type, doc, channel_id, fetched_at))
-            sources_meta.append({
-                "channel_id": channel_id,
-                "graph_type": entry_type,
-                "item_count": item_count,
-                "fetched_at": fetched_at,
-            })
+            sources_meta.append(
+                {
+                    "channel_id": channel_id,
+                    "graph_type": entry_type,
+                    "item_count": item_count,
+                    "fetched_at": fetched_at,
+                }
+            )
 
     # 2) 旧 raw 与手工补抓词条（graph.add 按 ID 覆盖，重复无副作用）。
     for default_type, path, source_channel in (
@@ -1274,8 +1443,9 @@ def print_stats(graph: WikiEntryGraph) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="本地 wiki 词条链接图构建/查询")
     parser.add_argument("--build", action="store_true")
-    parser.add_argument("--scope", default="full", choices=["pilot", "full"],
-                        help="full=全量频道图（默认）；pilot=至冬灰眸四线试点图")
+    parser.add_argument(
+        "--scope", default="full", choices=["pilot", "full"], help="full=全量频道图（默认）；pilot=至冬灰眸四线试点图"
+    )
     parser.add_argument("--all", action="store_true", help="兼容旧参数：等价 --scope full")
     parser.add_argument("--out", default=str(DEFAULT_OUTPUT))
     parser.add_argument("--get")

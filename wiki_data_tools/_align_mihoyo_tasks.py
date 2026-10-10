@@ -9,6 +9,7 @@
   - 疑似真实缺失（需要后续抓详情确认）
   - 按任务类型/版本/地区统计
 """
+
 import json
 import os
 import re
@@ -20,8 +21,17 @@ TASK_LIST = os.path.join(CONTENT, "mihoyo_tasks_list.json")
 OUTPUT = os.path.join(BASE, "_mihoyo_task_alignment.json")
 
 REGION_PREFIXES = [
-    "蒙德", "璃月", "稻妻", "须弥", "枫丹", "纳塔", "挪德卡莱",
-    "霜月", "至冬", "层岩巨渊", "渊下宫",
+    "蒙德",
+    "璃月",
+    "稻妻",
+    "须弥",
+    "枫丹",
+    "纳塔",
+    "挪德卡莱",
+    "霜月",
+    "至冬",
+    "层岩巨渊",
+    "渊下宫",
 ]
 
 
@@ -72,7 +82,7 @@ def parse_filters(it):
 def get(prefix, arr):
     for x in arr:
         if x.startswith(prefix):
-            return x[len(prefix):]
+            return x[len(prefix) :]
     return ""
 
 

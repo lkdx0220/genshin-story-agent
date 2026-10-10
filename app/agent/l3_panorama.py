@@ -13,6 +13,7 @@ v1 的边界：
 - 覆盖率只做日志检查，暂不自动重生成缺失 section；
 - 解析失败时返回空字符串，由调用方回退到原来的单次 L3 调用。
 """
+
 from __future__ import annotations
 
 import os
@@ -68,19 +69,66 @@ _COVERAGE_MAX_NAMES = 12
 _COVERAGE_CONTEXT_CHARS = 260
 _SPEAKER_RE = re.compile(r"(?:^|\n)\s*\*?\s*([\u4e00-\u9fff·]{2,10})\s*[：:]")
 _SPEAKER_STOPWORDS = {
-    "旅行者", "派蒙", "她说", "他说", "世界任务", "传说任务", "魔神任务",
-    "活动剧情", "旁白", "画外音", "选项", "游逸旅闻",
+    "旅行者",
+    "派蒙",
+    "她说",
+    "他说",
+    "世界任务",
+    "传说任务",
+    "魔神任务",
+    "活动剧情",
+    "旁白",
+    "画外音",
+    "选项",
+    "游逸旅闻",
 }
 _SPEAKER_NOISE_EXACT = {
-    "生之花", "死之羽", "时之沙", "空之杯", "理之冠", "其之二",
-    "下属学科", "趣闻", "悬赏", "描述", "编者注", "备注",
+    "生之花",
+    "死之羽",
+    "时之沙",
+    "空之杯",
+    "理之冠",
+    "其之二",
+    "下属学科",
+    "趣闻",
+    "悬赏",
+    "描述",
+    "编者注",
+    "备注",
 }
 _SPEAKER_NOISE_KEYWORDS = (
-    "字迹", "笔记", "记录", "留言", "日志", "报告", "告示", "配方", "画框",
-    "书柜", "花瓶", "猫叫", "通讯", "女声", "树妖", "雪精",
+    "字迹",
+    "笔记",
+    "记录",
+    "留言",
+    "日志",
+    "报告",
+    "告示",
+    "配方",
+    "画框",
+    "书柜",
+    "花瓶",
+    "猫叫",
+    "通讯",
+    "女声",
+    "树妖",
+    "雪精",
     # 任务/系统文本里的非人物标签，防止把 UI 提示当成说话人。
-    "提示", "编者注", "备注", "道具", "任务", "获得", "提交", "属性",
-    "循环", "生命", "单人", "四人", "双拳", "终末", "智勇",
+    "提示",
+    "编者注",
+    "备注",
+    "道具",
+    "任务",
+    "获得",
+    "提交",
+    "属性",
+    "循环",
+    "生命",
+    "单人",
+    "四人",
+    "双拳",
+    "终末",
+    "智勇",
 )
 
 
@@ -91,7 +139,6 @@ class PanoramaSection:
     kind: str
     text: str
     instruction: str
-
 
 
 def _emit_progress(event: str, data: dict) -> None:
@@ -165,15 +212,13 @@ def _task_related_entities(content, maps, entities) -> str:
 
 def _build_task_sections(tasks, maps, entities) -> List[PanoramaSection]:
     sections: List[PanoramaSection] = []
-    map_text = "\n\n".join(
-        f"----- {title} (ID {eid}) -----\n{content}" for title, eid, content in maps
-    )
+    map_text = "\n\n".join(f"----- {title} (ID {eid}) -----\n{content}" for title, eid, content in maps)
     # 分节上限：超出的任务并入一节，内容保留、只少几次 LLM 调用（多源图让任务数可达 40+）。
     cap = _env_int("L3_MAX_TASK_SECTIONS", _MAX_TASK_SECTIONS)
     if cap < 1 or len(tasks) <= cap:
         head, tail = tasks, []
     else:
-        head, tail = tasks[:cap - 1], tasks[cap - 1:]
+        head, tail = tasks[: cap - 1], tasks[cap - 1 :]
 
     for title, eid, content in head:
         # 第一版不做 Embedding 语义切片：任务正文里出现过的实体标题，
@@ -183,7 +228,9 @@ def _build_task_sections(tasks, maps, entities) -> List[PanoramaSection]:
         if map_text:
             evidence_parts.append("【相关地图文本】\n" + map_text)
         if related_text:
-            evidence_parts.append("【该任务线相关实体档案】\n" + _truncate(related_text, _MAX_TASK_RELATED_ENTITY_CHARS))
+            evidence_parts.append(
+                "【该任务线相关实体档案】\n" + _truncate(related_text, _MAX_TASK_RELATED_ENTITY_CHARS)
+            )
         sections.append(
             PanoramaSection(
                 key=f"task_{eid}",
@@ -235,7 +282,7 @@ def _build_entity_sections(entities) -> List[PanoramaSection]:
     if not entities:
         return sections
     for i in range(0, len(entities), _ENTITY_PER_SECTION):
-        chunk = entities[i:i + _ENTITY_PER_SECTION]
+        chunk = entities[i : i + _ENTITY_PER_SECTION]
         body = "\n\n".join(
             f"----- {etitle} ({etype}, ID {eeid}) -----\n{_truncate(econtent, _MAX_ENTITY_CHARS)}"
             for etitle, etype, eeid, econtent in chunk
@@ -310,12 +357,14 @@ def _generate_one(section: PanoramaSection) -> str:
     start = time.time()
     messages = [
         SystemMessage(content=_COMMON_SYSTEM),
-        HumanMessage(content=(
-            f"【本节主题】{section.title}\n\n"
-            f"【证据】\n{section.text}\n\n"
-            f"{section.instruction}\n\n"
-            f"【当前任务】只输出本节正文，不要输出“好的”“以下是”等开场白。"
-        )),
+        HumanMessage(
+            content=(
+                f"【本节主题】{section.title}\n\n"
+                f"【证据】\n{section.text}\n\n"
+                f"{section.instruction}\n\n"
+                f"【当前任务】只输出本节正文，不要输出“好的”“以下是”等开场白。"
+            )
+        ),
     ]
     try:
         response = answer_llm_l3_fast.invoke(messages)
@@ -450,9 +499,7 @@ def generate_panorama_answer(messages, original_query: str, emit: Optional[Calla
         coverage_text = _generate_one(coverage)
         sections.append(coverage)
         results.append(coverage_text)
-        _emit_progress("answer_delta", {
-            "delta": f"\n\n## {coverage.title}\n\n{coverage_text.strip()}"
-        })
+        _emit_progress("answer_delta", {"delta": f"\n\n## {coverage.title}\n\n{coverage_text.strip()}"})
         final_answer = _assemble(sections, results, original_query)
     else:
         print("  -> [L3覆盖补充] 任务正文说话人与实体档案均已出现")

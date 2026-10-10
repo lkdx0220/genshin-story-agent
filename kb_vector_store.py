@@ -24,9 +24,9 @@ import numpy as np
 import requests
 from dotenv import load_dotenv
 
-if getattr(sys, 'frozen', False):
+if getattr(sys, "frozen", False):
     # exe 模式：从 exe 同目录读取外部 .env，避免把密钥打进成品。
-    _ENV_PATH = os.path.join(os.path.dirname(sys.executable), '.env')
+    _ENV_PATH = os.path.join(os.path.dirname(sys.executable), ".env")
     if os.path.exists(_ENV_PATH):
         load_dotenv(_ENV_PATH, override=True)
 else:
@@ -48,9 +48,7 @@ VECTOR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kb_vector
 RUNTIME_VECTOR_DIR = os.getenv("KB_VECTOR_DIR") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "kb_vectors_m3"
 )
-RUNTIME_EMBEDDING_BACKEND = os.getenv(
-    "KB_EMBEDDING_BACKEND", "bge-m3"
-).strip().lower()
+RUNTIME_EMBEDDING_BACKEND = os.getenv("KB_EMBEDDING_BACKEND", "bge-m3").strip().lower()
 
 # 兼容旧变量名：运行时查询后端
 EMBEDDING_BACKEND = RUNTIME_EMBEDDING_BACKEND
@@ -76,6 +74,7 @@ class GenshinEmbedder:
     def embed(texts: List[str], max_retries: int = 3) -> Optional[List[List[float]]]:
         """批量嵌入文本列表。失败时重试（递增退避+抖动），返回向量列表或 None。"""
         import random
+
         if not texts:
             return []
         for attempt in range(max_retries):
@@ -100,15 +99,17 @@ class GenshinEmbedder:
                 elif resp.status_code == 429:
                     # 限流退避：10s 起步，递增 + 随机抖动
                     wait = (attempt + 1) * 10 + random.uniform(0, 3)
-                    print(f"  [Embedding] 限流，等待 {wait:.1f}s 后重试 ({attempt+1}/{max_retries})...")
+                    print(f"  [Embedding] 限流，等待 {wait:.1f}s 后重试 ({attempt + 1}/{max_retries})...")
                     time.sleep(wait)
                 else:
                     wait = (attempt + 1) * 5 + random.uniform(0, 2)
-                    print(f"  [Embedding] API 错误 {resp.status_code}，等待 {wait:.1f}s 后重试 ({attempt+1}/{max_retries})...")
+                    print(
+                        f"  [Embedding] API 错误 {resp.status_code}，等待 {wait:.1f}s 后重试 ({attempt + 1}/{max_retries})..."
+                    )
                     time.sleep(wait)
             except Exception as e:
                 wait = (attempt + 1) * 3 + random.uniform(0, 1)
-                print(f"  [Embedding] 网络错误: {e}，等待 {wait:.1f}s 后重试 ({attempt+1}/{max_retries})...")
+                print(f"  [Embedding] 网络错误: {e}，等待 {wait:.1f}s 后重试 ({attempt + 1}/{max_retries})...")
                 time.sleep(wait)
         return None
 
@@ -129,6 +130,7 @@ class OllamaEmbedder:
     def embed(texts: List[str], max_retries: int = 3) -> Optional[List[List[float]]]:
         """批量嵌入文本列表。失败时重试（递增退避+抖动），返回向量列表或 None。"""
         import random
+
         if not texts:
             return []
         for attempt in range(max_retries):
@@ -148,23 +150,17 @@ class OllamaEmbedder:
                     embeddings = data.get("embeddings")
                     if isinstance(embeddings, list) and len(embeddings) == len(texts):
                         return embeddings
-                    print(
-                        f"  [OllamaEmbedding] 返回数量异常: "
-                        f"{type(embeddings).__name__} != {len(texts)}"
-                    )
+                    print(f"  [OllamaEmbedding] 返回数量异常: {type(embeddings).__name__} != {len(texts)}")
                     return None
                 wait = (attempt + 1) * 5 + random.uniform(0, 2)
                 print(
                     f"  [OllamaEmbedding] API 错误 {resp.status_code}，"
-                    f"等待 {wait:.1f}s 后重试 ({attempt+1}/{max_retries})..."
+                    f"等待 {wait:.1f}s 后重试 ({attempt + 1}/{max_retries})..."
                 )
                 time.sleep(wait)
             except Exception as e:
                 wait = (attempt + 1) * 3 + random.uniform(0, 1)
-                print(
-                    f"  [OllamaEmbedding] 网络错误: {e}，"
-                    f"等待 {wait:.1f}s 后重试 ({attempt+1}/{max_retries})..."
-                )
+                print(f"  [OllamaEmbedding] 网络错误: {e}，等待 {wait:.1f}s 后重试 ({attempt + 1}/{max_retries})...")
                 time.sleep(wait)
         return None
 
@@ -206,10 +202,7 @@ class KBVectorStore:
             self.embedding_backend = "text-embedding-v4"
         os.makedirs(self.vector_dir, exist_ok=True)
         mode = "runtime" if runtime else "build"
-        print(
-            f"[向量库] mode={mode} dir={self.vector_dir} "
-            f"backend={self.embedding_backend}"
-        )
+        print(f"[向量库] mode={mode} dir={self.vector_dir} backend={self.embedding_backend}")
 
     # ====== 内部文件路径 ======
 
@@ -251,9 +244,9 @@ class KBVectorStore:
         dp = self._doc_path(collection)
 
         # 原子写入：临时文件 + rename
-        vp_tmp = vp + '.tmp.npy'
-        mp_tmp = mp + '.tmp'
-        dp_tmp = dp + '.tmp'
+        vp_tmp = vp + ".tmp.npy"
+        mp_tmp = mp + ".tmp"
+        dp_tmp = dp + ".tmp"
 
         # 先写入临时文件
         np.save(vp_tmp[:-4], vectors)  # np.save 自动加 .npy
@@ -270,15 +263,14 @@ class KBVectorStore:
                 except (OSError, PermissionError) as e:
                     if attempt < 4:
                         wait = (attempt + 1) * 2
-                        print(f"  [Save] 文件锁重试 {attempt+1}/5: {e}，等待 {wait}s")
+                        print(f"  [Save] 文件锁重试 {attempt + 1}/5: {e}，等待 {wait}s")
                         time.sleep(wait)
                     else:
                         raise RuntimeError(f"保存失败 {target}: {e}") from e
 
     # ====== 写入 ======
 
-    def add(self, collection: str, ids: List[str],
-            documents: List[str], metadatas: List[dict]):
+    def add(self, collection: str, ids: List[str], documents: List[str], metadatas: List[dict]):
         """批量添加向量记录（自动嵌入 + 写入文件）"""
         if not ids:
             return
@@ -290,7 +282,7 @@ class KBVectorStore:
             batch_no = i // BATCH_SIZE + 1
             batch_end = min(i + BATCH_SIZE, len(documents))
             print(f"  [嵌入] {batch_no}/{total_batches} ({batch_end}/{len(documents)})", end=" ", flush=True)
-            batch_docs = documents[i:i + BATCH_SIZE]
+            batch_docs = documents[i : i + BATCH_SIZE]
             batch_embeddings = GenshinEmbedder.embed(batch_docs)
             if batch_embeddings is None:
                 raise RuntimeError(f"向量嵌入失败，集合={collection}, 批={batch_no - 1}")
@@ -321,8 +313,7 @@ class KBVectorStore:
 
     # ====== 搜索 ======
 
-    def search(self, query: str, collection: str = None,
-               top_k: int = 5, exclude: List[str] = None) -> List[dict]:
+    def search(self, query: str, collection: str = None, top_k: int = 5, exclude: List[str] = None) -> List[dict]:
         """语义搜索（余弦相似度）。
         collection: 指定集合名，为空则搜全部集合，每个集合各取 top_k。
         exclude: 排除的集合名列表。
@@ -348,12 +339,14 @@ class KBVectorStore:
             scores = np.dot(vectors, query_vec)
             top_indices = np.argsort(scores)[-top_k:][::-1]
             for idx in top_indices:
-                all_results.append({
-                    "id": ids[idx],
-                    "collection": col_name,
-                    "document": docs[idx] if idx < len(docs) else "",
-                    "score": float(scores[idx]),
-                })
+                all_results.append(
+                    {
+                        "id": ids[idx],
+                        "collection": col_name,
+                        "document": docs[idx] if idx < len(docs) else "",
+                        "score": float(scores[idx]),
+                    }
+                )
 
         all_results.sort(key=lambda x: x["score"], reverse=True)
         return all_results[:top_k]

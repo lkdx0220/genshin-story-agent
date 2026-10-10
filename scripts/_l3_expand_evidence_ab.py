@@ -12,6 +12,7 @@
 - 扩展出来的“未被正文点名”的实体（潜在噪声）
 - 构建耗时
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,10 +43,25 @@ CASES = {
 
 EXPECTED = {
     "C4": [
-        "伊兹梅洛", "卡谢伊", "莫罗", "阿尔维斯", "拉莉莎", "弗瑞奥萨",
-        "欧维", "弗谢沃洛德", "完全树", "沙皇白桦", "扎拉",
-        "炉火融炼之心", "勒庇依", "雪国的妖精", "影中沉凝的幻灭",
-        "深廊终曲", "一引三收", "曾为灵魂的木舟", "纸页泛黄的文件",
+        "伊兹梅洛",
+        "卡谢伊",
+        "莫罗",
+        "阿尔维斯",
+        "拉莉莎",
+        "弗瑞奥萨",
+        "欧维",
+        "弗谢沃洛德",
+        "完全树",
+        "沙皇白桦",
+        "扎拉",
+        "炉火融炼之心",
+        "勒庇依",
+        "雪国的妖精",
+        "影中沉凝的幻灭",
+        "深廊终曲",
+        "一引三收",
+        "曾为灵魂的木舟",
+        "纸页泛黄的文件",
     ],
     "P1": ["她的宫殿正坍塌向风雪", "在生命的寓所"],
     "P2": ["爱憎的赫斯珀利德斯", "一边是宫殿一边是陵阙"],
@@ -75,11 +91,7 @@ def run_case(case_id: str, question: str) -> dict:
     matched = nodes._match_graph_task_titles(graph, question)
     maps = nodes._collect_graph_map_texts(graph, matched) if matched else []
     task_texts = [nodes._entry_story_text(e) or (e.full_text or "") for e in matched]
-    entities = (
-        nodes._collect_related_entity_entries(graph, matched, task_texts, maps)
-        if matched
-        else []
-    )
+    entities = nodes._collect_related_entity_entries(graph, matched, task_texts, maps) if matched else []
     collect_sec = round(time.time() - t0, 3)
 
     t1 = time.time()
@@ -100,9 +112,7 @@ def run_case(case_id: str, question: str) -> dict:
         for msg in result.get("messages") or []:
             content = getattr(msg, "content", "") or ""
 
-    combined = "\n".join(
-        task_texts + [nodes._entry_story_text(m) for m in maps]
-    )
+    combined = "\n".join(task_texts + [nodes._entry_story_text(m) for m in maps])
     speakers = nodes._extract_speaker_names(task_texts)
 
     named = []
@@ -132,8 +142,7 @@ def run_case(case_id: str, question: str) -> dict:
         "case_id": case_id,
         "question": question,
         "matched_tasks": [
-            {"id": e.entry_id, "title": e.title, "chars": len(nodes._entry_story_text(e))}
-            for e in matched
+            {"id": e.entry_id, "title": e.title, "chars": len(nodes._entry_story_text(e))} for e in matched
         ],
         "map_count": len(maps),
         "maps": [{"id": e.entry_id, "title": e.title, "chars": len(nodes._entry_story_text(e))} for e in maps],
@@ -178,9 +187,7 @@ def main() -> None:
             print(f"    unnamed: {e['id']} {e['type']} {e['title']} ({e['chars']}字) hits=0", flush=True)
 
     if args.out:
-        Path(args.out).write_text(
-            json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        Path(args.out).write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"[{args.variant}] -> {args.out}", flush=True)
 
 

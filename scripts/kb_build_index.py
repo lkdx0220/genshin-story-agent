@@ -64,8 +64,8 @@ ACTIVITY_PARENTS: Dict[str, str] = {
 }
 
 # 向量切片参数
-VEC_CHUNK_SIZE = 1500       # 向量切片最大字数
-VEC_CHUNK_OVERLAP = 150     # 切片重叠字数
+VEC_CHUNK_SIZE = 1500  # 向量切片最大字数
+VEC_CHUNK_OVERLAP = 150  # 切片重叠字数
 
 
 def _hard_split_oversized(text, limit):
@@ -117,13 +117,13 @@ def chunk_natural(text):
         return [text.strip()]
 
     # 角色发言检测：「角色名：」或「角色名:」
-    speaker_pattern = re.compile(r'^(.+?)[：:]\s*')
+    speaker_pattern = re.compile(r"^(.+?)[：:]\s*")
 
     def _get_speaker(line):
         m = speaker_pattern.match(line.strip())
         return m.group(1).strip() if m else None
 
-    lines = text.split('\n')
+    lines = text.split("\n")
 
     # 步骤1：拆分为自然段落（segment）
     segments = []
@@ -133,23 +133,23 @@ def chunk_natural(text):
         stripped = line.strip()
 
         # 强边界：--- / ***
-        if bool(re.match(r'^[-*]{3,}$', stripped)):
+        if bool(re.match(r"^[-*]{3,}$", stripped)):
             if current_lines:
-                segments.append('\n'.join(current_lines).strip())
+                segments.append("\n".join(current_lines).strip())
                 current_lines = []
             continue
 
         # 空行：段落分隔
         if not stripped:
             if current_lines:
-                segments.append('\n'.join(current_lines).strip())
+                segments.append("\n".join(current_lines).strip())
                 current_lines = []
             continue
 
         # 标题标记：独立段落（原则2）
-        if stripped.startswith('【') and stripped.endswith('】'):
+        if stripped.startswith("【") and stripped.endswith("】"):
             if current_lines:
-                segments.append('\n'.join(current_lines).strip())
+                segments.append("\n".join(current_lines).strip())
                 current_lines = []
             segments.append(stripped)
             continue
@@ -159,13 +159,13 @@ def chunk_natural(text):
             prev_speaker = _get_speaker(current_lines[-1])
             curr_speaker = _get_speaker(line)
             if prev_speaker is not None and curr_speaker is not None and prev_speaker != curr_speaker:
-                segments.append('\n'.join(current_lines).strip())
+                segments.append("\n".join(current_lines).strip())
                 current_lines = []
 
         current_lines.append(line)
 
     if current_lines:
-        segments.append('\n'.join(current_lines).strip())
+        segments.append("\n".join(current_lines).strip())
 
     # 步骤2：合并段落为切片
     chunks = []
@@ -201,7 +201,7 @@ def chunk_natural(text):
         return None
 
     for seg_text in segments:
-        seg_lines = seg_text.split('\n')
+        seg_lines = seg_text.split("\n")
         seg_len = len(seg_text)
 
         if buffer_lines and buffer_len + seg_len + 1 > VEC_CHUNK_SIZE:
@@ -212,22 +212,22 @@ def chunk_natural(text):
                 # 找到自然切分点：buffer 前半保留，后半 + 新段落到下一片
                 keep_lines = buffer_lines[:split_idx]
                 push_lines = buffer_lines[split_idx:]
-                chunks.append('\n'.join(keep_lines).strip())
+                chunks.append("\n".join(keep_lines).strip())
                 buffer_lines = push_lines + seg_lines
                 buffer_len = _lines_len(buffer_lines)
             else:
                 # 找不到：当前段落到下一片（原则4 兜底）
-                chunks.append('\n'.join(buffer_lines).strip())
+                chunks.append("\n".join(buffer_lines).strip())
                 buffer_lines = seg_lines
                 buffer_len = seg_len
         else:
             if buffer_lines:
-                buffer_lines.append('')
+                buffer_lines.append("")
             buffer_lines.extend(seg_lines)
             buffer_len = buffer_len + seg_len + (1 if buffer_lines != seg_lines else 0)
 
     if buffer_lines:
-        chunks.append('\n'.join(buffer_lines).strip())
+        chunks.append("\n".join(buffer_lines).strip())
 
     # 无自然边界兜底：先保证基础块不超过“上限 - 重叠 - 换行”，再拼重叠。
     base_limit = max(1, VEC_CHUNK_SIZE - VEC_CHUNK_OVERLAP - 1)
@@ -246,7 +246,7 @@ def chunk_natural(text):
         prev = chunks[i - 1]
         overlap_chars = min(VEC_CHUNK_OVERLAP, len(prev))
         overlap = prev[-overlap_chars:]
-        result.append(overlap + '\n' + chunks[i])
+        result.append(overlap + "\n" + chunks[i])
 
     return result
 
@@ -267,6 +267,7 @@ def build_parent_map() -> Dict[str, str]:
 
 # ====== 数据加载 ======
 
+
 def _load_json(filename: str) -> List[dict]:
     path = os.path.join(CONTENT_DIR, filename)
     if not os.path.exists(path):
@@ -280,9 +281,13 @@ def _type_label(raw_type: str, source_file: str) -> str:
     """统一类型标签"""
     if not raw_type:
         # 从文件名推断
-        for kw, label in [("魔神", "魔神任务"), ("传说", "传说任务"),
-                          ("活动", "活动剧情"), ("世界", "世界任务"),
-                          ("部族", "部族纪闻")]:
+        for kw, label in [
+            ("魔神", "魔神任务"),
+            ("传说", "传说任务"),
+            ("活动", "活动剧情"),
+            ("世界", "世界任务"),
+            ("部族", "部族纪闻"),
+        ]:
             if kw in source_file:
                 return label
         return "未知"
@@ -302,6 +307,7 @@ def _type_label(raw_type: str, source_file: str) -> str:
 
 
 # ====== 建库主流程 ======
+
 
 def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
     """索引所有任务到 kb_quests_vec（仅向量语义轨；不再构建已废弃的 BM25 向量集合）。"""
@@ -418,17 +424,19 @@ def index_lore(store: KBVectorStore):
             doc = f"【{title}】({source})\n{chunk}"
             ids.append(lore_id)
             docs.append(doc)
-            metas.append({
-                "source_file": "lore.json",
-                "title": title,
-                "entry_type": "世界观设定",
-                "parent": "",
-                "version": "",
-                "chunk_index": ci,
-                "total_chunks": total,
-                "text_preview": chunk[:200],
-                "source": "lore",
-            })
+            metas.append(
+                {
+                    "source_file": "lore.json",
+                    "title": title,
+                    "entry_type": "世界观设定",
+                    "parent": "",
+                    "version": "",
+                    "chunk_index": ci,
+                    "total_chunks": total,
+                    "text_preview": chunk[:200],
+                    "source": "lore",
+                }
+            )
             if len(ids) >= 100:
                 store.add("kb_lore", ids, docs, metas)
                 ids, docs, metas = [], [], []
@@ -436,6 +444,8 @@ def index_lore(store: KBVectorStore):
     if ids:
         store.add("kb_lore", ids, docs, metas)
     print(f"  世界观设定索引完成: {len(lore)} 条 -> {total_vectors} 个向量块")
+
+
 def _clean_html_text(text: str) -> str:
     """清洗书籍元数据卷内容中的简单 HTML/实体标记，统一为纯文本。"""
     if not text:
@@ -444,7 +454,9 @@ def _clean_html_text(text: str) -> str:
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
     text = re.sub(
         r"</?(?:p|div|li|ul|ol|h[1-6]|blockquote|span|b|strong|i|em|u|a)[^>]*>",
-        "\n", text, flags=re.I,
+        "\n",
+        text,
+        flags=re.I,
     )
     text = re.sub(r"<[^>]+>", "", text)
     text = (
@@ -513,22 +525,24 @@ def index_books(store: KBVectorStore):
                 doc = doc_header + chunk
                 ids.append(book_id)
                 docs.append(doc)
-                metas.append({
-                    "source_file": "books.json",
-                    "title": title,
-                    "entry_type": "书籍",
-                    "parent": "",
-                    "version": version,
-                    "volume": vol_no,
-                    "volume_name": vol_name,
-                    "chunk_index": ci,
-                    "total_chunks": total,
-                    "text_preview": chunk[:200],
-                    "source": "book",
-                    "author": author,
-                    "genre": genre,
-                    "total_vols": total_vols,
-                })
+                metas.append(
+                    {
+                        "source_file": "books.json",
+                        "title": title,
+                        "entry_type": "书籍",
+                        "parent": "",
+                        "version": version,
+                        "volume": vol_no,
+                        "volume_name": vol_name,
+                        "chunk_index": ci,
+                        "total_chunks": total,
+                        "text_preview": chunk[:200],
+                        "source": "book",
+                        "author": author,
+                        "genre": genre,
+                        "total_vols": total_vols,
+                    }
+                )
                 if len(ids) >= 50:
                     store.add("kb_books", ids, docs, metas)
                     ids, docs, metas = [], [], []
@@ -583,9 +597,7 @@ def index_characters(store: KBVectorStore):
         # 主条目：基础信息 + 简介，保留角色级检索能力
         ids.append(f"character:{name}")
         docs.append(
-            f"【{name}】{title_tag}  {element}元素  {weapon}  {region}\n"
-            f"身份: {identities_str}\n"
-            f"简介: {description}\n"
+            f"【{name}】{title_tag}  {element}元素  {weapon}  {region}\n身份: {identities_str}\n简介: {description}\n"
         )
         metas.append(dict(base_meta, entry_type="角色", section="基础信息"))
 
@@ -626,19 +638,21 @@ def index_npcs(store: KBVectorStore):
             continue
         ids.append(f"npc:{name}")
         docs.append(doc)
-        metas.append({
-            "source_file": "npcs_processed.json",
-            "title": name,
-            "entry_type": "NPC",
-            "parent": "",
-            "version": npc.get("version", "") if isinstance(npc, dict) else "",
-            "chunk_index": 0,
-            "total_chunks": 1,
-            "text_preview": doc[:200],
-            "source": "npc",
-            "region": npc.get("region", "") if isinstance(npc, dict) else "",
-            "occupation": npc.get("occupation", "") if isinstance(npc, dict) else "",
-        })
+        metas.append(
+            {
+                "source_file": "npcs_processed.json",
+                "title": name,
+                "entry_type": "NPC",
+                "parent": "",
+                "version": npc.get("version", "") if isinstance(npc, dict) else "",
+                "chunk_index": 0,
+                "total_chunks": 1,
+                "text_preview": doc[:200],
+                "source": "npc",
+                "region": npc.get("region", "") if isinstance(npc, dict) else "",
+                "occupation": npc.get("occupation", "") if isinstance(npc, dict) else "",
+            }
+        )
         total += 1
         if len(ids) >= 100:
             store.add("kb_npcs", ids, docs, metas)
@@ -674,20 +688,22 @@ def index_regions(store: KBVectorStore):
         region_id = f"region:{name}"
         ids.append(region_id)
         docs.append(doc)
-        metas.append({
-            "source_file": "地区知识库",
-            "title": name,
-            "entry_type": "地区",
-            "parent": "",
-            "version": "",
-            "chunk_index": 0,
-            "total_chunks": 1,
-            "text_preview": description[:200] if description else name,
-            "source": "region",
-            "element": element,
-            "god": god,
-            "ideal": ideal,
-        })
+        metas.append(
+            {
+                "source_file": "地区知识库",
+                "title": name,
+                "entry_type": "地区",
+                "parent": "",
+                "version": "",
+                "chunk_index": 0,
+                "total_chunks": 1,
+                "text_preview": description[:200] if description else name,
+                "source": "region",
+                "element": element,
+                "god": god,
+                "ideal": ideal,
+            }
+        )
 
     store.add("kb_regions", ids, docs, metas)
     print(f"  地区索引完成: {len(地区知识库)} 条")

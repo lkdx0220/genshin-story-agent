@@ -22,14 +22,15 @@ os.environ["LANGCHAIN_API_KEY"] = ""
 os.environ["LANGCHAIN_PROJECT"] = ""
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-if sys.platform == 'win32':
+if sys.platform == "win32":
     try:
         if sys.stdout is not None:
-            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
@@ -47,15 +48,15 @@ CONTENT_DIR = os.path.join(_BASE_DIR, "content_data")
 OUTPUT_FILE = os.path.join(CONTENT_DIR, "quests_processed.json")
 
 # BM25 切片参数：自然边界 + 较大窗口 + 少量重叠
-BM25_CHUNK_SIZE = 3000      # BM25 切片最大字数
-BM25_CHUNK_OVERLAP = 200    # BM25 切片重叠字数
+BM25_CHUNK_SIZE = 3000  # BM25 切片最大字数
+BM25_CHUNK_OVERLAP = 200  # BM25 切片重叠字数
 LENGTH_THRESHOLD = 9000
 MAX_WORKERS = 3
 LOG_FILE = os.path.join(_BASE_DIR, "_preprocess_log.txt")
 
 # 向量切片参数
-VEC_CHUNK_SIZE = 1500       # 向量切片最大字数
-VEC_CHUNK_OVERLAP = 150     # 切片重叠字数
+VEC_CHUNK_SIZE = 1500  # 向量切片最大字数
+VEC_CHUNK_OVERLAP = 150  # 切片重叠字数
 
 # ====== LLM ======
 llm = ChatOpenAI(
@@ -152,7 +153,7 @@ def chunk_natural(text, max_size=None, overlap=None):
         return [text.strip()]
 
     # 角色发言检测：「角色名：」或「角色名:」
-    speaker_pattern = re.compile(r'^(.+?)[：:]\s*')
+    speaker_pattern = re.compile(r"^(.+?)[：:]\s*")
 
     def _get_speaker(line):
         m = speaker_pattern.match(line.strip())
@@ -168,7 +169,7 @@ def chunk_natural(text, max_size=None, overlap=None):
         stripped = line.strip()
 
         # 强边界：--- / ***
-        if bool(re.match(r'^[-*]{3,}$', stripped)):
+        if bool(re.match(r"^[-*]{3,}$", stripped)):
             if current_lines:
                 segments.append(chr(10).join(current_lines).strip())
                 current_lines = []
@@ -182,7 +183,7 @@ def chunk_natural(text, max_size=None, overlap=None):
             continue
 
         # 标题标记：独立段落（原则2）
-        if stripped.startswith('【') and stripped.endswith('】'):
+        if stripped.startswith("【") and stripped.endswith("】"):
             if current_lines:
                 segments.append(chr(10).join(current_lines).strip())
                 current_lines = []
@@ -256,7 +257,7 @@ def chunk_natural(text, max_size=None, overlap=None):
                 buffer_len = seg_len
         else:
             if buffer_lines:
-                buffer_lines.append('')
+                buffer_lines.append("")
             buffer_lines.extend(seg_lines)
             buffer_len = buffer_len + seg_len + (1 if buffer_lines != seg_lines else 0)
 
@@ -284,6 +285,7 @@ def chunk_natural(text, max_size=None, overlap=None):
 
     return result
 
+
 def load_all_quests():
     """读取所有 quests_*.json，返回列表"""
     all_quests = []
@@ -304,12 +306,14 @@ def load_all_quests():
             title = entry.get("title", "")
             text = entry.get("text", "")
             if title and len(text) > LENGTH_THRESHOLD:
-                all_quests.append({
-                    "title": title,
-                    "text": text,
-                    "category": entry.get("category", ""),
-                    "source_file": fn,
-                })
+                all_quests.append(
+                    {
+                        "title": title,
+                        "text": text,
+                        "category": entry.get("category", ""),
+                        "source_file": fn,
+                    }
+                )
     return all_quests
 
 
@@ -320,8 +324,8 @@ def process_one(quest):
     total_chars = len(text)
 
     summary = summarize_quest(title, text)
-    chunks_bm25 = chunk_text(text)        # 自然边界 + 3000字左右窗口（BM25用）
-    chunks_vec = chunk_natural(text)      # 自然场景切片（向量用）
+    chunks_bm25 = chunk_text(text)  # 自然边界 + 3000字左右窗口（BM25用）
+    chunks_vec = chunk_natural(text)  # 自然场景切片（向量用）
 
     return {
         "title": title,
@@ -338,6 +342,7 @@ def process_one(quest):
 
 def main():
     log_lines = []
+
     def log(msg):
         log_lines.append(msg)
         with open(LOG_FILE, "a", encoding="utf-8") as lf:
@@ -360,6 +365,7 @@ def main():
     except Exception as e:
         log(f"  [致命错误] load_all_quests 异常: {e}")
         import traceback
+
         log(traceback.format_exc())
         print("\n".join(log_lines))
         return
@@ -406,9 +412,7 @@ def main():
 
     try:
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            future_map = {
-                executor.submit(process_one, q): q for q in quests
-            }
+            future_map = {executor.submit(process_one, q): q for q in quests}
             for future in as_completed(future_map):
                 quest = future_map[future]
                 try:
@@ -418,12 +422,14 @@ def main():
                         completed += 1
                     else:
                         failed += 1
-                    log(f"  [{completed+failed}/{len(quests)}] {result['title']} "
-                          f"({result['total_chars']}字, BM25:{result['bm25_chunk_count']}+Vec:{result['vec_chunk_count']})"
-                          f"{' [摘要失败]' if not result['summary'] else ''}")
+                    log(
+                        f"  [{completed + failed}/{len(quests)}] {result['title']} "
+                        f"({result['total_chars']}字, BM25:{result['bm25_chunk_count']}+Vec:{result['vec_chunk_count']})"
+                        f"{' [摘要失败]' if not result['summary'] else ''}"
+                    )
                 except Exception as e:
                     failed += 1
-                    log(f"  [{completed+failed}/{len(quests)}] {quest['title']}: 处理异常 {e}")
+                    log(f"  [{completed + failed}/{len(quests)}] {quest['title']}: 处理异常 {e}")
 
                 # 每条都保存（终端进程容易被杀，需要频繁落盘）
                 save_progress()
@@ -431,6 +437,7 @@ def main():
     except Exception as e:
         log(f"[错误] 主循环异常: {e}")
         import traceback
+
         log(traceback.format_exc())
 
     # 3. 最终保存
