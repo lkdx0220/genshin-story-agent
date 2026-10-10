@@ -1056,112 +1056,106 @@ def _clean_bwiki_field(value: str) -> str:
     return text.strip(" |")
 
 
-def _load_bwiki_entries() -> List[Dict[str, Any]]:
-    """读取全部 content_data/quests_*.json，整理为可合并的 B 站任务条目。
+def _bwiki_processed_text(item: Dict[str, Any]) -> str:
+    """把 quests_processed 条目压成兜底正文（summary + chunks）。"""
+    parts: List[str] = []
+    summary = item.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        parts.append(summary.strip())
+    for key in ("chunks_bm25", "chunks_vec"):
+        value = item.get(key)
+        if isinstance(value, list):
+            parts.extend(str(x) for x in value if isinstance(x, str))
+    return chr(10).join(parts).strip()
 
-    过滤规则：只保留任务/剧情类条目；丢弃额外对话、教程、活动说明等非剧情页。
-    优先使用原始 text；原始 text 为空时用 quests_processed.json 的 chunks 兜底。
-    """
-    content_dir = BASE_DIR / "content_data"
-    processed: Dict[str, Any] = {}
-    processed_path = content_dir / "quests_processed.json"
-    if processed_path.exists():
-        try:
-            processed = json.loads(processed_path.read_text(encoding="utf-8"))
-        except Exception:
-            processed = {}
 
-    def _processed_text(item: Dict[str, Any]) -> str:
-        parts: List[str] = []
-        summary = item.get("summary")
-        if isinstance(summary, str) and summary.strip():
-            parts.append(summary.strip())
-        for key in ("chunks_bm25", "chunks_vec"):
-            value = item.get(key)
-            if isinstance(value, list):
-                parts.extend(str(x) for x in value if isinstance(x, str))
-        return "\n".join(parts).strip()
-
-    processed_text = {}
+def _bwiki_processed_index(processed: Dict[str, Any]) -> Dict[str, str]:
+    """标题（归一化）→ 兜底正文。"""
+    index: Dict[str, str] = {}
     for title, item in processed.items():
         if not isinstance(item, dict):
             continue
-        text = _processed_text(item)
+        text = _bwiki_processed_text(item)
         if text:
-            processed_text[_norm_meta_key(title)] = text
+            index[_norm_meta_key(title)] = text
+    return index
 
-    entries: Dict[tuple, Dict[str, Any]] = {}
-    for path in sorted(content_dir.glob("quests_*.json")):
-        if path.name == "quests_processed.json":
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        items = data if isinstance(data, list) else (data.get("items") or list(data.values()))
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            md = item.get("metadata") or {}
-            title = _clean_bwiki_title(str(item.get("title") or md.get("任务名称") or ""))
-            task = str(md.get("任务名称") or title).strip()
-            entry_type = str(md.get("任务类型") or item.get("category") or "").strip()
-            if not title or not task:
-                continue
-            if any(k in title for k in _BWIKI_EXCLUDE_TITLE_KEYWORDS):
-                continue
-            if any(k in entry_type for k in ("额外", "教程", "说明")):
-                continue
-            if entry_type and not any(t in entry_type for t in _BWIKI_ALLOWED_TYPES):
-                continue
-            chapter = str(md.get("chapter_name") or md.get("系列任务") or "").split(",")[0].strip()
-            act = str(md.get("act_name") or "").strip()
-            text = str(item.get("text") or "").strip()
-            if not text:
-                text = processed_text.get(_norm_meta_key(title), "")
-            if not text:
-                continue
-            key = (_norm_meta_key(chapter), _norm_meta_key(act), _norm_meta_key(task))
-            row = {
-                "title": title,
-                "task": task,
-                "entry_type": entry_type,
-                "chapter": chapter,
-                "act": act,
-                # B站 metadata 用的是「任务地区」（值为纳塔/远古圣山等），不是「任务区域」。
-                "region": str(md.get("任务地区") or md.get("任务区域") or md.get("地区") or "").strip(),
-                "text": text,
-                "meta_text": _bwiki_meta_header(md),
-                "file": path.name,
-            }
-            old = entries.get(key)
-            if old is None:
-                entries[key] = row
-            else:
-                # 同标题 = 同一页的两次抓取，只留更长的一份；
-                # 不同标题 = 兄弟页（如 奇石历险记·其一/其二：task 同为「奇石历险记」），正文互不覆盖时都保留。
-                same_title = _norm_meta_key(old["title"]) == _norm_meta_key(title)
-                if len(text) > len(old["text"]):
-                    entries[key] = row
-                    if (
-                        not same_title
-                        and len(old["text"]) >= _SIBLING_MIN_CHARS
-                        and not _text_covered(old["text"], text)
-                    ):
-                        entries[key + ("sibling", _norm_meta_key(old["title"]))] = old
-                elif not same_title and len(text) >= _SIBLING_MIN_CHARS and not _text_covered(text, old["text"]):
-                    entries[key + ("sibling", _norm_meta_key(title))] = row
 
-    # quests_processed.json 中 raw 文件没有覆盖到的任务，用 chunks 补建。
+def _bwiki_task_type(raw) -> str:
+    """任务类型只取首行、首个竖线之前的内容。
+
+    实测存在把任务描述吞进类型字段的脏数据（如「部族纪闻」后跟换行与“|任务描述…”），
+    会让 entry_type 变成一段正文，故在此截断。
+    """
+    first_line = str(raw or "").split(chr(10))[0]
+    return first_line.split("|")[0].strip()
+
+
+def _bwiki_entry_type_allowed(entry_type: str) -> bool:
+    """类型过滤：排除额外对话/教程/说明；非空时必须在允许类型集合内。"""
+    if any(k in entry_type for k in ("额外", "教程", "说明")):
+        return False
+    if entry_type and not any(t in entry_type for t in _BWIKI_ALLOWED_TYPES):
+        return False
+    return True
+
+
+def _bwiki_row_from_item(item: Dict[str, Any], filename: str, processed_text: Dict[str, str]) -> Dict[str, Any] | None:
+    """把一条原始 quests 记录整理成图条目；被过滤或正文为空时返回 None。"""
+    md = item.get("metadata") or {}
+    title = _clean_bwiki_title(str(item.get("title") or md.get("任务名称") or ""))
+    task = str(md.get("任务名称") or title).strip()
+    if not title or not task or any(k in title for k in _BWIKI_EXCLUDE_TITLE_KEYWORDS):
+        return None
+    entry_type = _bwiki_task_type(md.get("任务类型") or item.get("category") or "")
+    if not _bwiki_entry_type_allowed(entry_type):
+        return None
+    text = str(item.get("text") or "").strip() or processed_text.get(_norm_meta_key(title), "")
+    if not text:
+        return None
+    return {
+        "title": title,
+        "task": task,
+        "entry_type": entry_type,
+        "chapter": str(md.get("chapter_name") or md.get("系列任务") or "").split(",")[0].strip(),
+        "act": str(md.get("act_name") or "").strip(),
+        # B站 metadata 用的是「任务地区」（值为纳塔/远古圣山等），不是「任务区域」。
+        "region": str(md.get("任务地区") or md.get("任务区域") or md.get("地区") or "").strip(),
+        "text": text,
+        "meta_text": _bwiki_meta_header(md),
+        "file": filename,
+    }
+
+
+def _bwiki_entry_key(row: Dict[str, Any]) -> tuple:
+    return (_norm_meta_key(row["chapter"]), _norm_meta_key(row["act"]), _norm_meta_key(row["task"]))
+
+
+def _bwiki_merge_row(entries: Dict[tuple, Dict[str, Any]], row: Dict[str, Any]) -> None:
+    """同键条目合并：同标题保留更长的一份；不同标题的兄弟页在正文互不覆盖时都保留。"""
+    key = _bwiki_entry_key(row)
+    old = entries.get(key)
+    if old is None:
+        entries[key] = row
+        return
+    same_title = _norm_meta_key(old["title"]) == _norm_meta_key(row["title"])
+    if len(row["text"]) > len(old["text"]):
+        entries[key] = row
+        if not same_title and len(old["text"]) >= _SIBLING_MIN_CHARS and not _text_covered(old["text"], row["text"]):
+            entries[key + ("sibling", _norm_meta_key(old["title"]))] = old
+    elif not same_title and len(row["text"]) >= _SIBLING_MIN_CHARS and not _text_covered(row["text"], old["text"]):
+        entries[key + ("sibling", _norm_meta_key(row["title"]))] = row
+
+
+def _bwiki_backfill(entries: Dict[tuple, Dict[str, Any]], processed: Dict[str, Any]) -> None:
+    """raw 文件没覆盖到的任务，用 processed 的 chunks 补建条目。"""
     for title, item in processed.items():
         if not isinstance(item, dict):
             continue
-        entry_type = str(item.get("category") or "").strip()
-        if any(k in entry_type for k in ("额外", "教程", "说明")):
+        entry_type = _bwiki_task_type(item.get("category") or "")
+        if not _bwiki_entry_type_allowed(entry_type):
             continue
-        if entry_type and not any(t in entry_type for t in _BWIKI_ALLOWED_TYPES):
-            continue
-        text = _processed_text(item)
+        text = _bwiki_processed_text(item)
         if not text:
             continue
         task = str(item.get("title") or title).strip()
@@ -1179,29 +1173,65 @@ def _load_bwiki_entries() -> List[Dict[str, Any]]:
             "meta_text": _bwiki_meta_header(item.get("metadata") or {}),
             "file": "quests_processed.json",
         }
-    # 同一任务若已有带 chapter/act 的条目，丢弃无元数据的重复条目，避免建出重复节点；
-    # 但标题不同、正文没被覆盖的兄弟页要保留（霜月的祝祷·其二、受选者的诺言等曾因此被丢）。
+
+
+def _bwiki_drop_redundant(entries: Dict[tuple, Dict[str, Any]]) -> None:
+    """已有带 chapter/act 的条目时，丢弃无元数据的重复条目；兄弟页保留。"""
     metadata_rows = {}
     for row in entries.values():
         if row["chapter"] or row["act"]:
             metadata_rows.setdefault(_norm_meta_key(row["task"]), row)
-    if metadata_rows:
-        for key in list(entries.keys()):
-            row = entries[key]
-            if row["chapter"] or row["act"]:
+    if not metadata_rows:
+        return
+    for key in list(entries.keys()):
+        row = entries[key]
+        if row["chapter"] or row["act"]:
+            continue
+        keeper = metadata_rows.get(_norm_meta_key(row["task"]))
+        if keeper is None:
+            continue
+        same_title = _norm_meta_key(keeper["title"]) == _norm_meta_key(row["title"])
+        if not same_title and len(row["text"]) >= _SIBLING_MIN_CHARS and not _text_covered(row["text"], keeper["text"]):
+            continue  # 兄弟页，保留
+        del entries[key]
+
+
+def _load_bwiki_entries() -> List[Dict[str, Any]]:
+    """读取全部 content_data/quests_*.json，整理为可合并的 B 站任务条目。
+
+    过滤规则：只保留任务/剧情类条目；丢弃额外对话、教程、活动说明等非剧情页。
+    优先使用原始 text；原始 text 为空时用 quests_processed.json 的 chunks 兜底。
+    """
+    content_dir = BASE_DIR / "content_data"
+    processed: Dict[str, Any] = {}
+    processed_path = content_dir / "quests_processed.json"
+    if processed_path.exists():
+        try:
+            processed = json.loads(processed_path.read_text(encoding="utf-8"))
+        except Exception:
+            processed = {}
+    processed_text = _bwiki_processed_index(processed)
+
+    entries: Dict[tuple, Dict[str, Any]] = {}
+    for path in sorted(content_dir.glob("quests_*.json")):
+        if path.name == "quests_processed.json":
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        items = data if isinstance(data, list) else (data.get("items") or list(data.values()))
+        for item in items:
+            if not isinstance(item, dict):
                 continue
-            keeper = metadata_rows.get(_norm_meta_key(row["task"]))
-            if keeper is None:
-                continue
-            same_title = _norm_meta_key(keeper["title"]) == _norm_meta_key(row["title"])
-            if (
-                not same_title
-                and len(row["text"]) >= _SIBLING_MIN_CHARS
-                and not _text_covered(row["text"], keeper["text"])
-            ):
-                continue  # 兄弟页，保留
-            del entries[key]
+            row = _bwiki_row_from_item(item, path.name, processed_text)
+            if row is not None:
+                _bwiki_merge_row(entries, row)
+
+    _bwiki_backfill(entries, processed)
+    _bwiki_drop_redundant(entries)
     return list(entries.values())
+
 
 
 def _build_graph_key_index(graph: WikiEntryGraph) -> Dict[tuple, List[WikiEntry]]:
