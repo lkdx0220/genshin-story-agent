@@ -3,6 +3,7 @@
 
 由 _tools/ 下的自检脚本迁入（原先只在本地手跑，现在进 pytest 受 CI/gate 约束）。
 """
+
 import pytest
 
 
@@ -10,6 +11,7 @@ import pytest
 @pytest.fixture(scope="module")
 def coref():
     from app.agent import coref as module
+
     return module
 
 
@@ -87,6 +89,7 @@ ENUM_CASES = [
 @pytest.fixture(scope="module")
 def tools():
     from app.tools import tools_by_name
+
     return tools_by_name
 
 
@@ -104,6 +107,7 @@ def test_every_tool_has_schema_and_description(tools):
 
 def test_enum_params_match_vocab(tools):
     from app.tools import vocab
+
     mapping = {
         ("list_characters_by_element", "element"): vocab.ELEMENTS,
         ("list_characters_by_region", "region"): vocab.CHARACTER_REGIONS,
