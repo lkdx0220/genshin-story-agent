@@ -26,6 +26,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 _BASE_DIR = Path(__file__).resolve().parents[1]
 GRAPH_PATH = _BASE_DIR / "kb_vectors" / "wiki_entry_graph.json"
 MENTION_PATH = _BASE_DIR / "kb_vectors" / "wiki_entity_mention_index.json"
+# 原始任务数据：metadata.出场人物 是**结构化**的权威出场人物表（注意：部分分类抓成了空值，
+# 例如活动剧情 569/624 为空——那是抓取侧待修的问题，见实体检索量化报告）
+QUEST_DIR = _BASE_DIR / "content_data"
 
 _CHARACTER_TYPES = {"character", "npc", "character_anecdote"}
 _VARIANT_RE = re.compile(r"【[^】]*】")
@@ -138,6 +141,49 @@ def parse_cast(full_text: str) -> set:
                 continue
             names.add(name)
     return names
+
+
+def _clean_cast_value(value: str) -> set:
+    """清洗 metadata.出场人物 的取值：分隔符切分 + 丢弃混入其他字段的脏值。"""
+    raw = str(value or "").strip()
+    if not raw or "=" in raw or "|" in raw or "任务描述" in raw:
+        return set()
+    names = set()
+    for chunk in re.split(r"[、,，;；/]", raw):
+        name = chunk.strip().strip("[]【】")
+        if not name or len(name) > 12:
+            continue
+        if "=" in name or "版本" in name or "任务" in name:
+            continue
+        names.add(name)
+    return names
+
+
+@lru_cache(maxsize=1)
+def metadata_cast_map() -> Dict[str, frozenset]:
+    """title → 权威出场人物表，来源是**结构化元数据** content_data/quests_*.json 的 metadata.出场人物。
+
+    这是比从 full_text 正则解析更可靠的一手数据（我们此前完全没用上它）。
+    """
+    out: Dict[str, frozenset] = {}
+    if not QUEST_DIR.is_dir():
+        return out
+    for path in sorted(QUEST_DIR.glob("quests_*.json")):
+        if "processed" in path.name or ".bak" in path.name or "before" in path.name:
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        items = data if isinstance(data, list) else list(data.values())
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or item.get("name") or "")
+            cast = _clean_cast_value((item.get("metadata") or {}).get("出场人物") or "")
+            if title and cast:
+                out[title] = frozenset(cast)
+    return out
 
 
 def story_body(entry: dict) -> str:
@@ -294,14 +340,16 @@ def _collect_rows(name: str, task_type: Optional[str]) -> Tuple[str, List[Entity
         if task_type and task_type not in ttype:
             continue
         names = [base] + [v for v in info["variants"] if v]
-        cast = parse_cast(str(entry.get("full_text") or ""))
+        title = str(entry.get("title") or "")
+        # 权威表优先取结构化元数据（更可靠），其次才是从页面信息框文本解析
+        cast = metadata_cast_map().get(title) or parse_cast(str(entry.get("full_text") or ""))
         if cast:
             cast_tasks += 1
         level, evidence, count, cast_size = grade_body(entry, names, cast)
         if level is None:
-            continue  # 权威排除：有表但表中无此角色
-        rows.append(EntityHit(title=str(entry.get("title") or ""), task_type=ttype or "?",
-                              count=count, level=level, evidence=evidence, cast_size=cast_size))
+            continue  # 权威排除：有表但表中无此角色；或正文零提及
+        rows.append(EntityHit(title=title, task_type=ttype or "?", count=count,
+                              level=level, evidence=evidence, cast_size=cast_size))
     total = len(rows)
     rows = dedupe_variants(rows, mention)
     rows.sort(key=lambda r: (-r.weight, -r.count))
