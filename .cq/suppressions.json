@@ -27,6 +27,34 @@
       "reason": "collection 来自脚本内硬编码 COLLECTIONS 白名单（L28），非用户输入 → path-traversal 误报",
       "created_at": "2026-10-10T17:58:41+08:00",
       "source_run": "20261010-174950-full"
+    },
+    {
+      "id": "36e2817101f1665f229446ca819943a6269eb739",
+      "action": "debt_accepted",
+      "reason": "L2 决策主干（Plan/Answer 分层），拆分成本高于收益，刻意保留（格式化后行号漂移，按新 run 重挂）",
+      "created_at": "2026-10-10T18:06:03+08:00",
+      "source_run": "20261010-175907-full"
+    },
+    {
+      "id": "64b182bbe538179ee22c378a469de2d0fa26c266",
+      "action": "debt_accepted",
+      "reason": "L2 决策主干（Plan/Answer 分层），拆分成本高于收益，刻意保留（格式化后行号漂移，按新 run 重挂）",
+      "created_at": "2026-10-10T18:06:04+08:00",
+      "source_run": "20261010-175907-full"
+    },
+    {
+      "id": "df215c9c02596a96ce53d1cc020e8647d4bc2b77",
+      "action": "false_positive",
+      "reason": "collection 来自脚本内硬编码 COLLECTIONS 白名单（L28），非用户输入 → path-traversal 误报（格式化后行号漂移，按新 run 重挂）",
+      "created_at": "2026-10-10T18:06:04+08:00",
+      "source_run": "20261010-175907-full"
+    },
+    {
+      "id": "772b3d1d308e82448310cf51d7f61c3702c7cafa",
+      "action": "false_positive",
+      "reason": "collection 来自脚本内硬编码 COLLECTIONS 白名单（L28），非用户输入 → path-traversal 误报（格式化后行号漂移，按新 run 重挂）",
+      "created_at": "2026-10-10T18:06:04+08:00",
+      "source_run": "20261010-175907-full"
     }
   ]
 }
