@@ -47,3 +47,15 @@ COLLECTIBLE_REGIONS = get_args(CollectibleRegion)
 # ====== 角色查询的可选小节 ======
 # 空串 = 常规档案；"语音" = 语音档案。实现侧仍兼容 voice/语音档案/档案 等历史写法。
 CharacterSection = Literal["", "语音"]
+
+# ====== 实体检索（LLM Wiki 结构化层下放到 L2）======
+# 任务类型取值来自词条图 filters["任务类型/*"] 的实际取值集合。
+TaskType = Literal[
+    "魔神任务", "传说任务", "世界任务", "委托任务", "活动剧情",
+    "游逸旅闻", "伴月纪闻", "部族纪闻", "隐藏任务", "地图事件", "彩蛋剧情", "其他任务",
+]
+TASK_TYPES = get_args(TaskType)
+
+# 证据强度：回答"是出场还是只是被提到"
+EntityEvidenceLevel = Literal["强·有台词", "中·有动作", "弱·仅文字提及"]
+EVIDENCE_LEVELS = get_args(EntityEvidenceLevel)
