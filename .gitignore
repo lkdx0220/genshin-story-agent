@@ -65,7 +65,6 @@ _kb_graph_schema4_preview.zip
 
 # cq 质量扫描产物与工具缓存（本地产物，不入库）
 audits/
-.cq/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
