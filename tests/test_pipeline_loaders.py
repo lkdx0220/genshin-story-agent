@@ -4,6 +4,7 @@
 为什么是不变量而不是黄金快照：content_data 每天增量更新，快照会天天红；
 这里守的是"形状与语义约束"，重构不得改变它们。
 """
+
 import importlib
 
 import pytest
@@ -51,8 +52,19 @@ def test_load_bwiki_entries_shape(weg):
     assert all(str(e["title"]).strip() for e in entries), "标题不得为空"
     types = {str(e["entry_type"]) for e in entries}
     allowed = {
-        "魔神任务", "传说任务", "世界任务", "委托任务", "活动剧情", "游逸旅闻",
-        "伴月纪闻", "部族纪闻", "隐藏任务", "地图事件", "彩蛋剧情", "其他任务", "",
+        "魔神任务",
+        "传说任务",
+        "世界任务",
+        "委托任务",
+        "活动剧情",
+        "游逸旅闻",
+        "伴月纪闻",
+        "部族纪闻",
+        "隐藏任务",
+        "地图事件",
+        "彩蛋剧情",
+        "其他任务",
+        "",
     }
     assert types <= allowed, f"entry_type 出现未预期取值：{sorted(types - allowed)}"
     dirty = [t for t in types if "\n" in t or "|" in t]

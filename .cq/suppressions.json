@@ -55,6 +55,111 @@
       "reason": "collection 来自脚本内硬编码 COLLECTIONS 白名单（L28），非用户输入 → path-traversal 误报（格式化后行号漂移，按新 run 重挂）",
       "created_at": "2026-10-10T18:06:04+08:00",
       "source_run": "20261010-175907-full"
+    },
+    {
+      "id": "b4a8588534fecd1e90bc5e99138390d7c140a683",
+      "action": "debt_accepted",
+      "reason": "本地开发自检脚本（gitignored，不入库）：复杂度不影响产品，登记为技术债",
+      "created_at": "2026-10-10T19:06:44+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "b09343f220e50d5bc381e4f0a2ab35d3bdc81ea9",
+      "action": "debt_accepted",
+      "reason": "构建期数据装配（运行时只读取产物）：分支多属数据装配特性，登记为技术债",
+      "created_at": "2026-10-10T19:06:44+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "511786eed5f6213a2f0590bee2e7e133cd536e6b",
+      "action": "debt_accepted",
+      "reason": "离线数据流水线（非运行时、非用户请求路径）：复杂度高但不影响线上质量，登记为技术债，按需排期重构",
+      "created_at": "2026-10-10T19:06:44+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "7f89902c984eff6a23a3c95fd8d70ebbb3f1e9d6",
+      "action": "debt_accepted",
+      "reason": "离线数据流水线（非运行时、非用户请求路径）：复杂度高但不影响线上质量，登记为技术债，按需排期重构",
+      "created_at": "2026-10-10T19:06:44+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "7de50cc41b9e64fe243352e0ed15f3ce450783ef",
+      "action": "debt_accepted",
+      "reason": "离线数据流水线（非运行时、非用户请求路径）：复杂度高但不影响线上质量，登记为技术债，按需排期重构",
+      "created_at": "2026-10-10T19:06:44+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "d83c1442547f0e296447c68660ae6e5bb2500eda",
+      "action": "debt_accepted",
+      "reason": "离线数据流水线（非运行时、非用户请求路径）：复杂度高但不影响线上质量，登记为技术债，按需排期重构",
+      "created_at": "2026-10-10T19:06:44+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "85b7cb79187e01a366dca50c0bbc5e144a9c28a8",
+      "action": "debt_accepted",
+      "reason": "离线数据流水线（非运行时、非用户请求路径）：复杂度高但不影响线上质量，登记为技术债，按需排期重构",
+      "created_at": "2026-10-10T19:06:45+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "f128b6139dee662e3ddd195b39447dd1f706c46b",
+      "action": "debt_accepted",
+      "reason": "离线数据流水线（非运行时、非用户请求路径）：复杂度高但不影响线上质量，登记为技术债，按需排期重构",
+      "created_at": "2026-10-10T19:06:45+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "ba25b079c6ccdeb1cc20b9fb42dc92eb2567813c",
+      "action": "debt_accepted",
+      "reason": "离线数据流水线（非运行时、非用户请求路径）：复杂度高但不影响线上质量，登记为技术债，按需排期重构",
+      "created_at": "2026-10-10T19:06:45+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "3575d940e7d2e58791844487cefa0ff495e38122",
+      "action": "debt_accepted",
+      "reason": "本地开发自检脚本（gitignored，不入库）：复杂度不影响产品，登记为技术债",
+      "created_at": "2026-10-10T19:06:45+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "a63685bd66d6f85be36d012e08e787bb14134d2a",
+      "action": "debt_accepted",
+      "reason": "离线数据流水线（非运行时、非用户请求路径）：复杂度高但不影响线上质量，登记为技术债，按需排期重构",
+      "created_at": "2026-10-10T19:06:45+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "6525e8cc042d1650114c2e5e2e0930af0663ec95",
+      "action": "debt_accepted",
+      "reason": "离线数据流水线（非运行时、非用户请求路径）：复杂度高但不影响线上质量，登记为技术债，按需排期重构",
+      "created_at": "2026-10-10T19:06:45+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "fe5ecd74cd4152800b593b8fb42a09a7266a5d67",
+      "action": "debt_accepted",
+      "reason": "离线数据流水线（非运行时、非用户请求路径）：复杂度高但不影响线上质量，登记为技术债，按需排期重构",
+      "created_at": "2026-10-10T19:06:46+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "84975a909a20e46dc74259161598acc307842904",
+      "action": "debt_accepted",
+      "reason": "离线数据流水线（非运行时、非用户请求路径）：复杂度高但不影响线上质量，登记为技术债，按需排期重构",
+      "created_at": "2026-10-10T19:06:46+08:00",
+      "source_run": "20261010-185638-full"
+    },
+    {
+      "id": "a976cc684e9f5a365aac4d2db14cc9439323e98c",
+      "action": "debt_accepted",
+      "reason": "构建期数据装配（运行时只读取产物）：分支多属数据装配特性，登记为技术债",
+      "created_at": "2026-10-10T19:06:46+08:00",
+      "source_run": "20261010-185638-full"
     }
   ]
 }
