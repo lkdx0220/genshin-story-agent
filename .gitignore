@@ -68,3 +68,8 @@ audits/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# 覆盖率产物（pytest-cov 本地产物）
+.coverage
+htmlcov/
+.coverage.*
