@@ -503,65 +503,6 @@ def search_all(query: str) -> str:
     return _render_search_all_results(query, all_results)
 
 
-def search_lore(keyword: str) -> str:
-    """专门搜索世界观设定（深渊本质、天理、降临者、世界树等抽象概念）。
-    当用户问及\"XX的本质\"、\"XX的定义\"、\"OO是什么概念\"等宏观世界观问题时优先使用此工具。
-    keyword: 要搜索的关键词（如\"深渊\"、\"天理\"、\"降临者\"）
-    """
-    lore_path = os.path.join(CONTENT_DIR, "lore.json")
-    if not os.path.exists(lore_path):
-        return "世界观设定数据(lore.json)尚未构建，请先用 search_all。"
-    try:
-        with open(lore_path, "r", encoding="utf-8") as f:
-            lore = json.load(f)
-    except Exception:
-        return "世界观设定数据读取失败。"
-
-    if not lore:
-        return "世界观设定数据为空。"
-
-    # 直接搜索匹配 + 自动词根退化
-    # 对于 3 字及以上的关键词，同时搜原始词和去掉末字的词根
-    # 例如"降临者" → 也搜"降临"（雷内原文用的是"降临"而非"降临者"）
-    search_terms = [keyword]
-    if len(keyword) >= 3:
-        search_terms.append(keyword[:-1])
-    if len(keyword) >= 4:
-        search_terms.append(keyword[:-2])  # "原初之人" → 也搜"原初之"、"原初"
-
-    candidates = []
-    seen_ids = set()
-    for term in search_terms:
-        for entry in lore:
-            # 标题也是命中源：地图文本类条目的地区/子区域名只写在标题里
-            # （如"地图文本/稻妻 / 清籁岛"），正文只有碎片内容。
-            if term in entry["title"] or term in entry["text"]:
-                eid = entry["title"] + entry["text"][:40]
-                if eid not in seen_ids:
-                    seen_ids.add(eid)
-                    candidates.append(entry)
-
-    if not candidates:
-        return f"在世界观设定中未找到与「{keyword}」相关的内容。"
-
-    fallback_info = "" if len(search_terms) == 1 else f"（含词根退化「{'、'.join(search_terms[1:])}」）"
-    print(f"[工具] 世界观搜索: {keyword!r} -> {len(candidates)}条候选{fallback_info}")
-
-    # Reranker 重排序
-    rerank_docs = [f"【{c['title']}】{c['text']}" for c in candidates]
-    reranked = _rerank(keyword, rerank_docs, top_n=8)
-    if reranked is None:
-        ordered = candidates[:8]
-    elif reranked:
-        ordered = [candidates[i] for i in reranked]
-    else:
-        ordered = []
-
-    lines = [f"\n===== 世界观设定「{keyword}」({len(candidates)}条候选，取前{len(ordered)}条) ====="]
-    for c in ordered:
-        lines.append(f"\n【{c['title']}】（{c['source']}）\n  {c['text']}")
-    return "\n".join(lines)
-
 
 def _search_lore_snippets(keyword: str, max_candidates: int = 5, snippet_chars: int = 400) -> str:
     """轻量世界观搜索：只返回命中条目标题与关键片段，避免把整段 lore 灌给 LLM。"""

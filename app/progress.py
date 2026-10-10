@@ -40,6 +40,3 @@ def set_progress_hook(hook):
     _tls.hook = hook
 
 
-def get_progress_hook():
-    """获取当前线程的进度回调（供测试或诊断用）。"""
-    return getattr(_tls, "hook", None)
