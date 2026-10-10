@@ -145,3 +145,16 @@ def test_coref_window_and_trigger():
     assert coref.needs_resolution({"user_query": "她是谁？", "conversation_history": history}) is True
     assert coref.needs_resolution({"user_query": "她是谁？", "conversation_history": []}) is False
     assert coref.needs_resolution({"user_query": "胡桃的传说任务", "conversation_history": history}) is False
+
+# ====== 主检索路径回归护栏（2026-10-10 事故：死代码清理误删常量导致 hybrid_search NameError）======
+def test_module_level_constants_defined(retrieval):
+    """_COMMON_STOPWORDS / 入参上限必须存在——它们跨函数共用，误删会让主检索直接炸。"""
+    assert retrieval._COMMON_STOPWORDS, "停用词表缺失"
+    assert retrieval._MAX_TOOL_QUERY_CHARS > 0 and retrieval._MAX_TOOL_TOP_K > 0
+
+
+def test_hybrid_search_tool_runs_end_to_end(retrieval):
+    """主检索工具真实跑一遍：返回带结果头的非空文本（不是"工具执行出错"）。"""
+    out = retrieval.hybrid_search.invoke({"query": "胡桃"})
+    assert isinstance(out, str) and out.strip()
+    assert "混合检索" in out and "出错" not in out[:30]
