@@ -45,9 +45,7 @@ COLLECTIONS = [
     "kb_npcs",
     "kb_regions",
 ]
-DEFAULT_GOLDEN = os.path.join(
-    os.path.dirname(BASE_DIR), "golden_test_set.json"
-)
+DEFAULT_GOLDEN = os.path.join(os.path.dirname(BASE_DIR), "golden_test_set.json")
 DEFAULT_VECTORS_A = os.path.join(BASE_DIR, "kb_vectors")
 DEFAULT_VECTORS_B = os.path.join(BASE_DIR, "kb_vectors_m3")
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434/api/embed"
@@ -108,9 +106,7 @@ class OllamaEmbedder:
             data = json.loads(response.read().decode("utf-8"))
         embeddings = data.get("embeddings")
         if not isinstance(embeddings, list) or len(embeddings) != len(texts):
-            raise RuntimeError(
-                f"Ollama 返回数量异常: {type(embeddings)} / {len(texts)}"
-            )
+            raise RuntimeError(f"Ollama 返回数量异常: {type(embeddings)} / {len(texts)}")
         vectors = []
         for vector in embeddings:
             arr = np.asarray(vector, dtype=np.float32)
@@ -153,9 +149,7 @@ class LocalVectorIndex:
             ids = self._load_json(meta_path)
             docs = self._load_json(doc_path) if os.path.exists(doc_path) else []
             if vectors.ndim != 2 or vectors.shape[1] != 1024:
-                raise RuntimeError(
-                    f"{self.name}/{collection} 向量维度异常: {vectors.shape}"
-                )
+                raise RuntimeError(f"{self.name}/{collection} 向量维度异常: {vectors.shape}")
             norms = np.linalg.norm(vectors, axis=1, keepdims=True)
             norms[norms == 0] = 1.0
             vectors = vectors / norms
@@ -255,15 +249,11 @@ def run_case(index_a, index_b, case, top_k):
     # 这里一次取 15，纯向量模式截前 top_k，混合模式用完整 15 条。
     search_depth = max(top_k, 15)
     t0 = time.perf_counter()
-    vec_a_all = index_a.search_raw(
-        query, per_collection=search_depth, top_k=search_depth
-    )
+    vec_a_all = index_a.search_raw(query, per_collection=search_depth, top_k=search_depth)
     t_a_vec = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    vec_b_all = index_b.search_raw(
-        query, per_collection=search_depth, top_k=search_depth
-    )
+    vec_b_all = index_b.search_raw(query, per_collection=search_depth, top_k=search_depth)
     t_b_vec = time.perf_counter() - t0
 
     vec_a = vec_a_all[:top_k]
@@ -276,12 +266,8 @@ def run_case(index_a, index_b, case, top_k):
     kw_docs = _keyword_search_docs(query, top_k=search_depth)
     t_keyword = time.perf_counter() - t0
 
-    vec_a_filtered = [
-        item for item in vec_a_all if item["score"] >= VECTOR_MIN_SIMILARITY
-    ]
-    vec_b_filtered = [
-        item for item in vec_b_all if item["score"] >= VECTOR_MIN_SIMILARITY
-    ]
+    vec_a_filtered = [item for item in vec_a_all if item["score"] >= VECTOR_MIN_SIMILARITY]
+    vec_b_filtered = [item for item in vec_b_all if item["score"] >= VECTOR_MIN_SIMILARITY]
     merged_a = _rrf_fusion(kw_docs, vec_a_filtered, k=60)[:top_k]
     merged_b = _rrf_fusion(kw_docs, vec_b_filtered, k=60)[:top_k]
     keys_a_hybrid = [key for key, _ in merged_a]
@@ -324,16 +310,8 @@ def summarize(cases, mode, top_k):
     exact_total = sum(c[mode]["a_coverage"]["total"] for c in cases)
     exact_hits_b = sum(c[mode]["b_coverage"]["hit"] for c in cases)
 
-    wins_a = sum(
-        1
-        for c in cases
-        if c[mode]["a_coverage"]["ratio"] > c[mode]["b_coverage"]["ratio"]
-    )
-    wins_b = sum(
-        1
-        for c in cases
-        if c[mode]["b_coverage"]["ratio"] > c[mode]["a_coverage"]["ratio"]
-    )
+    wins_a = sum(1 for c in cases if c[mode]["a_coverage"]["ratio"] > c[mode]["b_coverage"]["ratio"])
+    wins_b = sum(1 for c in cases if c[mode]["b_coverage"]["ratio"] > c[mode]["a_coverage"]["ratio"])
     ties = len(cases) - wins_a - wins_b
 
     return {

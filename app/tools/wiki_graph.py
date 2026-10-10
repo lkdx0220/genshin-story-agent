@@ -5,6 +5,7 @@
 设计：Agent 先 search 找到词条，再 expand 顺链接找相邻词条，最后 get 取定向片段。
 不返回整篇 3 万字全文，避免撑爆 Plan 上下文；get 支持 focus 参数定位原文。
 """
+
 from typing import List, Optional
 
 from langchain_core.tools import tool
@@ -107,11 +108,7 @@ def wiki_graph_get(entry_id: str, focus: str = "") -> str:
     link_text = "；".join(link_lines) if link_lines else "无"
 
     if not story:
-        return (
-            f"{header}\n"
-            f"该词条没有剧情文本（可能为玩法/图鉴类词条）。\n"
-            f"内部链接({len(entry.links)}): {link_text}"
-        )
+        return f"{header}\n该词条没有剧情文本（可能为玩法/图鉴类词条）。\n内部链接({len(entry.links)}): {link_text}"
 
     if focus:
         snippets = _snippets_around(story, focus, max_snippets=5, width=300)

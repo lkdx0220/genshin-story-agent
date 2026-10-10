@@ -7,6 +7,7 @@
 每个资产必须是 zip 文件；下载后校验 SHA256，再解压到目标目录。
 zip 内部已经带有 kb_vectors/ 前缀，因此解压到 /app 后即得到 /app/kb_vectors。
 """
+
 import hashlib
 import os
 import shutil
@@ -48,9 +49,7 @@ def main() -> int:
             _download(url, tmp_path)
             actual = _sha256(tmp_path)
             if actual.lower() != expected.lower():
-                raise SystemExit(
-                    f"[校验失败] {url}\n期望: {expected}\n实际: {actual}"
-                )
+                raise SystemExit(f"[校验失败] {url}\n期望: {expected}\n实际: {actual}")
             print(f"[校验通过] {url}")
             with zipfile.ZipFile(tmp_path) as zf:
                 zf.extractall(dest_dir)

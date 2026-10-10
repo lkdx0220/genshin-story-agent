@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """抓取脚本的 URL 安全校验：仅允许访问白名单站点，防止 SSRF/非预期外联。"""
+
 import urllib.parse
 
 ALLOWED_SCHEMES = {"http", "https"}

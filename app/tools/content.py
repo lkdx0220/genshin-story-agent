@@ -5,6 +5,7 @@
 - 轨道 A（无 query）：返回离线摘要大纲
 - 轨道 B（有 query）：BM25 粗召回 + Reranker 精排，定位最相关原文片段
 """
+
 import os
 import json
 import re
@@ -13,8 +14,14 @@ from langchain_core.tools import tool
 
 from app.config import CONTENT_DIR
 from app.data import (
-    任务知识库, _normalize_for_match, _load_processed_data, _quests_processed,
-    _build_quest_header, ACT_TO_QUESTS, ACTIVITY_LEGENDARY_ALIAS, FORCE_ACTIVITY_TITLES,
+    任务知识库,
+    _normalize_for_match,
+    _load_processed_data,
+    _quests_processed,
+    _build_quest_header,
+    ACT_TO_QUESTS,
+    ACTIVITY_LEGENDARY_ALIAS,
+    FORCE_ACTIVITY_TITLES,
     _aggregate_map_text,
 )
 from app.retrieval import SimpleBM25, _rerank
@@ -59,13 +66,13 @@ def _book_pages(text: str) -> list:
     if marks:
         segs = []
         if marks[0].start() > 0:
-            segs.append((None, "", text[:marks[0].start()]))  # 卷前导言
+            segs.append((None, "", text[: marks[0].start()]))  # 卷前导言
         for i, m in enumerate(marks):
             end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
-            segs.append((m.group(1), m.group(2).strip(), text[m.start():end]))
+            segs.append((m.group(1), m.group(2).strip(), text[m.start() : end]))
         cur, labels, cur_len = [], [], 0
         for num, title, seg in segs:
-            label = (f"卷{num} {title}".strip() if num else "卷前导言")
+            label = f"卷{num} {title}".strip() if num else "卷前导言"
             if cur and cur_len + len(seg) > _PAGE_CHARS:
                 pages.append(("、".join(labels), "".join(cur)))
                 cur, labels, cur_len = [], [], 0
@@ -76,7 +83,7 @@ def _book_pages(text: str) -> list:
             pages.append(("、".join(labels), "".join(cur)))
     else:
         for i in range(0, len(text), _PAGE_CHARS):
-            pages.append((f"第{i + 1}-{min(i + _PAGE_CHARS, len(text))}字", text[i:i + _PAGE_CHARS]))
+            pages.append((f"第{i + 1}-{min(i + _PAGE_CHARS, len(text))}字", text[i : i + _PAGE_CHARS]))
     return pages
 
 
@@ -87,7 +94,7 @@ def _page_hint(title: str, pages: list, page_no: int, total_chars: int) -> str:
     head = f"\n...（本书共{total_chars}字，共 {len(pages)} 页；本页为第 {page_no} 页 = {pages[page_no - 1][0]}）"
     if page_no < len(pages):
         nxt = page_no + 1
-        return f"{head}\n【续读】load_book_content(book_name=\"{title}\", part={nxt}) → {pages[nxt - 1][0]}"
+        return f'{head}\n【续读】load_book_content(book_name="{title}", part={nxt}) → {pages[nxt - 1][0]}'
     return f"{head}\n【续读】已是最后一页。"
 
 
@@ -153,8 +160,7 @@ def _format_page_line(page_no: int, pages: list, page_label: str) -> str:
     return f"\n[本页: 第 {page_no}/{len(pages)} 页 = {page_label}]" if len(pages) > 1 else ""
 
 
-def _apply_volume_guard(book_name: str, title: str, text: str, meta: dict,
-                        meta_line: str, pages: list, page_no: int):
+def _apply_volume_guard(book_name: str, title: str, text: str, meta: dict, meta_line: str, pages: list, page_no: int):
     """卷号守卫：书名点名了「第N卷」时校验并定位到对应页。
 
     返回 (提前返回文本, 页号)，两者互斥：
@@ -169,9 +175,7 @@ def _apply_volume_guard(book_name: str, title: str, text: str, meta: dict,
     if not total_volumes:
         return None, page_no
     if requested_volume > total_volumes:
-        catalog = "、".join(
-            f"卷{num} {vol_title.strip()}".strip() for num, vol_title in _VOLUME_RE.findall(text)
-        )
+        catalog = "、".join(f"卷{num} {vol_title.strip()}".strip() for num, vol_title in _VOLUME_RE.findall(text))
         return (
             f"\n【{title}】{meta_line}\n"
             f"[卷号校验] 本书共 {total_volumes} 卷，不存在「第{requested_volume}卷」。"
@@ -199,7 +203,7 @@ def _book_keyword_snippets(text: str, query: str) -> list:
         ctx_end = min(len(text), pos + 500)
         ctx = text[ctx_start:ctx_end]
         if all(_normalize_for_match(w) in _normalize_for_match(ctx) for w in words):
-            snippets.append(ctx.replace('\n', ' '))
+            snippets.append(ctx.replace("\n", " "))
         idx = pos + 1
         if len(snippets) >= 3:  # 最多3个片段
             break
@@ -239,17 +243,22 @@ def load_book_content(book_name: str, query: str = "", part: int = 1) -> str:
     if query and query.strip():
         snippets = _book_keyword_snippets(text, query)
         if snippets:
-            print(f"  [关键词定位] \"{query}\" -> {len(snippets)} 个片段")
-            result = (f"\n【{best['title']}】（共{len(text)}字）{meta_line}\n"
-                      f"[关键词定位: \"{query}\", {len(snippets)}个片段]\n")
+            print(f'  [关键词定位] "{query}" -> {len(snippets)} 个片段')
+            result = (
+                f'\n【{best["title"]}】（共{len(text)}字）{meta_line}\n[关键词定位: "{query}", {len(snippets)}个片段]\n'
+            )
             result += "\n---\n".join(snippets)
             return result
-        return (f"\n【{best['title']}】{meta_line}{page_line}\n"
-                f"[关键词\"{query}\"未在书中找到，返回第 {page_no} 页 = {page_label}]\n"
-                f"{page_body}{_page_hint(best['title'], pages, page_no, len(text))}")
+        return (
+            f"\n【{best['title']}】{meta_line}{page_line}\n"
+            f'[关键词"{query}"未在书中找到，返回第 {page_no} 页 = {page_label}]\n'
+            f"{page_body}{_page_hint(best['title'], pages, page_no, len(text))}"
+        )
 
-    return (f"\n【{best['title']}】{meta_line}{page_line}\n{page_body}"
-            f"{_page_hint(best['title'], pages, page_no, len(text))}")
+    return (
+        f"\n【{best['title']}】{meta_line}{page_line}\n{page_body}"
+        f"{_page_hint(best['title'], pages, page_no, len(text))}"
+    )
 
 
 def _resolve_act_quests(quest_name: str):
@@ -332,11 +341,11 @@ def _format_long_quest(title: str, cat: str, text: str, char_count: int, query: 
         # BM25 无命中，回退到大纲
         return f"\n【{title}】（{cat}）\n[剧情大纲]\n{p['summary']}"
     top_chunks = _rerank_chunks(query, top_chunks)
-    print(f"  -> BM25+Reranker: \"{query}\" -> {len(top_chunks)} 个切片")
+    print(f'  -> BM25+Reranker: "{query}" -> {len(top_chunks)} 个切片')
     chunk_texts = "\n\n---\n\n".join(top_chunks)
     return (
         f"\n【{title}】（{cat}）\n"
-        f"[BM25+Reranker检索: \"{query}\", 共{char_count}字, 命中{len(top_chunks)}个切片]\n"
+        f'[BM25+Reranker检索: "{query}", 共{char_count}字, 命中{len(top_chunks)}个切片]\n'
         f"{chunk_texts}"
     )
 
@@ -353,8 +362,7 @@ def _format_quest_entry(title: str, cat: str, text: str, query: str) -> str:
     if title in _quests_processed:
         return _format_long_quest(title, cat, text, char_count, query)
     # 未预处理的长任务（不应出现），返回前 9000 字
-    return (f"\n【{title}】（{cat}）\n{text[:9000]}"
-            f"\n...（共{char_count}字，仅显示前9000字）")
+    return f"\n【{title}】（{cat}）\n{text[:9000]}\n...（共{char_count}字，仅显示前9000字）"
 
 
 @tool

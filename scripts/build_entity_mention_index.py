@@ -12,6 +12,7 @@
     python scripts/build_entity_mention_index.py
     python scripts/build_entity_mention_index.py --graph <path> --out <path>
 """
+
 import argparse
 import json
 import sys
@@ -28,9 +29,17 @@ DEFAULT_OUT = DEFAULT_GRAPH.parent / "wiki_entity_mention_index.json"
 
 # 参与实体索引的叙事/世界观类型
 ENTITY_TYPES = {
-    "character", "npc", "organization", "weapon", "artifact",
-    "book", "monster", "region_feature", "character_anecdote",
-    "task", "activity",
+    "character",
+    "npc",
+    "organization",
+    "weapon",
+    "artifact",
+    "book",
+    "monster",
+    "region_feature",
+    "character_anecdote",
+    "task",
+    "activity",
 }
 MIN_NAME_LEN = 2
 
@@ -107,8 +116,7 @@ def main():
     parser = argparse.ArgumentParser(description="构建实体提及索引")
     parser.add_argument("--graph", default=str(DEFAULT_GRAPH))
     parser.add_argument("--out", default=str(DEFAULT_OUT))
-    parser.add_argument("--min-count", type=int, default=1,
-                        help="只保留至少出现 N 次的提及（默认 1）")
+    parser.add_argument("--min-count", type=int, default=1, help="只保留至少出现 N 次的提及（默认 1）")
     args = parser.parse_args()
 
     graph_path = Path(args.graph)
@@ -136,7 +144,7 @@ def main():
     trie, fail, out = build_trie(name_to_entities)
 
     # 2) 扫描所有节点全文
-    mentions = {}          # (source_entry_id, entity_id) -> [count, first_offset]
+    mentions = {}  # (source_entry_id, entity_id) -> [count, first_offset]
     inverted = defaultdict(set)  # source_entry_id -> {entity_id}
     total = len(entries)
     for idx, e in enumerate(entries, 1):
@@ -156,11 +164,13 @@ def main():
                 continue
             if count < args.min_count:
                 continue
-            rows.append({
-                "entry_id": source_id,
-                "count": count,
-                "first_offset": first_offset,
-            })
+            rows.append(
+                {
+                    "entry_id": source_id,
+                    "count": count,
+                    "first_offset": first_offset,
+                }
+            )
         if rows:
             rows.sort(key=lambda x: (-x["count"], x["entry_id"]))
             entities_out[eid] = {
@@ -169,11 +179,7 @@ def main():
                 "mentions": rows,
             }
 
-    inverted_out = {
-        source_id: sorted(entity_ids)
-        for source_id, entity_ids in inverted.items()
-        if entity_ids
-    }
+    inverted_out = {source_id: sorted(entity_ids) for source_id, entity_ids in inverted.items() if entity_ids}
 
     result = {
         "version": 2,
@@ -181,9 +187,7 @@ def main():
         "graph_path": str(graph_path),
         "stats": {
             "entries_scanned": total,
-            "entries_with_story_text": sum(
-                1 for e in entries if (e.get("story_text") or "").strip()
-            ),
+            "entries_with_story_text": sum(1 for e in entries if (e.get("story_text") or "").strip()),
             "entities": len(entity_meta),
             "entities_with_mentions": len(entities_out),
             "source_entries_with_mentions": len(inverted_out),

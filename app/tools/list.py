@@ -3,6 +3,7 @@
 
 list_all_* 系列使用 24h TTL 缓存避免重复生成大目录文本。
 """
+
 import os
 import re
 import json
@@ -12,14 +13,25 @@ from langchain_core.tools import tool
 
 from app.config import CONTENT_DIR
 from app.data import (
-    角色知识库, 地区知识库, 武器知识库, 任务知识库, 圣遗物知识库,
+    角色知识库,
+    地区知识库,
+    武器知识库,
+    任务知识库,
+    圣遗物知识库,
     _load_content_json,
 )
 from app.progress import _emit_progress
 from character_aliases import resolve_aliases
 from app.tools.vocab import (
-    Element, ELEMENTS, CharacterRegion, CHARACTER_REGIONS,
-    WeaponType, WEAPON_TYPES, Rarity, CollectibleRegion, COLLECTIBLE_REGIONS,
+    Element,
+    ELEMENTS,
+    CharacterRegion,
+    CHARACTER_REGIONS,
+    WeaponType,
+    WEAPON_TYPES,
+    Rarity,
+    CollectibleRegion,
+    COLLECTIBLE_REGIONS,
 )
 
 # 缓存目录常量
@@ -39,7 +51,7 @@ def list_characters_by_element(element: Element) -> str:
         print(f"[工具] 按元素列出: {element}")
         lines = [f"\n【{element}元素角色列表】({len(matched)}位)", "-" * 40]
         for r in matched:
-            lines.append(f"  {r['角色名称']}（{r.get('称号','')}）| {r.get('武器类型','')} | {r.get('所属','')}")
+            lines.append(f"  {r['角色名称']}（{r.get('称号', '')}）| {r.get('武器类型', '')} | {r.get('所属', '')}")
         return "\n".join(lines)
     return f"知识库中暂无{element}元素角色数据。可选元素：{'/'.join(ELEMENTS)}"
 
@@ -52,7 +64,9 @@ def list_characters_by_region(region: CharacterRegion) -> str:
         print(f"[工具] 按地区列出: {region}")
         lines = [f"\n【{region}角色列表】({len(matched)}位)", "-" * 40]
         for r in matched:
-            lines.append(f"  {r['角色名称']}（{r.get('称号','')}）| {r.get('神之眼','')} | {r.get('武器类型','')} | {r.get('稀有度','')}星")
+            lines.append(
+                f"  {r['角色名称']}（{r.get('称号', '')}）| {r.get('神之眼', '')} | {r.get('武器类型', '')} | {r.get('稀有度', '')}星"
+            )
         return "\n".join(lines)
     return f"知识库中暂无{region}角色数据。可选地区：{'/'.join(CHARACTER_REGIONS)}"
 
@@ -65,7 +79,9 @@ def list_characters_by_weapon(weapon_type: WeaponType) -> str:
         print(f"[工具] 按武器列出: {weapon_type}")
         lines = [f"\n【{weapon_type}角色列表】({len(matched)}位)", "-" * 40]
         for r in matched:
-            lines.append(f"  {r['角色名称']}（{r.get('称号','')}）| {r.get('神之眼','')} | {r.get('所属','')} | {r.get('稀有度','')}星")
+            lines.append(
+                f"  {r['角色名称']}（{r.get('称号', '')}）| {r.get('神之眼', '')} | {r.get('所属', '')} | {r.get('稀有度', '')}星"
+            )
         return "\n".join(lines)
     return f"知识库中暂无{weapon_type}角色数据。可选武器类型：{'/'.join(WEAPON_TYPES)}"
 
@@ -79,7 +95,9 @@ def list_characters_by_rarity(rarity: Rarity) -> str:
         print(f"[工具] 按稀有度列出: {rarity}星")
         lines = [f"\n【{rarity}星角色列表】({len(matched)}位)", "-" * 40]
         for r in matched:
-            lines.append(f"  {r['角色名称']}（{r.get('称号','')}）| {r.get('神之眼','')} | {r.get('武器类型','')} | {r.get('所属','')}")
+            lines.append(
+                f"  {r['角色名称']}（{r.get('称号', '')}）| {r.get('神之眼', '')} | {r.get('武器类型', '')} | {r.get('所属', '')}"
+            )
         return "\n".join(lines)
     return f"知识库中暂无{rarity}星角色数据。"
 
@@ -146,11 +164,13 @@ def _collect_quest_series_map():
                     found = True
                     break
             if not found:
-                standalone_series.append({
-                    "series": series,
-                    "type": task_type,
-                    "tasks": [task_name],
-                })
+                standalone_series.append(
+                    {
+                        "series": series,
+                        "type": task_type,
+                        "tasks": [task_name],
+                    }
+                )
     return char_map, standalone_series
 
 
@@ -263,7 +283,9 @@ def list_all_lore_entries() -> str:
     # 地区
     lines.append(f"【地区】（{len(地区知识库)} 个）")
     for r in 地区知识库:
-        lines.append(f"  {r['地区名称']} | 元素:{r.get('元素','?')} | 神明:{r.get('神明','?')} | 理念:{r.get('理念','?')}")
+        lines.append(
+            f"  {r['地区名称']} | 元素:{r.get('元素', '?')} | 神明:{r.get('神明', '?')} | 理念:{r.get('理念', '?')}"
+        )
 
     # 概念
     concepts = _load_content_json("concepts")
@@ -305,13 +327,13 @@ def list_all_weapons_and_artifacts() -> str:
         wt = w.get("武器类型", "其他")
         if wt not in by_type:
             by_type[wt] = []
-        by_type[wt].append(f"{w['武器名称']}（{w.get('稀有度','?')}星）")
+        by_type[wt].append(f"{w['武器名称']}（{w.get('稀有度', '?')}星）")
     for wt in sorted(by_type.keys()):
         lines.append(f"  [{wt}] " + " | ".join(by_type[wt]))
 
     lines.append(f"\n【圣遗物】（{len(圣遗物知识库)} 套）")
     for a in 圣遗物知识库:
-        lines.append(f"  {a['圣遗物名称']}（{a.get('稀有度','?')}星）")
+        lines.append(f"  {a['圣遗物名称']}（{a.get('稀有度', '?')}星）")
 
     lines.append(f"\n共 {len(武器知识库)} 把武器 + {len(圣遗物知识库)} 套圣遗物。")
     lines.append("详情查询: query_weapon() / query_artifact()。")
@@ -358,7 +380,7 @@ def list_all_game_items() -> str:
     recipes = _load_content_json("recipes")
     lines.append(f"\n【食谱】（{len(recipes)} 个）")
     for r in recipes:
-        lines.append(f"  {r['名称']} | {r.get('类型','?')} | {r.get('稀有度','?')}星")
+        lines.append(f"  {r['名称']} | {r.get('类型', '?')} | {r.get('稀有度', '?')}星")
     total += len(recipes)
 
     # 食物
@@ -369,7 +391,7 @@ def list_all_game_items() -> str:
         cat = f.get("类别", "其他")
         if cat not in by_cat:
             by_cat[cat] = []
-        by_cat[cat].append(f"{f.get('名称','?')}({f.get('稀有度','?')}星)")
+        by_cat[cat].append(f"{f.get('名称', '?')}({f.get('稀有度', '?')}星)")
     for cat in sorted(by_cat.keys()):
         items = by_cat[cat]
         lines.append(f"  [{cat}] {', '.join(items[:15])}{' ...' if len(items) > 15 else ''}")
@@ -383,7 +405,7 @@ def list_all_game_items() -> str:
         mt = mat.get("类型", "其他")
         if mt not in by_mat_type:
             by_mat_type[mt] = []
-        by_mat_type[mt].append(f"{mat.get('名称','?')}({mat.get('稀有度','?')}星)")
+        by_mat_type[mt].append(f"{mat.get('名称', '?')}({mat.get('稀有度', '?')}星)")
     for mt in sorted(by_mat_type.keys()):
         items = by_mat_type[mt]
         lines.append(f"  [{mt}] {', '.join(items[:20])}{' ...' if len(items) > 20 else ''}")
@@ -393,10 +415,12 @@ def list_all_game_items() -> str:
     collectibles = _load_content_json("collectibles")
     lines.append(f"\n【采集物】（{len(collectibles)} 个）")
     for c in collectibles:
-        lines.append(f"  {c['名称']} | {c.get('类型','?')} | {c.get('分布地区','?')}")
+        lines.append(f"  {c['名称']} | {c.get('类型', '?')} | {c.get('分布地区', '?')}")
     total += len(collectibles)
 
-    lines.append(f"\n共 {total} 个游戏物品。详情查询: query_monster() / query_recipe() / query_food() / query_material() / query_collectible()。")
+    lines.append(
+        f"\n共 {total} 个游戏物品。详情查询: query_monster() / query_recipe() / query_food() / query_material() / query_collectible()。"
+    )
 
     result = "\n".join(lines)
     _items_cache = result
@@ -454,12 +478,12 @@ def count_character_lines(character_name: str, quest_name: str = "") -> str:
             text = q.get("text") or ""
             total_lines = 0
             for alias in aliases:
-                lines = re.findall(rf'^\*{re.escape(alias)}[：:(]', text, re.MULTILINE)
+                lines = re.findall(rf"^\*{re.escape(alias)}[：:(]", text, re.MULTILINE)
                 total_lines += len(lines)
             if total_lines > 0:
                 sample_lines = []
                 for alias in aliases:
-                    found = re.findall(rf'^\*{re.escape(alias)}[：:(].+', text, re.MULTILINE)
+                    found = re.findall(rf"^\*{re.escape(alias)}[：:(].+", text, re.MULTILINE)
                     sample_lines.extend(found[:3])
                 results.append((title, q.get("category", ""), total_lines, sample_lines[:3]))
     if not results:
@@ -471,6 +495,6 @@ def count_character_lines(character_name: str, quest_name: str = "") -> str:
         output_lines.append(f"\n「{title}」（{cat}）: {count} 句")
         for s in samples:
             output_lines.append(f"  · {s.strip()[:100]}")
-    output_lines.append(f"\n{'─'*40}")
+    output_lines.append(f"\n{'─' * 40}")
     output_lines.append(f"总计: {grand_total} 句台词（{len(results)} 个任务）")
     return "\n".join(output_lines)

@@ -87,9 +87,7 @@ CN_DIGITS = {
 KEY_VALUE_RE = re.compile(r"^([^：:\n]{1,30})[：:]\s*(.*)$")
 TASK_SECTION_RE = re.compile(r"^={3,}\s*(.*?)\s*={3,}$")
 TASK_QUEST_NAME_RE = re.compile(r"^【(.+)】$")
-TASK_PAGE_RE = re.compile(
-    r"^(开场动画|序章|间章|空月之歌|第[一二三四五六七八九十百]+章)(?:\s*(.+))?$"
-)
+TASK_PAGE_RE = re.compile(r"^(开场动画|序章|间章|空月之歌|第[一二三四五六七八九十百]+章)(?:\s*(.+))?$")
 ACT_NUM_RE = re.compile(r"第([一二三四五六七八九十百]+)幕")
 
 PLACEHOLDER_MARKERS = ("【待补充】", "【缺失】")
@@ -300,10 +298,7 @@ def _normalize_record(raw: dict, crawler_root: Path, hash_mode: str):
         elif manifest_hash == content_hash:
             verified_by = "content"
         else:
-            return None, (
-                f"content_hash 不一致: manifest={manifest_hash} "
-                f"file={file_hash} content={content_hash}"
-            )
+            return None, (f"content_hash 不一致: manifest={manifest_hash} file={file_hash} content={content_hash}")
     else:
         verified_by = hash_mode
 
@@ -401,9 +396,7 @@ def _assign_task_orders(records: list) -> Counter:
             groups[record["entry_id"]].append(record)
 
     for items in groups.values():
-        has_numeric_order = all(
-            item["metadata"].get("subtask_order") is not None for item in items
-        )
+        has_numeric_order = all(item["metadata"].get("subtask_order") is not None for item in items)
         if has_numeric_order:
             ordered = sorted(items, key=lambda x: x["metadata"]["subtask_order"])
             method = "subtask_title"
@@ -433,7 +426,7 @@ def _write_module_files(out_dir: Path, records: list, selected_modules: set, dry
         if module == "task":
             items = sorted(items, key=_task_sort_key)
         else:
-            items = sorted(items, key=lambda x: (x.get("doc_id") or ""))
+            items = sorted(items, key=lambda x: x.get("doc_id") or "")
         lines = [json.dumps(item, ensure_ascii=False) for item in items]
         payload = "\n".join(lines) + ("\n" if lines else "")
         target = out_dir / f"{module}.jsonl"
@@ -522,21 +515,14 @@ def main() -> int:
         for record in records
     }
 
-    scoped_old = {
-        doc_id: info
-        for doc_id, info in old_documents.items()
-        if info.get("module") in selected_modules
-    }
+    scoped_old = {doc_id: info for doc_id, info in old_documents.items() if info.get("module") in selected_modules}
     added = sorted(doc_id for doc_id in new_documents if doc_id not in scoped_old)
     updated = sorted(
         doc_id
         for doc_id in new_documents
-        if doc_id in scoped_old
-        and scoped_old[doc_id].get("content_hash") != new_documents[doc_id].get("content_hash")
+        if doc_id in scoped_old and scoped_old[doc_id].get("content_hash") != new_documents[doc_id].get("content_hash")
     )
-    removed = sorted(
-        doc_id for doc_id in scoped_old if doc_id not in new_documents
-    )
+    removed = sorted(doc_id for doc_id in scoped_old if doc_id not in new_documents)
     unchanged = len(new_documents) - len(added) - len(updated)
 
     merged_documents = dict(old_documents)
@@ -593,9 +579,7 @@ def main() -> int:
 
     if not args.dry_run:
         # 清理本次没有产出的旧模块文件；--modules 过滤时只动本次选中的模块。
-        existing_modules = {
-            path.stem for path in out_dir.glob("*.jsonl") if path.stem in MODULE_INFO
-        }
+        existing_modules = {path.stem for path in out_dir.glob("*.jsonl") if path.stem in MODULE_INFO}
         for stale_module in sorted(existing_modules - set(written)):
             if requested_modules and stale_module not in selected_modules:
                 continue

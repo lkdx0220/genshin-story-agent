@@ -12,6 +12,7 @@
     "text": "地图文本正文"
   }
 """
+
 import argparse
 import json
 import os
@@ -130,11 +131,13 @@ def main():
             if nt in existing_texts or nt in seen_texts:
                 continue
             seen_texts.add(nt)
-            new_entries.append({
-                "title": f"{args.prefix}/{region} / {location}",
-                "source": "米游社观测枢",
-                "text": text,
-            })
+            new_entries.append(
+                {
+                    "title": f"{args.prefix}/{region} / {location}",
+                    "source": "米游社观测枢",
+                    "text": text,
+                }
+            )
 
     log(f"总区域: {len(regions)}，地点: {len(locations)}，可新增文本: {len(new_entries)}")
     if args.dry_run:

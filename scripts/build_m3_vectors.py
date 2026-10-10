@@ -83,9 +83,7 @@ def capture_chunks():
     finally:
         kbi.time.sleep = original_sleep
 
-    groups = OrderedDict(
-        (collection, {"ids": [], "docs": [], "metas": []}) for collection in COLLECTIONS
-    )
+    groups = OrderedDict((collection, {"ids": [], "docs": [], "metas": []}) for collection in COLLECTIONS)
     for collection, ids, docs, metas in store.calls:
         if collection not in groups:
             raise RuntimeError(f"捕获到未知集合: {collection}")
@@ -98,12 +96,8 @@ def capture_chunks():
 def verify_against_snapshot(groups):
     """确认捕获结果与现有 text-embedding-v4 向量库的 ID、正文完全一致。"""
     for collection in COLLECTIONS:
-        old_ids = json.load(
-            open(os.path.join(SNAPSHOT_DIR, f"{collection}_meta.json"), encoding="utf-8")
-        )
-        old_docs = json.load(
-            open(os.path.join(SNAPSHOT_DIR, f"{collection}_docs.json"), encoding="utf-8")
-        )
+        old_ids = json.load(open(os.path.join(SNAPSHOT_DIR, f"{collection}_meta.json"), encoding="utf-8"))
+        old_docs = json.load(open(os.path.join(SNAPSHOT_DIR, f"{collection}_docs.json"), encoding="utf-8"))
         new_ids = groups[collection]["ids"]
         new_docs = groups[collection]["docs"]
         if old_ids == new_ids and old_docs == new_docs:
@@ -114,17 +108,11 @@ def verify_against_snapshot(groups):
                     raise RuntimeError(
                         f"{collection} 的 chunk ID 与现有快照不一致: index={index} old={old!r} new={new!r}"
                     )
-            raise RuntimeError(
-                f"{collection} 的 chunk 数量与现有快照不一致: old={len(old_ids)} new={len(new_ids)}"
-            )
+            raise RuntimeError(f"{collection} 的 chunk 数量与现有快照不一致: old={len(old_ids)} new={len(new_ids)}")
         for index, (old, new) in enumerate(zip(old_docs, new_docs)):
             if old != new:
-                raise RuntimeError(
-                    f"{collection} 的 chunk 正文与现有快照不一致: index={index} id={new_ids[index]!r}"
-                )
-        raise RuntimeError(
-            f"{collection} 的 chunk 正文数量与现有快照不一致: old={len(old_docs)} new={len(new_docs)}"
-        )
+                raise RuntimeError(f"{collection} 的 chunk 正文与现有快照不一致: index={index} id={new_ids[index]!r}")
+        raise RuntimeError(f"{collection} 的 chunk 正文数量与现有快照不一致: old={len(old_docs)} new={len(new_docs)}")
     print("[校验] 捕获切片与现有 kb_vectors 快照完全一致")
 
 
@@ -133,9 +121,7 @@ def write_chunk_dump(groups, path):
     with open(path, "w", encoding="utf-8") as f:
         for collection in COLLECTIONS:
             data = groups[collection]
-            for index, (chunk_id, document, meta) in enumerate(
-                zip(data["ids"], data["docs"], data["metas"])
-            ):
+            for index, (chunk_id, document, meta) in enumerate(zip(data["ids"], data["docs"], data["metas"])):
                 record = {
                     "id": chunk_id,
                     "collection": collection,
@@ -183,9 +169,7 @@ def ollama_embed(texts, model, url, num_ctx, retries=3):
     last_error = None
     for attempt in range(1, retries + 1):
         try:
-            request = urllib.request.Request(
-                url, data=payload, headers={"Content-Type": "application/json"}
-            )
+            request = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(request, timeout=1800) as response:
                 data = json.loads(response.read().decode("utf-8"))
             embeddings = data.get("embeddings")
@@ -212,11 +196,7 @@ def output_ready(collection, expected_ids, expected_docs):
     vector_path = os.path.join(OUT_DIR, f"{collection}_vectors.npy")
     meta_path = os.path.join(OUT_DIR, f"{collection}_meta.json")
     docs_path = os.path.join(OUT_DIR, f"{collection}_docs.json")
-    if not (
-        os.path.exists(vector_path)
-        and os.path.exists(meta_path)
-        and os.path.exists(docs_path)
-    ):
+    if not (os.path.exists(vector_path) and os.path.exists(meta_path) and os.path.exists(docs_path)):
         return False
     try:
         vectors = np.load(vector_path)
@@ -224,11 +204,7 @@ def output_ready(collection, expected_ids, expected_docs):
         docs = json.load(open(docs_path, encoding="utf-8"))
     except Exception:
         return False
-    return (
-        vectors.shape == (len(expected_ids), 1024)
-        and ids == expected_ids
-        and docs == expected_docs
-    )
+    return vectors.shape == (len(expected_ids), 1024) and ids == expected_ids and docs == expected_docs
 
 
 def save_collection(collection, embeddings, ids, docs):
@@ -304,9 +280,7 @@ def main():
                 elapsed = time.time() - collection_started
                 speed = done / elapsed if elapsed > 0 else 0.0
                 remaining = (len(ids) - done) / speed if speed > 0 else 0.0
-                print(
-                    f"  {collection} {done}/{len(ids)}  {speed:.1f} 条/秒  预计剩余 {remaining / 60:.1f} 分钟"
-                )
+                print(f"  {collection} {done}/{len(ids)}  {speed:.1f} 条/秒  预计剩余 {remaining / 60:.1f} 分钟")
         save_collection(collection, embeddings, ids, docs)
         print(f"[完成] {collection}: {len(ids)} 条，用时 {time.time() - collection_started:.1f}s")
 

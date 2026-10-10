@@ -3,6 +3,7 @@
 
 每个工具负责一类实体的精确查询，模糊匹配后调用 formatter 渲染为 LLM 友好文本。
 """
+
 import os
 import json
 import re
@@ -11,12 +12,22 @@ from langchain_core.tools import tool
 
 from app.config import CONTENT_DIR
 from app.data import (
-    角色知识库, 地区知识库, 主线剧情知识库, 武器知识库,
-    任务知识库, 圣遗物知识库, _npcs_data, _load_content_json,
-    _normalize_for_match, _aggregate_map_text,
+    角色知识库,
+    地区知识库,
+    主线剧情知识库,
+    武器知识库,
+    任务知识库,
+    圣遗物知识库,
+    _npcs_data,
+    _load_content_json,
+    _normalize_for_match,
+    _aggregate_map_text,
 )
 from app.formatters import (
-    _format_role_info, _format_npc_info, _format_region_info, _format_story_info,
+    _format_role_info,
+    _format_npc_info,
+    _format_region_info,
+    _format_story_info,
 )
 from character_aliases import ALIAS_MAP, resolve_aliases
 from app.tools.vocab import CharacterSection
@@ -76,27 +87,28 @@ def _voice_match(edge_value, query):
 
 
 def _voice_coverage_message(name):
-    return (f"「{name}」没有可用的语音档案或评价记录。"
-            f"语音档案目前仅覆盖可操控角色；NPC 自身没有语音档案。")
+    return f"「{name}」没有可用的语音档案或评价记录。语音档案目前仅覆盖可操控角色；NPC 自身没有语音档案。"
 
 
 def _format_voice_profile(name):
     item = (_load_voice_profiles().get("characters") or {}).get(name)
     if not item:
         return _voice_coverage_message(name)
-    lines = [f"\n{'='*50}", f"【{name}】语音档案（汉语）"]
+    lines = [f"\n{'=' * 50}", f"【{name}】语音档案（汉语）"]
     profile = item.get("profile") or []
     if profile:
         lines.append("\n档案类语音:")
         for row in profile:
-            lines.append(f"  [{row.get('line_name','')}] {row.get('content','')}")
+            lines.append(f"  [{row.get('line_name', '')}] {row.get('content', '')}")
     situation = item.get("situation") or []
     if situation:
         lines.append(f"\n情境/其他语音: 共 {len(situation)} 条（未展开）")
-    lines.append(f"\n关系语音: 本角色评价过 {item.get('outgoing_relation_count',0)} 个对象；"
-                 f"被 {item.get('incoming_relation_count',0)} 个对象评价过。")
+    lines.append(
+        f"\n关系语音: 本角色评价过 {item.get('outgoing_relation_count', 0)} 个对象；"
+        f"被 {item.get('incoming_relation_count', 0)} 个对象评价过。"
+    )
     lines.append("如需查询具体评价，请使用 query_voice_relation(speaker=..., target=...)。")
-    lines.append(f"{'='*50}")
+    lines.append(f"{'=' * 50}")
     return "\n".join(lines)
 
 
@@ -106,11 +118,11 @@ def _format_voice_edges(edges, speaker="", target=""):
     total = len(edges)
     if total > 80:
         edges = edges[:80]
-    lines = [f"\n{'='*50}"]
+    lines = [f"\n{'=' * 50}"]
     if speaker and target:
         lines.append(f"【{speaker} → {target}】语音评价")
         for e in edges:
-            lines.append(f"  [{e.get('line_name','')}] {e.get('content','')}")
+            lines.append(f"  [{e.get('line_name', '')}] {e.get('content', '')}")
     elif speaker:
         lines.append(f"【{speaker}】评价过的对象")
         grouped = {}
@@ -119,7 +131,7 @@ def _format_voice_edges(edges, speaker="", target=""):
         for t, rows in grouped.items():
             lines.append(f"\n→ {t}（{len(rows)} 条）")
             for e in rows:
-                lines.append(f"  [{e.get('line_name','')}] {e.get('content','')}")
+                lines.append(f"  [{e.get('line_name', '')}] {e.get('content', '')}")
     else:
         lines.append(f"【{target}】收到的语音评价")
         grouped = {}
@@ -128,12 +140,11 @@ def _format_voice_edges(edges, speaker="", target=""):
         for s, rows in grouped.items():
             lines.append(f"\n← {s}（{len(rows)} 条）")
             for e in rows:
-                lines.append(f"  [{e.get('line_name','')}] {e.get('content','')}")
+                lines.append(f"  [{e.get('line_name', '')}] {e.get('content', '')}")
     if total > 80:
         lines.append(f"\n（共 {total} 条，仅展示前 80 条）")
-    lines.append(f"{'='*50}")
+    lines.append(f"{'=' * 50}")
     return "\n".join(lines)
-
 
 
 # 戏称映射：角色名 → 被戏称为该角色传说任务的版本活动
@@ -256,8 +267,10 @@ def query_story(arc_name: str) -> str:
     elif results:
         print(f"[工具] 查询剧情(多条): {arc_name}")
         return "\n\n".join(_format_story_info(a) for a in results)
-    return (f"未找到与「{arc_name}」相关的剧情。如果用户问的是活动剧情（活动剧情不在 query_story 的主线知识库中），"
-            f"请改用 load_quest_content 加载该活动任务全文。")
+    return (
+        f"未找到与「{arc_name}」相关的剧情。如果用户问的是活动剧情（活动剧情不在 query_story 的主线知识库中），"
+        f"请改用 load_quest_content 加载该活动任务全文。"
+    )
 
 
 @tool
@@ -266,21 +279,20 @@ def query_weapon(name: str) -> str:
     for wpn in 武器知识库:
         if name in wpn.get("武器名称", ""):
             print(f"[工具] 查询武器: {name}")
-            star_count = wpn.get('稀有度', 0)
-            star_str = '★' * star_count if isinstance(star_count, int) and star_count > 0 else str(star_count)
-            lines = [f"\n{'='*50}", f"【{wpn['武器名称']}】{star_str}",
-                     f"类型: {wpn.get('武器类型', '未知')}"]
-            if wpn.get('副属性'):
+            star_count = wpn.get("稀有度", 0)
+            star_str = "★" * star_count if isinstance(star_count, int) and star_count > 0 else str(star_count)
+            lines = [f"\n{'=' * 50}", f"【{wpn['武器名称']}】{star_str}", f"类型: {wpn.get('武器类型', '未知')}"]
+            if wpn.get("副属性"):
                 lines.append(f"副属性: {wpn['副属性']}")
-            if wpn.get('技能名称'):
+            if wpn.get("技能名称"):
                 lines.append(f"技能: {wpn['技能名称']}")
-            if wpn.get('实装版本'):
+            if wpn.get("实装版本"):
                 lines.append(f"实装版本: {wpn['实装版本']}")
             lines.append(f"\n简介: {wpn.get('简介', '暂无')}")
-            if wpn.get('武器故事'):
-                story = wpn['武器故事']
+            if wpn.get("武器故事"):
+                story = wpn["武器故事"]
                 lines.append(f"\n武器故事:\n{story}")
-            lines.append(f"{'='*50}")
+            lines.append(f"{'=' * 50}")
             return "\n".join(lines)
     return f"未找到武器「{name}」的信息。"
 
@@ -410,7 +422,7 @@ def _format_quest_results(name, is_tribal, series_groups, standalone):
 
     for series, quests in series_groups.items():
         owner = quests[0].get("所属角色", "")
-        is_main = (owner == name)  # 搜索角色等于所属角色=主角视角
+        is_main = owner == name  # 搜索角色等于所属角色=主角视角
 
         parts = series.split(",")
         chapter = parts[0].strip()
@@ -448,6 +460,7 @@ def _format_fake_legend_results(name, matched_fake):
         lines.append(f"简介: {q.get('简介', '暂无')}")
     print(f"[工具] 查询任务(戏称映射): {name!r} → {matched_fake!r}")
     return "\n".join(lines)
+
 
 # 简单同音字组表：用于短名/同音错别字的保守纠错。
 # 只收录常见任务/章节用字，后续遇到真实漏网再补充。
@@ -521,6 +534,7 @@ def find_similar_quest_names(name: str, top_n: int = 3):
         _add(meta.get("act_name", ""))
 
     from difflib import SequenceMatcher
+
     scored = []
     for candidate in candidates:
         ratio = SequenceMatcher(None, name, candidate).ratio()
@@ -718,8 +732,11 @@ def get_book_metadata(book_name: str) -> str:
         return "书籍数据文件未找到。"
     normalized_book = _normalize_for_match(book_name)
     # 双向匹配：支持 "提瓦特游览指南·蒙德篇" 匹配到 "提瓦特游览指南"（书名作为查询的子串）
-    matches = [b for b in books if normalized_book in _normalize_for_match(b["title"])
-               or _normalize_for_match(b["title"]) in normalized_book]
+    matches = [
+        b
+        for b in books
+        if normalized_book in _normalize_for_match(b["title"]) or _normalize_for_match(b["title"]) in normalized_book
+    ]
     if not matches:
         map_text = _aggregate_map_text(book_name)
         if map_text:

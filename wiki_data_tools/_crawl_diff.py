@@ -32,7 +32,9 @@ from _safe_http import ensure_wiki_url
 # ====== 配置 ======
 
 WIKI_API = "https://wiki.biligame.com/ys/api.php"
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MANIFEST_FILE = os.path.join(SCRIPT_DIR, "_crawl_manifest.json")
@@ -40,8 +42,8 @@ DIFF_REPORT_FILE = os.path.join(SCRIPT_DIR, "_crawl_diff_report.json")
 CHECKPOINT_FILE = os.path.join(SCRIPT_DIR, "_crawl_diff_checkpoint.json")
 
 REQUEST_INTERVAL = 10.0  # 请求间隔（秒），curl 指纹可绕过但频率仍需节制
-BATCH_SIZE = 50          # prop=info 每批查询的页面数
-CONTENT_DELAY = 3.0      # 拉取 wikitext 时的额外延迟（parse/revisions 限流更严格）
+BATCH_SIZE = 50  # prop=info 每批查询的页面数
+CONTENT_DELAY = 3.0  # 拉取 wikitext 时的额外延迟（parse/revisions 限流更严格）
 
 # wiki 分类 → 本地数据源映射
 CATEGORY_MAP = {
@@ -90,6 +92,7 @@ CATEGORY_MAP = {
 
 # ====== 工具函数 ======
 
+
 def log(msg):
     print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
 
@@ -111,17 +114,31 @@ def api_get(params, retries=3):
         try:
             fd, tmp_path = tempfile.mkstemp(suffix=".json")
             os.close(fd)
-            result = subprocess.run([
-                "curl.exe", "-s", "--compressed",
-                "-w", "%{http_code}",
-                "-o", tmp_path,
-                "-H", f"User-Agent: {USER_AGENT}",
-                "-H", "Accept: application/json, text/plain, */*",
-                "-H", "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
-                "-H", "Referer: https://wiki.biligame.com/ys/",
-                "--max-time", "30",
-                url,
-            ], capture_output=True, text=True, timeout=35)
+            result = subprocess.run(
+                [
+                    "curl.exe",
+                    "-s",
+                    "--compressed",
+                    "-w",
+                    "%{http_code}",
+                    "-o",
+                    tmp_path,
+                    "-H",
+                    f"User-Agent: {USER_AGENT}",
+                    "-H",
+                    "Accept: application/json, text/plain, */*",
+                    "-H",
+                    "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
+                    "-H",
+                    "Referer: https://wiki.biligame.com/ys/",
+                    "--max-time",
+                    "30",
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=35,
+            )
 
             http_code = result.stdout.strip()
             if http_code == "200":
@@ -129,17 +146,17 @@ def api_get(params, retries=3):
                     data = json.load(f)
                 return data
             elif http_code == "567":
-                wait = 10 * (2 ** attempt)
-                log(f"  CDN 限流(567)，等待 {wait}s 后重试 (第 {attempt+1}/{retries} 次)...")
+                wait = 10 * (2**attempt)
+                log(f"  CDN 限流(567)，等待 {wait}s 后重试 (第 {attempt + 1}/{retries} 次)...")
                 time.sleep(wait)
             else:
-                log(f"  HTTP {http_code}，第 {attempt+1}/{retries} 次重试...")
+                log(f"  HTTP {http_code}，第 {attempt + 1}/{retries} 次重试...")
                 time.sleep(REQUEST_INTERVAL * (attempt + 1))
         except subprocess.TimeoutExpired:
-            log(f"  curl 超时，第 {attempt+1}/{retries} 次重试...")
+            log(f"  curl 超时，第 {attempt + 1}/{retries} 次重试...")
             time.sleep(REQUEST_INTERVAL * (attempt + 1))
         except Exception as e:
-            log(f"  API 请求失败: {e}，第 {attempt+1}/{retries} 次重试...")
+            log(f"  API 请求失败: {e}，第 {attempt + 1}/{retries} 次重试...")
             time.sleep(REQUEST_INTERVAL * (attempt + 1))
         finally:
             if tmp_path and os.path.exists(tmp_path):
@@ -161,11 +178,11 @@ def _extract_content_for_hash(wikitext, data_type):
         if infobox:
             content_parts.append(infobox)
         # 提取故事段落（==角色故事== 之后的全部内容，直到下一个顶级段落或文末）
-        story_match = re.search(r'==\s*角色故事\s*==\s*\n(.*?)(?=\n==[^=]|\Z)', wikitext, re.DOTALL)
+        story_match = re.search(r"==\s*角色故事\s*==\s*\n(.*?)(?=\n==[^=]|\Z)", wikitext, re.DOTALL)
         if story_match:
             content_parts.append(story_match.group(1))
         # 提取语音文本
-        vo_match = re.search(r'==\s*角色语音\s*==\s*\n(.*?)(?=\n==[^=]|\Z)', wikitext, re.DOTALL)
+        vo_match = re.search(r"==\s*角色语音\s*==\s*\n(.*?)(?=\n==[^=]|\Z)", wikitext, re.DOTALL)
         if vo_match:
             content_parts.append(vo_match.group(1))
         return "\n".join(content_parts)
@@ -175,7 +192,7 @@ def _extract_content_for_hash(wikitext, data_type):
         # 通常任务页的剧情在 ==任务剧情== 或 ==对话== 标题下
         content_parts = []
         for heading in ["任务剧情", "对话", "剧情", "任务流程"]:
-            m = re.search(rf'==\s*{heading}\s*==\s*\n(.*?)(?=\n==[^=]|\Z)', wikitext, re.DOTALL)
+            m = re.search(rf"==\s*{heading}\s*==\s*\n(.*?)(?=\n==[^=]|\Z)", wikitext, re.DOTALL)
             if m:
                 content_parts.append(m.group(1))
         if not content_parts:
@@ -184,7 +201,7 @@ def _extract_content_for_hash(wikitext, data_type):
             if infobox:
                 content_parts.append(infobox)
             # 取第一个 == 段落之后的内容
-            first_section = re.search(r'==[^=].*?==\s*\n(.*)', wikitext, re.DOTALL)
+            first_section = re.search(r"==[^=].*?==\s*\n(.*)", wikitext, re.DOTALL)
             if first_section:
                 content_parts.append(first_section.group(1))
         return "\n".join(content_parts)
@@ -206,7 +223,7 @@ def _extract_content_for_hash(wikitext, data_type):
             if tmpl:
                 content_parts.append(tmpl)
         # 提取正文段落
-        sections = re.findall(r'==[^=].*?==\s*\n(.*?)(?=\n==[^=]|\Z)', wikitext, re.DOTALL)
+        sections = re.findall(r"==[^=].*?==\s*\n(.*?)(?=\n==[^=]|\Z)", wikitext, re.DOTALL)
         content_parts.extend(sections)
         return "\n".join(content_parts)
 
@@ -217,24 +234,24 @@ def _extract_content_for_hash(wikitext, data_type):
 
 def _extract_template(text, template_name):
     """提取指定名称的 wiki 模板内容。"""
-    pattern = r'\{\{' + re.escape(template_name)
+    pattern = r"\{\{" + re.escape(template_name)
     match = re.search(pattern, text)
     if not match:
         return ""
     pos = match.end()
     depth = 1
     while pos < len(text) and depth > 0:
-        if text[pos:pos+2] == "{{":
+        if text[pos : pos + 2] == "{{":
             depth += 1
             pos += 2
-        elif text[pos:pos+2] == "}}":
+        elif text[pos : pos + 2] == "}}":
             depth -= 1
             pos += 2
         else:
             pos += 1
     if depth != 0:
         return ""
-    return text[match.start():pos]
+    return text[match.start() : pos]
 
 
 def compute_content_hash(wikitext, data_type):
@@ -244,6 +261,7 @@ def compute_content_hash(wikitext, data_type):
 
 
 # ====== 本地数据查询 ======
+
 
 def _load_local_manifest():
     """加载本地 manifest。"""
@@ -266,6 +284,7 @@ def _build_local_index(category_key):
 
 
 # ====== Wiki 数据拉取 ======
+
 
 def fetch_category_pages(category_name):
     """拉取指定分类下所有页面列表（带分页）。"""
@@ -309,7 +328,7 @@ def fetch_pages_info(pages):
     total = len(pages)
 
     for i in range(0, total, BATCH_SIZE):
-        batch = pages[i:i+BATCH_SIZE]
+        batch = pages[i : i + BATCH_SIZE]
         pageids = "|".join(str(p["pageid"]) for p in batch)
 
         params = {
@@ -319,7 +338,7 @@ def fetch_pages_info(pages):
         }
         data = api_get(params)
         if not data:
-            log(f"  prop=info 批次 {i//BATCH_SIZE + 1} 失败，跳过")
+            log(f"  prop=info 批次 {i // BATCH_SIZE + 1} 失败，跳过")
             continue
 
         result_pages = data.get("query", {}).get("pages", {})
@@ -334,7 +353,7 @@ def fetch_pages_info(pages):
                 "length": info.get("length", 0),
             }
 
-        log(f"  prop=info 批次 {i//BATCH_SIZE + 1}/{(total+BATCH_SIZE-1)//BATCH_SIZE}: {len(batch)} 页")
+        log(f"  prop=info 批次 {i // BATCH_SIZE + 1}/{(total + BATCH_SIZE - 1) // BATCH_SIZE}: {len(batch)} 页")
         if i + BATCH_SIZE < total:
             time.sleep(REQUEST_INTERVAL)
 
@@ -372,6 +391,7 @@ def fetch_page_content(page_title):
 
 # ====== 差异对比 ======
 
+
 def classify_update(old_wikitext, new_wikitext, data_type):
     """分类更新类型：CONTENT_MAJOR / STATS_MINOR / META_ONLY。
     通过对比段落标题变化来判断。"""
@@ -379,24 +399,45 @@ def classify_update(old_wikitext, new_wikitext, data_type):
         return "CONTENT_MAJOR"  # 新增页面
 
     # 提取新旧版本的段落标题
-    old_sections = set(re.findall(r'==\s*([^=]+?)\s*==', old_wikitext))
-    new_sections = set(re.findall(r'==\s*([^=]+?)\s*==', new_wikitext))
+    old_sections = set(re.findall(r"==\s*([^=]+?)\s*==", old_wikitext))
+    new_sections = set(re.findall(r"==\s*([^=]+?)\s*==", new_wikitext))
 
     added = new_sections - old_sections
     removed = old_sections - new_sections
 
     # 剧情/故事/语音相关段落变化 → MAJOR
-    content_headings = {"角色故事", "角色语音", "任务剧情", "对话", "剧情", "故事",
-                         "角色详细", "神之眼", "任务流程", "相关剧情", "语音"}
-    for h in (added | removed):
+    content_headings = {
+        "角色故事",
+        "角色语音",
+        "任务剧情",
+        "对话",
+        "剧情",
+        "故事",
+        "角色详细",
+        "神之眼",
+        "任务流程",
+        "相关剧情",
+        "语音",
+    }
+    for h in added | removed:
         for ch in content_headings:
             if ch in h:
                 return "CONTENT_MAJOR"
 
     # 数值/属性相关段落变化 → MINOR
-    stat_headings = {"属性", "突破", "天赋", "命之座", "推荐配队", "推荐装备",
-                      "圣遗物推荐", "武器推荐", "面板推荐", "养成材料"}
-    for h in (added | removed):
+    stat_headings = {
+        "属性",
+        "突破",
+        "天赋",
+        "命之座",
+        "推荐配队",
+        "推荐装备",
+        "圣遗物推荐",
+        "武器推荐",
+        "面板推荐",
+        "养成材料",
+    }
+    for h in added | removed:
         for sh in stat_headings:
             if sh in h:
                 return "STATS_MINOR"
@@ -419,6 +460,7 @@ def classify_update(old_wikitext, new_wikitext, data_type):
 
 # ====== 主流程 ======
 
+
 def diff_category(category_key, auto_fetch=False):
     """对比单个分类的 wiki 数据与本地数据。"""
     cat_config = CATEGORY_MAP.get(category_key)
@@ -430,10 +472,10 @@ def diff_category(category_key, auto_fetch=False):
     data_type = cat_config["data_type"]
     local_index = _build_local_index(category_key)
 
-    log(f"\n{'='*60}")
+    log(f"\n{'=' * 60}")
     log(f"  对比分类: {category_key} (Category:{wiki_cat})")
     log(f"  本地已知页面: {len(local_index)}")
-    log(f"{'='*60}")
+    log(f"{'=' * 60}")
 
     # Step 1: 拉取 wiki 页面列表
     wiki_pages = fetch_category_pages(wiki_cat)
@@ -445,10 +487,10 @@ def diff_category(category_key, auto_fetch=False):
     wiki_info = fetch_pages_info(wiki_pages)
 
     # Step 3: 快速对比（lastrevid 预筛）
-    new_pages = []       # wiki 有，本地没有
-    changed_pages = []   # lastrevid 变了，需要进一步 Hash 验证
-    unchanged_pages = [] # lastrevid 没变
-    deleted_pages = []   # 本地有，wiki 没有
+    new_pages = []  # wiki 有，本地没有
+    changed_pages = []  # lastrevid 变了，需要进一步 Hash 验证
+    unchanged_pages = []  # lastrevid 没变
+    deleted_pages = []  # 本地有，wiki 没有
 
     wiki_titles = {info["title"] for info in wiki_info.values()}
 
@@ -466,8 +508,10 @@ def diff_category(category_key, auto_fetch=False):
         if title not in wiki_titles:
             deleted_pages.append((title, local_index[title]))
 
-    log(f"  新增: {len(new_pages)} | 可能更新: {len(changed_pages)} | "
-        f"未变: {len(unchanged_pages)} | 本地多出: {len(deleted_pages)}")
+    log(
+        f"  新增: {len(new_pages)} | 可能更新: {len(changed_pages)} | "
+        f"未变: {len(unchanged_pages)} | 本地多出: {len(deleted_pages)}"
+    )
 
     # Step 4: 对 changed_pages 做内容 Hash 校验
     # 特殊处理：lastrevid=0 表示未建立基线，直接记录 Hash 不报更新
@@ -476,7 +520,7 @@ def diff_category(category_key, auto_fetch=False):
     baseline_pages = []  # 首次基线：只记录 Hash，不报更新
 
     for pid, title, info, local_entry in changed_pages:
-        is_baseline = (local_entry.get("lastrevid", 0) == 0)
+        is_baseline = local_entry.get("lastrevid", 0) == 0
         if is_baseline:
             log(f"  基线建立: {title}")
         else:
@@ -491,25 +535,27 @@ def diff_category(category_key, auto_fetch=False):
         old_hash = local_entry.get("content_hash", "")
 
         if is_baseline:
-            baseline_pages.append({
-                "pageid": pid,
-                "title": title,
-                "new_lastrevid": info["lastrevid"],
-                "new_hash": new_hash,
-            })
-        elif new_hash != old_hash:
-            update_type = classify_update(
-                local_entry.get("_last_wikitext", ""), wikitext, data_type
+            baseline_pages.append(
+                {
+                    "pageid": pid,
+                    "title": title,
+                    "new_lastrevid": info["lastrevid"],
+                    "new_hash": new_hash,
+                }
             )
-            real_updates.append({
-                "pageid": pid,
-                "title": title,
-                "old_lastrevid": local_entry.get("lastrevid"),
-                "new_lastrevid": info["lastrevid"],
-                "old_hash": old_hash,
-                "new_hash": new_hash,
-                "update_type": update_type,
-            })
+        elif new_hash != old_hash:
+            update_type = classify_update(local_entry.get("_last_wikitext", ""), wikitext, data_type)
+            real_updates.append(
+                {
+                    "pageid": pid,
+                    "title": title,
+                    "old_lastrevid": local_entry.get("lastrevid"),
+                    "new_lastrevid": info["lastrevid"],
+                    "old_hash": old_hash,
+                    "new_hash": new_hash,
+                    "update_type": update_type,
+                }
+            )
             log(f"    → 实质更新 [{update_type}]")
         else:
             false_updates.append({"pageid": pid, "title": title})
@@ -627,15 +673,18 @@ def init_manifest_from_local(category_key):
             # 导入 Python 模块
             mod_name = os.path.splitext(os.path.basename(output_file))[0]
             import importlib.util
+
             spec = importlib.util.spec_from_file_location(mod_name, output_file)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             # 按模块约定查找数据
-            data = (getattr(mod, "角色知识库", None)
-                    or getattr(mod, "武器知识库", None)
-                    or getattr(mod, "圣遗物知识库", None)
-                    or getattr(mod, "材料知识库", None)
-                    or [])
+            data = (
+                getattr(mod, "角色知识库", None)
+                or getattr(mod, "武器知识库", None)
+                or getattr(mod, "圣遗物知识库", None)
+                or getattr(mod, "材料知识库", None)
+                or []
+            )
         else:
             data = []
 
@@ -685,10 +734,10 @@ def diff_category_light(category_key):
     data_type = cat_config["data_type"]
     local_index = _build_local_index(category_key)
 
-    log(f"\n{'='*60}")
+    log(f"\n{'=' * 60}")
     log(f"  轻量对比: {category_key} (Category:{wiki_cat})")
     log(f"  本地已知页面: {len(local_index)}")
-    log(f"{'='*60}")
+    log(f"{'=' * 60}")
 
     wiki_pages = fetch_category_pages(wiki_cat)
     if not wiki_pages:
@@ -724,11 +773,19 @@ def diff_category_light(category_key):
         if local_entry.get("lastrevid", 0) == 0:
             baseline_pages.append({"pageid": pid, "title": title, "new_lastrevid": info["lastrevid"]})
         else:
-            real_changed.append({"pageid": pid, "title": title, "new_lastrevid": info["lastrevid"],
-                                 "old_lastrevid": local_entry["lastrevid"]})
+            real_changed.append(
+                {
+                    "pageid": pid,
+                    "title": title,
+                    "new_lastrevid": info["lastrevid"],
+                    "old_lastrevid": local_entry["lastrevid"],
+                }
+            )
 
-    log(f"  新增: {len(new_pages)} | 可能更新: {len(real_changed)} | "
-        f"待基线: {len(baseline_pages)} | 未变: {len(unchanged_pages)} | 本地多出: {len(deleted_pages)}")
+    log(
+        f"  新增: {len(new_pages)} | 可能更新: {len(real_changed)} | "
+        f"待基线: {len(baseline_pages)} | 未变: {len(unchanged_pages)} | 本地多出: {len(deleted_pages)}"
+    )
 
     return {
         "category": category_key,
@@ -746,9 +803,15 @@ def diff_category_light(category_key):
         },
         "new_pages": [{"pageid": pid, "title": t, "info": i} for pid, t, i in new_pages],
         "baseline_pages": baseline_pages,
-        "real_updates": [{"pageid": r["pageid"], "title": r["title"],
-                          "old_lastrevid": r["old_lastrevid"],
-                          "new_lastrevid": r["new_lastrevid"]} for r in real_changed],
+        "real_updates": [
+            {
+                "pageid": r["pageid"],
+                "title": r["title"],
+                "old_lastrevid": r["old_lastrevid"],
+                "new_lastrevid": r["new_lastrevid"],
+            }
+            for r in real_changed
+        ],
         "unchanged_count": len(unchanged_pages),
         "deleted_from_wiki": [{"title": t, "local": e} for t, e in deleted_pages],
     }
@@ -768,30 +831,36 @@ def generate_content_queue(reports):
         data_type = report["data_type"]
         # 新增页面
         for np in report.get("new_pages", []):
-            queue.append({
-                "category": cat,
-                "data_type": data_type,
-                "title": np["title"],
-                "reason": "new",
-                "api_url": f"https://wiki.biligame.com/ys/api.php?action=query&format=json&prop=revisions&titles={np['title']}&rvprop=content",
-            })
+            queue.append(
+                {
+                    "category": cat,
+                    "data_type": data_type,
+                    "title": np["title"],
+                    "reason": "new",
+                    "api_url": f"https://wiki.biligame.com/ys/api.php?action=query&format=json&prop=revisions&titles={np['title']}&rvprop=content",
+                }
+            )
         # 更新 + 基线页面
         for bp in report.get("baseline_pages", []):
-            queue.append({
-                "category": cat,
-                "data_type": data_type,
-                "title": bp["title"],
-                "reason": "baseline",
-                "api_url": f"https://wiki.biligame.com/ys/api.php?action=query&format=json&prop=revisions&titles={bp['title']}&rvprop=content",
-            })
+            queue.append(
+                {
+                    "category": cat,
+                    "data_type": data_type,
+                    "title": bp["title"],
+                    "reason": "baseline",
+                    "api_url": f"https://wiki.biligame.com/ys/api.php?action=query&format=json&prop=revisions&titles={bp['title']}&rvprop=content",
+                }
+            )
         for upd in report.get("real_updates", []):
-            queue.append({
-                "category": cat,
-                "data_type": data_type,
-                "title": upd["title"],
-                "reason": "update",
-                "api_url": f"https://wiki.biligame.com/ys/api.php?action=query&format=json&prop=revisions&titles={upd['title']}&rvprop=content",
-            })
+            queue.append(
+                {
+                    "category": cat,
+                    "data_type": data_type,
+                    "title": upd["title"],
+                    "reason": "update",
+                    "api_url": f"https://wiki.biligame.com/ys/api.php?action=query&format=json&prop=revisions&titles={upd['title']}&rvprop=content",
+                }
+            )
     return queue
 
 
@@ -844,37 +913,41 @@ def process_content_results(results_file):
             old_hash = local_entry.get("content_hash", "")
 
             if reason == "baseline" or local_entry.get("lastrevid", 0) == 0:
-                baseline_pages.append({
-                    "title": title,
-                    "new_hash": new_hash,
-                    "new_lastrevid": local_entry.get("lastrevid", 0),
-                })
+                baseline_pages.append(
+                    {
+                        "title": title,
+                        "new_hash": new_hash,
+                        "new_lastrevid": local_entry.get("lastrevid", 0),
+                    }
+                )
                 cat_manifest[title] = {
                     "lastrevid": local_entry.get("lastrevid", 0),
                     "content_hash": new_hash,
                 }
             elif new_hash != old_hash:
-                update_type = classify_update(
-                    local_entry.get("_last_wikitext", ""), wikitext, data_type
+                update_type = classify_update(local_entry.get("_last_wikitext", ""), wikitext, data_type)
+                real_updates.append(
+                    {
+                        "title": title,
+                        "old_hash": old_hash,
+                        "new_hash": new_hash,
+                        "update_type": update_type,
+                    }
                 )
-                real_updates.append({
-                    "title": title,
-                    "old_hash": old_hash,
-                    "new_hash": new_hash,
-                    "update_type": update_type,
-                })
                 cat_manifest[title]["content_hash"] = new_hash
 
         log(f"  [{cat}] 实质更新: {len(real_updates)}, 基线: {len(baseline_pages)}, 失败: {len(failed)}")
 
         # 保存 manifest
         manifest[cat] = cat_manifest
-        all_reports.append({
-            "category": cat,
-            "real_updates": real_updates,
-            "baseline_pages": baseline_pages,
-            "failed": failed,
-        })
+        all_reports.append(
+            {
+                "category": cat,
+                "real_updates": real_updates,
+                "baseline_pages": baseline_pages,
+                "failed": failed,
+            }
+        )
 
     safe_write(MANIFEST_FILE, manifest)
     safe_write(DIFF_REPORT_FILE, all_reports)
@@ -884,10 +957,10 @@ def process_content_results(results_file):
     total_baseline = sum(len(r["baseline_pages"]) for r in all_reports)
     total_failed = sum(len(r.get("failed", [])) for r in all_reports)
 
-    log(f"\n{'='*60}")
+    log(f"\n{'=' * 60}")
     log(f"  处理完成")
     log(f"  实质更新: {total_updated} | 基线建立: {total_baseline} | 失败: {total_failed}")
-    log(f"{'='*60}")
+    log(f"{'=' * 60}")
 
     if total_updated > 0:
         log(f"\n--- 实质更新详情 ---")
@@ -914,10 +987,10 @@ def diff_category_from_cache(category_key, metadata_file):
     data_type = cat_config["data_type"]
     local_index = _build_local_index(category_key)
 
-    log(f"\n{'='*60}")
+    log(f"\n{'=' * 60}")
     log(f"  缓存对比: {category_key}")
     log(f"  wiki 页面: {len(wiki_info)} | 本地已知: {len(local_index)}")
-    log(f"{'='*60}")
+    log(f"{'=' * 60}")
 
     new_pages = []
     changed_pages = []
@@ -953,12 +1026,19 @@ def diff_category_from_cache(category_key, metadata_file):
         if local_entry.get("lastrevid", 0) == 0:
             baseline_pages.append(info)
         else:
-            real_changed.append({"pageid": info["pageid"], "title": info["title"],
-                                 "old_lastrevid": local_entry["lastrevid"],
-                                 "new_lastrevid": info["lastrevid"]})
+            real_changed.append(
+                {
+                    "pageid": info["pageid"],
+                    "title": info["title"],
+                    "old_lastrevid": local_entry["lastrevid"],
+                    "new_lastrevid": info["lastrevid"],
+                }
+            )
 
-    log(f"  新增: {len(new_pages)} | 可能更新: {len(real_changed)} | "
-        f"待基线: {len(baseline_pages)} | 未变: {len(unchanged_pages)} | 本地多出: {len(deleted_pages)}")
+    log(
+        f"  新增: {len(new_pages)} | 可能更新: {len(real_changed)} | "
+        f"待基线: {len(baseline_pages)} | 未变: {len(unchanged_pages)} | 本地多出: {len(deleted_pages)}"
+    )
 
     return {
         "category": category_key,
@@ -994,7 +1074,7 @@ def main():
     i = 0
     while i < len(args):
         if args[i] == "--category" and i + 1 < len(args):
-            target_categories = [args[i+1]]
+            target_categories = [args[i + 1]]
             i += 2
         elif args[i] == "--auto-fetch":
             auto_fetch = True
@@ -1006,10 +1086,10 @@ def main():
             skip_content = True
             i += 1
         elif args[i] == "--process-queue" and i + 1 < len(args):
-            process_queue_file = args[i+1]
+            process_queue_file = args[i + 1]
             i += 2
         elif args[i] == "--load-metadata" and i + 1 < len(args):
-            load_metadata_file = args[i+1]
+            load_metadata_file = args[i + 1]
             i += 2
         else:
             i += 1
@@ -1103,9 +1183,9 @@ def main():
         return
 
     # 输出汇总
-    log(f"\n{'='*60}")
+    log(f"\n{'=' * 60}")
     log(f"  差异报告汇总")
-    log(f"{'='*60}")
+    log(f"{'=' * 60}")
 
     total_new = sum(r["summary"]["new"] for r in all_reports)
     total_updates = sum(r["summary"]["real_updates"] for r in all_reports)

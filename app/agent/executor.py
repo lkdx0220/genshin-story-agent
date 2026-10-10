@@ -3,6 +3,7 @@
 
 负责执行 LLM 输出的 tool_calls，并实现熔断截断（防止规划阶段过度搜索）。
 """
+
 import json
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -40,7 +41,7 @@ def _previous_tool_results(messages) -> dict:
     for msg in messages:
         if not isinstance(msg, AIMessage):
             continue
-        for tc in (getattr(msg, "tool_calls", None) or []):
+        for tc in getattr(msg, "tool_calls", None) or []:
             sig = _tool_call_signature(tc.get("name", ""), tc.get("args", {}) or {})
             if sig in out:
                 continue
@@ -66,7 +67,7 @@ def _last_tool_calls(messages):
     if not messages:
         return False, None
     last_msg = messages[-1]
-    if not isinstance(last_msg, AIMessage) or not hasattr(last_msg, 'tool_calls'):
+    if not isinstance(last_msg, AIMessage) or not hasattr(last_msg, "tool_calls"):
         return False, None
     return True, last_msg.tool_calls
 
@@ -140,15 +141,18 @@ def _tool_trace_status(result_str: str) -> str:
 
 def _trace_tool_end(tool_name, tc_id, run_id, status: str, result_str: str, meltdown_trigger: bool) -> None:
     """上报单条 tool_end trace 事件（字段与顺序同原实现）。"""
-    trace_emit("tool_end", {
-        "tool": tool_name,
-        "tool_call_id": tc_id,
-        "run_id": run_id,
-        "status": status,
-        "result_preview": result_str[:500],
-        "result_length": len(result_str),
-        "meltdown_trigger": meltdown_trigger,
-    })
+    trace_emit(
+        "tool_end",
+        {
+            "tool": tool_name,
+            "tool_call_id": tc_id,
+            "run_id": run_id,
+            "status": status,
+            "result_preview": result_str[:500],
+            "result_length": len(result_str),
+            "meltdown_trigger": meltdown_trigger,
+        },
+    )
 
 
 def tool_executor(state):
@@ -200,12 +204,15 @@ def tool_executor(state):
         _emit_progress("tool_start", {"tool": tool_name, "args": args_brief})
 
         # 结构化 Trace 事件（默认关闭）
-        trace_emit("tool_start", {
-            "tool": tool_name,
-            "args": tool_args,
-            "tool_call_id": tc_id,
-            "run_id": run_id,
-        })
+        trace_emit(
+            "tool_start",
+            {
+                "tool": tool_name,
+                "args": tool_args,
+                "tool_call_id": tc_id,
+                "run_id": run_id,
+            },
+        )
 
         # ---- 代码加固 1：熔断截断 ----
         # 同轮内允许多个 load_/find_first_mention 并行执行（如对比分析需加载两个任务）
@@ -234,7 +241,11 @@ def tool_executor(state):
         # 结构化 Trace 事件（默认关闭）
         trace_status = _tool_trace_status(result_str)
         _trace_tool_end(
-            tool_name, tc_id, run_id, trace_status, result_str,
+            tool_name,
+            tc_id,
+            run_id,
+            trace_status,
+            result_str,
             tool_name in MELTDOWN_TRIGGER_TOOLS and trace_status == "success",
         )
 

@@ -48,7 +48,14 @@ TOOL_GROUPS = {
         "count_character_lines",
         "list_all_quest_series",
     ],
-    "C1": ["query_weapon", "query_artifact", "query_material", "query_recipe", "query_food", "list_all_weapons_and_artifacts"],
+    "C1": [
+        "query_weapon",
+        "query_artifact",
+        "query_material",
+        "query_recipe",
+        "query_food",
+        "list_all_weapons_and_artifacts",
+    ],
     "C2": [
         "query_monster",
         "query_collectible",
@@ -58,8 +65,13 @@ TOOL_GROUPS = {
         "list_all_game_items",
     ],
     "D": [
-        "query_story", "query_quest", "load_quest_content", "search_all",
-        "wiki_graph_search", "wiki_graph_expand", "wiki_graph_get",
+        "query_story",
+        "query_quest",
+        "load_quest_content",
+        "search_all",
+        "wiki_graph_search",
+        "wiki_graph_expand",
+        "wiki_graph_get",
     ],
     "E": ["load_book_content", "get_book_metadata", "list_all_books"],
     "F": ["find_first_mention"],
@@ -73,9 +85,14 @@ for _group_names in TOOL_GROUPS.values():
 
 # ====== 标签中文名（供 grounding 展示） ======
 LABEL_CN = {
-    "A": "搜索检索", "B": "角色查询", "C1": "装备养成",
-    "C2": "世界生态", "D": "剧情任务", "E": "书籍文献",
-    "F": "溯源追踪", "ALL": "全量工具",
+    "A": "搜索检索",
+    "B": "角色查询",
+    "C1": "装备养成",
+    "C2": "世界生态",
+    "D": "剧情任务",
+    "E": "书籍文献",
+    "F": "溯源追踪",
+    "ALL": "全量工具",
 }
 
 # 任务/剧情元数据查询的确定性硬规则：不依赖路由模型的判断，
@@ -185,8 +202,8 @@ ALL—— 全量工具：问题明确要求跨多个维度的综合检索
 
 CONTENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "content_data")
 
-_entity_registry = None        # {name: (labels_set, [short_names])}
-_shortname_index = None        # {short_name: (name, labels_set)}
+_entity_registry = None  # {name: (labels_set, [short_names])}
+_shortname_index = None  # {short_name: (name, labels_set)}
 _exact_index_bracketless = None  # {bracketless_name: (name, labels_set)}
 
 # ======================================================================
@@ -194,16 +211,16 @@ _exact_index_bracketless = None  # {bracketless_name: (name, labels_set)}
 # 从 传说任务章节列表.txt 解析，过滤掉版本活动/非传说任务
 # ======================================================================
 
-_legendary_quest_map = None           # {canonical_name: chapter_name}
-_alias_to_legendary_map = None        # {alias: (canonical, chapter)}
+_legendary_quest_map = None  # {canonical_name: chapter_name}
+_alias_to_legendary_map = None  # {alias: (canonical, chapter)}
 _aliases_sorted_for_legendary = None  # [alias, ...] 按长度降序
-_pseudo_legendary_map = None          # {戏称: (活动名, 备注)} 如 "兹白传说任务"→("奔霄颂玉轮", "2026年海灯节")
-_pseudo_aliases_sorted = None         # [戏称, ...] 按长度降序
+_pseudo_legendary_map = None  # {戏称: (活动名, 备注)} 如 "兹白传说任务"→("奔霄颂玉轮", "2026年海灯节")
+_pseudo_aliases_sorted = None  # [戏称, ...] 按长度降序
 
 # 传说任务章节列表的两种行格式（模块级常量，避免每行重复编译）
-_LEGENDARY_LINE_RE = re.compile(r'^(.+?)[：:,，]\s*(.+)$')
+_LEGENDARY_LINE_RE = re.compile(r"^(.+?)[：:,，]\s*(.+)$")
 # 提取戏称关键词: "被戏称为是兹白传说任务" → 兹白传说任务
-_PSEUDO_ALIAS_RE = re.compile(r'被戏称为(?:是)?(.+?)(?:（.+）)?$')
+_PSEUDO_ALIAS_RE = re.compile(r"被戏称为(?:是)?(.+?)(?:（.+）)?$")
 
 
 def _legendary_txt_path() -> str:
@@ -216,7 +233,7 @@ def _register_pseudo(pseudo_map: dict, alias: str, name: str, detail: str) -> No
     如「胡桃传说任务第二幕（胡桃传说任务2）」要把括号里的简称一并登记。
     """
     pseudo_map[alias] = (name, detail)
-    bracket_match = re.search(r'（(.+?)）', detail)
+    bracket_match = re.search(r"（(.+?)）", detail)
     if bracket_match:
         pseudo_map[bracket_match.group(1).strip()] = (name, detail)
 
@@ -287,9 +304,11 @@ def _build_alias_to_legendary(quest_map: dict, pseudo_map: dict) -> Tuple[dict, 
     except ImportError:
         print("[传说任务映射] 无法导入 character_aliases，跳过别名锚定")
         return {}, []
-    print(f"[传说任务映射] 已构建: {len(quest_map)} 个角色→章节 + "
-          f"{len(alias_map)} 个反向别名 + "
-          f"{len(pseudo_map)} 个戏称活动映射")
+    print(
+        f"[传说任务映射] 已构建: {len(quest_map)} 个角色→章节 + "
+        f"{len(alias_map)} 个反向别名 + "
+        f"{len(pseudo_map)} 个戏称活动映射"
+    )
     return alias_map, aliases_sorted
 
 
@@ -326,7 +345,7 @@ def _get_legendary_quest_map():
 
 def _strip_brackets(text: str) -> str:
     """去除书名号/引号等装饰符号"""
-    return re.sub(r'[《》「」『』""''（）\\s]', '', text).strip()
+    return re.sub(r'[《》「」『』""' "（）\\s]", "", text).strip()
 
 
 def _generate_short_names(name: str) -> List[str]:
@@ -340,6 +359,7 @@ def _generate_short_names(name: str) -> List[str]:
     if len(clean) >= 4 and clean[:4] != clean[:2]:
         shorts.append(clean[:4])
     return shorts
+
 
 # 实体来源表：顺序即装载顺序，决定 registry 的插入顺序（短名索引与去括号索引都依赖它，
 # 首见者胜出），因此不要重排、不要合并同类项。
@@ -385,8 +405,7 @@ def _load_registry_from_module(registry: dict, module_attr: str, field: str, lab
         pass
 
 
-def _load_registry_from_json(registry: dict, filename: str, field: str, label: str,
-                             use_keys: bool = False) -> None:
+def _load_registry_from_json(registry: dict, filename: str, field: str, label: str, use_keys: bool = False) -> None:
     """从 content_data 的 JSON 装载；use_keys=True 时取对象键名（如 NPC）。
 
     文件名都是本模块内的字面量；这里做 basename 归一 + .json 白名单式的纵深防御，
@@ -486,6 +505,7 @@ def _get_entity_registry():
     unique_short = len(shortname_index)
     print(f"[实体注册表] 已构建: {total} 个实体, {unique_short} 个唯一短名")
     return registry, shortname_index, exact_index_bracketless
+
 
 def _new_anchor_state() -> dict:
     """锚定过程的累加状态：实体→标签集、候选标签有序表与去重集。"""
@@ -671,7 +691,7 @@ def route_intent(
         response = _router_llm.invoke([HumanMessage(content=prompt)])
         raw = response.content.strip()
         _last_raw_response = raw
-        match = re.search(r'\[.*?\]', raw, re.DOTALL)
+        match = re.search(r"\[.*?\]", raw, re.DOTALL)
         if match:
             labels = ast.literal_eval(match.group(0))
         else:
@@ -722,7 +742,7 @@ def get_pseudo_legendary_note(query: str) -> str:
             return (
                 f"[戏称提醒] 用户查询中的「{alias}」不是真正的传说任务，"
                 f"而是社区对活动「{activity_name}」({remark.split('、')[0] if '、' in remark else remark})的戏称。"
-                f"请直接调用 load_quest_content(\"{activity_name}\") 加载该活动内容，"
+                f'请直接调用 load_quest_content("{activity_name}") 加载该活动内容，'
                 f"不要调用 query_quest。回答时需先说明「{alias.split('传说任务')[0] if '传说任务' in alias else alias}没有传说任务，"
                 f"但'{remark.split('、')[0] if '、' in remark else remark}'被社区戏称为{alias}」。"
             )
@@ -732,6 +752,7 @@ def get_pseudo_legendary_note(query: str) -> str:
 # ======================================================================
 # 工具选择
 # ======================================================================
+
 
 def get_tools_for_intent(labels: List[str], all_tools_by_name: dict) -> list:
     """根据意图标签返回该轮可用的工具列表。

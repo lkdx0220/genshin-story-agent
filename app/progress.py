@@ -5,6 +5,7 @@
 _cancel_events 由 tool_executor/agent 节点共享。
 放在独立模块避免 app.tools 和 app.agent 之间循环导入。
 """
+
 import logging
 import threading
 from typing import Dict

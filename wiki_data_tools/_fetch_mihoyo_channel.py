@@ -18,6 +18,7 @@
   python _fetch_mihoyo_channel.py --list-only --tier 1
   python _fetch_mihoyo_channel.py --channel 43 --seed content_data/mihoyo_tasks_raw.json
 """
+
 import argparse
 import hashlib
 import json
@@ -50,11 +51,16 @@ DEFAULT_DELAY = 0.6
 SAVE_EVERY = 25
 
 HEADERS = [
-    "-H", "x-rpc-wiki_app: genshin",
-    "-H", "Accept: application/json, text/plain, */*",
-    "-H", "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
-    "-H", "Referer: https://baike.mihoyo.com/ys/obc/",
-    "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "-H",
+    "x-rpc-wiki_app: genshin",
+    "-H",
+    "Accept: application/json, text/plain, */*",
+    "-H",
+    "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
+    "-H",
+    "Referer: https://baike.mihoyo.com/ys/obc/",
+    "-H",
+    "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 ]
 
 
@@ -78,11 +84,16 @@ def curl_get(url, params=None, timeout=30):
     try:
         result = subprocess.run(
             [
-                "curl.exe", "-s", "--compressed",
-                "-w", "%{http_code}",
-                "-o", tmp_path,
+                "curl.exe",
+                "-s",
+                "--compressed",
+                "-w",
+                "%{http_code}",
+                "-o",
+                tmp_path,
                 *HEADERS,
-                "--max-time", str(timeout),
+                "--max-time",
+                str(timeout),
                 url,
             ],
             capture_output=True,
@@ -156,6 +167,7 @@ def fetch_entry_page(content_id):
 
 
 # ====== manifest / 指纹工具 ======
+
 
 def _sha1_text(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()
@@ -232,9 +244,35 @@ def raw_page_hash_map(channel_id: int) -> dict:
 def select_channels(channel_ids, tier):
     """返回按建议顺序排列的 (channel_id, graph_type) 列表。"""
     order = [
-        43, 251, 20, 25, 261, 5, 218, 68, 6, 255, 13, 105, 278,
-        276, 54, 55, 257, 21, 49, 227, 252, 244, 109, 211, 130,
-        65, 249, 275, 260,
+        43,
+        251,
+        20,
+        25,
+        261,
+        5,
+        218,
+        68,
+        6,
+        255,
+        13,
+        105,
+        278,
+        276,
+        54,
+        55,
+        257,
+        21,
+        49,
+        227,
+        252,
+        244,
+        109,
+        211,
+        130,
+        65,
+        249,
+        275,
+        260,
     ]
     if channel_ids:
         selected = [cid for cid in order if cid in channel_ids]
@@ -242,7 +280,8 @@ def select_channels(channel_ids, tier):
             log(f"警告：部分 channel 不在映射中，忽略")
     else:
         selected = [
-            cid for cid in order
+            cid
+            for cid in order
             if cid in CHANNEL_TYPE_MAP and (tier == "all" or CHANNEL_TIERS[CHANNEL_TYPE_MAP[cid]] <= int(tier))
         ]
     return [(cid, CHANNEL_TYPE_MAP[cid]) for cid in selected]
@@ -264,7 +303,9 @@ def seed_from_file(output_path, seed_path, channel_id):
         doc = json.load(f)
     doc = dict(doc)
     doc["channel_id"] = channel_id
-    doc["source"] = f"米游社观测枢频道 {CHANNEL_NAMES.get(channel_id, channel_id)}（seed 自 {os.path.basename(seed_path)}）"
+    doc["source"] = (
+        f"米游社观测枢频道 {CHANNEL_NAMES.get(channel_id, channel_id)}（seed 自 {os.path.basename(seed_path)}）"
+    )
     doc.setdefault("total", len(doc.get("items") or []))
     doc.setdefault("success", sum(1 for it in doc.get("items") or [] if it.get("page")))
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -287,7 +328,7 @@ def process_channel(channel_id, graph_type, args):
         return
 
     if args.limit > 0:
-        items = items[:args.limit]
+        items = items[: args.limit]
 
     # --ids：只处理指定 content_id（用于增量抓取 new/updated）。
     if getattr(args, "ids", None):
@@ -301,21 +342,26 @@ def process_channel(channel_id, graph_type, args):
     if args.list_only:
         summary = []
         for it in items:
-            summary.append({
-                "content_id": it.get("content_id"),
-                "title": it.get("title"),
-                "summary": it.get("summary", ""),
-                "alias_name": it.get("alias_name", ""),
-                "corner_mark": it.get("corner_mark", ""),
-                "filters": parse_channel_filters(it, channel_id),
-            })
+            summary.append(
+                {
+                    "content_id": it.get("content_id"),
+                    "title": it.get("title"),
+                    "summary": it.get("summary", ""),
+                    "alias_name": it.get("alias_name", ""),
+                    "corner_mark": it.get("corner_mark", ""),
+                    "filters": parse_channel_filters(it, channel_id),
+                }
+            )
         os.makedirs(RAW_DIR, exist_ok=True)
-        safe_write(output_path, {
-            "source": f"米游社观测枢频道 {channel_name}",
-            "channel_id": channel_id,
-            "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "items": summary,
-        })
+        safe_write(
+            output_path,
+            {
+                "source": f"米游社观测枢频道 {channel_name}",
+                "channel_id": channel_id,
+                "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "items": summary,
+            },
+        )
         log(f"列表已写入: {output_path}")
         return
 
@@ -356,7 +402,7 @@ def process_channel(channel_id, graph_type, args):
             results.remove(old)
             results_by_id.pop(cid, None)
 
-        log(f"[{channel_id}:{count+1}/{pending}] {cid} | {it.get('title')}")
+        log(f"[{channel_id}:{count + 1}/{pending}] {cid} | {it.get('title')}")
         page = fetch_entry_page(cid)
         item = {
             "content_id": cid,
@@ -373,27 +419,33 @@ def process_channel(channel_id, graph_type, args):
         count += 1
 
         if count % SAVE_EVERY == 0:
-            safe_write(output_path, {
-                "source": f"米游社观测枢频道 {channel_name}",
-                "channel_id": channel_id,
-                "graph_type": graph_type,
-                "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "total": len(items),
-                "success": sum(1 for r in results if r.get("page")),
-                "items": results,
-            })
+            safe_write(
+                output_path,
+                {
+                    "source": f"米游社观测枢频道 {channel_name}",
+                    "channel_id": channel_id,
+                    "graph_type": graph_type,
+                    "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "total": len(items),
+                    "success": sum(1 for r in results if r.get("page")),
+                    "items": results,
+                },
+            )
         if args.delay > 0:
             time.sleep(args.delay)
 
-    safe_write(output_path, {
-        "source": f"米游社观测枢频道 {channel_name}",
-        "channel_id": channel_id,
-        "graph_type": graph_type,
-        "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "total": len(items),
-        "success": sum(1 for r in results if r.get("page")),
-        "items": results,
-    })
+    safe_write(
+        output_path,
+        {
+            "source": f"米游社观测枢频道 {channel_name}",
+            "channel_id": channel_id,
+            "graph_type": graph_type,
+            "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "total": len(items),
+            "success": sum(1 for r in results if r.get("page")),
+            "items": results,
+        },
+    )
     log(f"频道 {channel_id} 完成: 成功 {sum(1 for r in results if r.get('page'))}/{len(results)}，写入 {output_path}")
 
 

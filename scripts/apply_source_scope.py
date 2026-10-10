@@ -73,8 +73,9 @@ def main() -> int:
     parser.add_argument("--scope-dir", default=str(DEFAULT_SCOPE_DIR), help="source_scope 目录")
     parser.add_argument("--lore-file", default=str(DEFAULT_LORE_FILE), help="lore.json 路径")
     parser.add_argument("--apply", action="store_true", help="写入 lore.json；默认 dry-run")
-    parser.add_argument("--include-duplicates", action="store_true",
-                        help="同一 official_doc_id 的重复组也参与替换（默认跳过）")
+    parser.add_argument(
+        "--include-duplicates", action="store_true", help="同一 official_doc_id 的重复组也参与替换（默认跳过）"
+    )
     args = parser.parse_args()
 
     scope_dir = Path(args.scope_dir)
@@ -82,25 +83,17 @@ def main() -> int:
     classification_path = scope_dir / "classification.jsonl"
 
     rows = _load_jsonl(classification_path)
-    ready = [
-        row for row in rows
-        if row.get("replacement_ready") and row.get("module") == "lore"
-    ]
+    ready = [row for row in rows if row.get("replacement_ready") and row.get("module") == "lore"]
     print(f"replacement_ready lore: {len(ready)}")
 
     groups = defaultdict(list)
     for row in ready:
         groups[row.get("official_doc_id") or ""].append(row)
-    duplicate_groups = {
-        doc_id: group for doc_id, group in groups.items() if len(group) > 1
-    }
+    duplicate_groups = {doc_id: group for doc_id, group in groups.items() if len(group) > 1}
     duplicate_records = sum(len(group) for group in duplicate_groups.values())
     print(f"official_doc_id 唯一组: {len(groups)}；重复组: {len(duplicate_groups)}；涉及记录: {duplicate_records}")
 
-    pages = {
-        page["content_id"]: page
-        for page in load_official_map_text_contents()
-    }
+    pages = {page["content_id"]: page for page in load_official_map_text_contents()}
 
     selected = []
     skipped_duplicates = []
@@ -125,8 +118,10 @@ def main() -> int:
         for row in group:
             selected.append((row, page_id, indexes, replacement_text))
 
-    print(f"可替换记录: {len(selected)}；跳过重复记录: {len(skipped_duplicates)}；"
-          f"缺页面: {len(missing_pages)}；错误: {len(errors)}")
+    print(
+        f"可替换记录: {len(selected)}；跳过重复记录: {len(skipped_duplicates)}；"
+        f"缺页面: {len(missing_pages)}；错误: {len(errors)}"
+    )
 
     report = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -138,8 +133,7 @@ def main() -> int:
         "missing_pages": missing_pages,
         "errors": errors,
         "duplicate_groups": {
-            doc_id: [row.get("record_id") for row in group]
-            for doc_id, group in duplicate_groups.items()
+            doc_id: [row.get("record_id") for row in group] for doc_id, group in duplicate_groups.items()
         },
     }
 

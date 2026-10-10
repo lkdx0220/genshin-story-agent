@@ -8,6 +8,7 @@
   绝不因为消解失败而改变既有行为。
 - 只看最近 `_MAX_TURNS` 轮、每轮截断，控制提示词体积与成本。
 """
+
 import json
 import re
 from typing import Tuple
@@ -25,9 +26,9 @@ _COREF_HINT_RE = re.compile(
     r"|上述|前面提到|前面说的|刚才提到|刚才说的)"
 )
 
-_MAX_TURNS = 3            # 只看最近 N 轮对话
-_MAX_TURN_CHARS = 300     # 每轮截断字数
-_MAX_OUTPUT_CHARS = 200   # 消解结果长度上限（超过视为异常输出）
+_MAX_TURNS = 3  # 只看最近 N 轮对话
+_MAX_TURN_CHARS = 300  # 每轮截断字数
+_MAX_OUTPUT_CHARS = 200  # 消解结果长度上限（超过视为异常输出）
 
 
 def _recent_window(state: dict) -> str:

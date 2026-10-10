@@ -46,11 +46,16 @@ APP_SIGN = "ys_obc"
 WIKI_APP = "genshin"
 
 HEADERS = [
-    "-H", "x-rpc-wiki_app: genshin",
-    "-H", "Accept: application/json, text/plain, */*",
-    "-H", "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
-    "-H", "Referer: https://baike.mihoyo.com/ys/obc/",
-    "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "-H",
+    "x-rpc-wiki_app: genshin",
+    "-H",
+    "Accept: application/json, text/plain, */*",
+    "-H",
+    "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8",
+    "-H",
+    "Referer: https://baike.mihoyo.com/ys/obc/",
+    "-H",
+    "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 ]
 
 DEFAULT_REGION = "至冬"
@@ -77,11 +82,16 @@ def curl_get(url, params=None, timeout=30):
     try:
         result = subprocess.run(
             [
-                "curl.exe", "-s", "--compressed",
-                "-w", "%{http_code}",
-                "-o", tmp_path,
+                "curl.exe",
+                "-s",
+                "--compressed",
+                "-w",
+                "%{http_code}",
+                "-o",
+                tmp_path,
                 *HEADERS,
-                "--max-time", str(timeout),
+                "--max-time",
+                str(timeout),
                 url,
             ],
             capture_output=True,
@@ -201,22 +211,27 @@ def main():
         for index, content_id in enumerate(entry_ids, 1):
             log(f"[补充 {index}/{len(entry_ids)}] content_id={content_id}")
             page = fetch_entry_page(content_id)
-            results.append({
-                "content_id": content_id,
-                "title": (page or {}).get("name", ""),
-                "filters": {},
-                "page": page,
-            })
+            results.append(
+                {
+                    "content_id": content_id,
+                    "title": (page or {}).get("name", ""),
+                    "filters": {},
+                    "page": page,
+                }
+            )
             if index < len(entry_ids):
                 time.sleep(args.delay)
-        safe_write(args.output, {
-            "source": "米游社观测枢地图文本频道（历史/补充页面）",
-            "channel_id": TASK_CHANNEL_ID,
-            "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "total": len(results),
-            "success": sum(1 for row in results if row.get("page")),
-            "items": results,
-        })
+        safe_write(
+            args.output,
+            {
+                "source": "米游社观测枢地图文本频道（历史/补充页面）",
+                "channel_id": TASK_CHANNEL_ID,
+                "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "total": len(results),
+                "success": sum(1 for row in results if row.get("page")),
+                "items": results,
+            },
+        )
         log(f"补充页面抓取完成，成功 {sum(1 for row in results if row.get('page'))}/{len(results)}")
         log(f"已写入: {args.output}")
         return
@@ -240,25 +255,30 @@ def main():
     if args.list_only:
         summary = []
         for it in items:
-            summary.append({
-                "content_id": it.get("content_id"),
-                "title": it.get("title"),
-                "summary": it.get("summary", ""),
-                "alias_name": it.get("alias_name", ""),
-                "corner_mark": it.get("corner_mark", ""),
-                "filters": parse_task_filters(it),
-            })
-        safe_write(args.output, {
-            "source": "米游社观测枢地图文本频道",
-            "channel_id": TASK_CHANNEL_ID,
-            "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "items": summary,
-        })
+            summary.append(
+                {
+                    "content_id": it.get("content_id"),
+                    "title": it.get("title"),
+                    "summary": it.get("summary", ""),
+                    "alias_name": it.get("alias_name", ""),
+                    "corner_mark": it.get("corner_mark", ""),
+                    "filters": parse_task_filters(it),
+                }
+            )
+        safe_write(
+            args.output,
+            {
+                "source": "米游社观测枢地图文本频道",
+                "channel_id": TASK_CHANNEL_ID,
+                "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "items": summary,
+            },
+        )
         log(f"列表已写入: {args.output}")
         return
 
     if args.limit > 0:
-        items = items[:args.limit]
+        items = items[: args.limit]
 
     results = []
     total = len(items)
@@ -267,31 +287,38 @@ def main():
         log(f"[{i}/{total}] {item_summary(it)}")
         page = fetch_entry_page(cid)
         if page:
-            results.append({
-                "content_id": cid,
-                "title": it.get("title", ""),
-                "filters": parse_task_filters(it),
-                "page": page,
-            })
+            results.append(
+                {
+                    "content_id": cid,
+                    "title": it.get("title", ""),
+                    "filters": parse_task_filters(it),
+                    "page": page,
+                }
+            )
         else:
-            results.append({
-                "content_id": cid,
-                "title": it.get("title", ""),
-                "filters": parse_task_filters(it),
-                "page": None,
-                "fetch_error": True,
-            })
+            results.append(
+                {
+                    "content_id": cid,
+                    "title": it.get("title", ""),
+                    "filters": parse_task_filters(it),
+                    "page": None,
+                    "fetch_error": True,
+                }
+            )
         if i < total:
             time.sleep(args.delay)
 
-    safe_write(args.output, {
-        "source": "米游社观测枢地图文本频道",
-        "channel_id": TASK_CHANNEL_ID,
-        "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "total": total,
-        "success": sum(1 for r in results if r.get("page")),
-        "items": results,
-    })
+    safe_write(
+        args.output,
+        {
+            "source": "米游社观测枢地图文本频道",
+            "channel_id": TASK_CHANNEL_ID,
+            "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "total": total,
+            "success": sum(1 for r in results if r.get("page")),
+            "items": results,
+        },
+    )
     log(f"地图文本详情抓取完成，成功 {sum(1 for r in results if r.get('page'))}/{total}")
     log(f"已写入: {args.output}")
 

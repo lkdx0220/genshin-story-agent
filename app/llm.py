@@ -15,6 +15,7 @@ Qwen 实例统一使用 QwenFallbackChatOpenAI：
 - answer_llm_light / 路由器原来用 qwen-plus，新接口不支持，因此主用 qwen3.6-flash，
   回退时恢复 qwen-plus（保持“一开始的样子”）。
 """
+
 import logging
 import threading
 import time
@@ -22,9 +23,12 @@ import time
 from langchain_openai import ChatOpenAI
 
 from app.config import (
-    QWEN_API_KEY, QWEN_BASE_URL,
-    QWEN_FALLBACK_API_KEY, QWEN_FALLBACK_BASE_URL,
-    DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL,
+    QWEN_API_KEY,
+    QWEN_BASE_URL,
+    QWEN_FALLBACK_API_KEY,
+    QWEN_FALLBACK_BASE_URL,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_BASE_URL,
 )
 
 
@@ -41,29 +45,63 @@ _QWEN_SWITCH_STRIKES = 0
 # 其余（认证/配额/超时/连接/服务端错误、以及无法识别的异常）都按可切换处理，保住韧性。
 _NON_SWITCHABLE_STATUS = frozenset({400, 404, 405, 413, 415, 422})
 _NON_SWITCHABLE_HINTS = (
-    "bad request", "invalid_request", "invalid request", "content_filter",
-    "content filter", "context length", "maximum context", "length_finish",
-    "unprocessable", "validation error",
+    "bad request",
+    "invalid_request",
+    "invalid request",
+    "content_filter",
+    "content filter",
+    "context length",
+    "maximum context",
+    "length_finish",
+    "unprocessable",
+    "validation error",
 )
 # 可重试判定：限流/超时/连接/服务端错误可重试；确定性 4xx 立即失败，不空等。
 _RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 # 文本级可重试信号：给不带状态码、也非 SDK 异常对象的第三方/httpx 错误兜底
 _RETRYABLE_HINTS = (
-    "rate", "throttle", "429", "timeout", "timed out", "connection",
-    "unavailable", "overloaded", "bad gateway", "service unavailable",
+    "rate",
+    "throttle",
+    "429",
+    "timeout",
+    "timed out",
+    "connection",
+    "unavailable",
+    "overloaded",
+    "bad gateway",
+    "service unavailable",
 )
 # 主备切换白名单：只认"基础设施类"错误，未知异常不触发全局降级（防止畸形请求诱导降级）。
 _SWITCHABLE_STATUS = frozenset({401, 403, 408, 409, 425, 429, 500, 502, 503, 504})
 _SWITCHABLE_HINTS = (
-    "rate", "throttle", "429", "401", "403", "unauthorized", "forbidden",
-    "timeout", "timed out", "connection", "unavailable", "overloaded",
-    "bad gateway", "internal server", "service unavailable",
+    "rate",
+    "throttle",
+    "429",
+    "401",
+    "403",
+    "unauthorized",
+    "forbidden",
+    "timeout",
+    "timed out",
+    "connection",
+    "unavailable",
+    "overloaded",
+    "bad gateway",
+    "internal server",
+    "service unavailable",
 )
 _SWITCHABLE_TYPES = (
-    "ratelimiterror", "authenticationerror", "permissiondeniederror",
-    "apitimeouterror", "apiconnectionerror", "internalservererror",
-    "serviceunavailableerror", "connecterror", "connecttimeout",
-    "readtimeout", "remoteprotocolerror",
+    "ratelimiterror",
+    "authenticationerror",
+    "permissiondeniederror",
+    "apitimeouterror",
+    "apiconnectionerror",
+    "internalservererror",
+    "serviceunavailableerror",
+    "connecterror",
+    "connecttimeout",
+    "readtimeout",
+    "remoteprotocolerror",
 )
 logger = logging.getLogger(__name__)
 
@@ -102,9 +140,7 @@ def _should_switch(error: Exception) -> bool:
     if code is not None:
         return code in _SWITCHABLE_STATUS
     text = _error_text(error)
-    return any(hint in text for hint in _SWITCHABLE_HINTS) or any(
-        name in text for name in _SWITCHABLE_TYPES
-    )
+    return any(hint in text for hint in _SWITCHABLE_HINTS) or any(name in text for name in _SWITCHABLE_TYPES)
 
 
 def _should_retry(error: Exception, attempt: int = 0) -> bool:
@@ -236,11 +272,15 @@ class QwenFallbackChatOpenAI(ChatOpenAI):
                     self._note_primary_success()
                 yield chunk
         except Exception as error:
-            if emitted or not self._fallback_ready() or not _should_switch(error) or not self._note_primary_failure(error):
+            if (
+                emitted
+                or not self._fallback_ready()
+                or not _should_switch(error)
+                or not self._note_primary_failure(error)
+            ):
                 raise
             logger.warning("[QwenFallback] 流式主网关连续失败，切换备用 DashScope：%s", _error_summary(error))
             yield from self._fallback_client.stream(*args, **kwargs)
-
 
 
 # ====== 通用 LLM（默认）======
@@ -377,12 +417,12 @@ coref_llm = QwenFallbackChatOpenAI(
 # 字典按值捕获实例后，任何"重绑 answer_llm_*"的配置覆盖（临时换模型、灰度切换）
 # 都传导不进来，会出现"换了模型但路由仍走旧实例"的静默污染。
 _INTENT_ANSWER_LEVEL = {
-    "D": "deep",      # 剧情任务
-    "F": "deep",      # 溯源追踪
-    "C2": "deep",     # 世界观设定
-    "E": "medium",    # 书籍文献
-    "A": "medium",    # 搜索检索
-    "B": "light",     # 角色查询
+    "D": "deep",  # 剧情任务
+    "F": "deep",  # 溯源追踪
+    "C2": "deep",  # 世界观设定
+    "E": "medium",  # 书籍文献
+    "A": "medium",  # 搜索检索
+    "B": "light",  # 角色查询
 }
 
 _ANSWER_INTENT_PRIORITY = ("D", "F", "C2", "E", "A", "B")
@@ -457,5 +497,7 @@ def llm_invoke_with_retry(messages, max_retries=3, llm_instance=None):
                 raise
             wait, rate_limited = _retry_wait_seconds(error, attempt)
             tag = "[限流]" if rate_limited else "[重试]"
-            logger.warning("%s 等待 %ss 后重试（第 %s/%s 次失败：%s）", tag, wait, attempt + 1, max_retries, _error_summary(error))
+            logger.warning(
+                "%s 等待 %ss 后重试（第 %s/%s 次失败：%s）", tag, wait, attempt + 1, max_retries, _error_summary(error)
+            )
             time.sleep(wait)

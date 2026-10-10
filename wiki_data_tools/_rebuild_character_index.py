@@ -5,6 +5,7 @@
 统一复用 scripts/kb_build_index.py::index_characters，确保角色主条目和
 角色档案段落（角色详细/角色故事/特殊档案/神之眼）使用同一套切片逻辑。
 """
+
 import os
 import sys
 

@@ -83,6 +83,7 @@ LIST_URL = "https://act-api-takumi-static.mihoyo.com/common/blackboard/ys_obc/v1
 
 # ====== 通用工具 ======
 
+
 def _base_name(text: str) -> str:
     value = _normalize(text)
     for sep in ("【", "（", "(", "〔", "["):
@@ -188,13 +189,15 @@ def fetch_official_catalog() -> dict:
                 if not title:
                     continue
                 desc = raw.get("desc") or ""
-                items.append({
-                    "content_id": str(raw.get("content_id") or ""),
-                    "title": title,
-                    "desc": desc,
-                    "desc_parts": _split_desc_parts(desc),
-                    "filters": _parse_filters(raw.get("ext") or "{}"),
-                })
+                items.append(
+                    {
+                        "content_id": str(raw.get("content_id") or ""),
+                        "title": title,
+                        "desc": desc,
+                        "desc_parts": _split_desc_parts(desc),
+                        "filters": _parse_filters(raw.get("ext") or "{}"),
+                    }
+                )
         catalog["channels"][module] = {
             "channel_id": channel_id,
             "count": len(items),
@@ -290,6 +293,7 @@ def _find_official_text(crawler_docs: dict, module: str, title: str, content_id:
 
 # ====== 本地记录加载 ======
 
+
 def _load_json(path: Path, default):
     if not path.exists():
         return default
@@ -303,130 +307,148 @@ def load_local_records() -> list:
     lore = _load_json(CONTENT_DIR / "lore.json", [])
     if isinstance(lore, list):
         for index, item in enumerate(lore):
-            records.append({
-                "record_id": f"lore:{index}",
-                "module": "lore",
-                "title": str(item.get("title") or ""),
-                "source": str(item.get("source") or ""),
-                "text": str(item.get("text") or ""),
-                "source_file": "content_data/lore.json",
-                "source_index": index,
-                "metadata": {},
-            })
+            records.append(
+                {
+                    "record_id": f"lore:{index}",
+                    "module": "lore",
+                    "title": str(item.get("title") or ""),
+                    "source": str(item.get("source") or ""),
+                    "text": str(item.get("text") or ""),
+                    "source_file": "content_data/lore.json",
+                    "source_index": index,
+                    "metadata": {},
+                }
+            )
 
     concepts = _load_json(CONTENT_DIR / "concepts.json", [])
     if isinstance(concepts, list):
         for index, item in enumerate(concepts):
-            records.append({
-                "record_id": f"concept:{index}",
-                "module": "concepts",
-                "title": str(item.get("名称") or ""),
-                "source": "bilibili_wiki",
-                "text": str(item.get("正文") or ""),
-                "source_file": "content_data/concepts.json",
-                "source_index": index,
-                "metadata": {"类型": item.get("类型") or ""},
-            })
+            records.append(
+                {
+                    "record_id": f"concept:{index}",
+                    "module": "concepts",
+                    "title": str(item.get("名称") or ""),
+                    "source": "bilibili_wiki",
+                    "text": str(item.get("正文") or ""),
+                    "source_file": "content_data/concepts.json",
+                    "source_index": index,
+                    "metadata": {"类型": item.get("类型") or ""},
+                }
+            )
 
     npcs = _load_json(CONTENT_DIR / "npcs_processed.json", {})
     if isinstance(npcs, dict):
         for index, (name, item) in enumerate(npcs.items()):
             if not isinstance(item, dict):
                 continue
-            records.append({
-                "record_id": f"npc:{name}",
-                "module": "npcs",
-                "title": str(item.get("name") or name),
-                "source": "bilibili_wiki",
-                "text": str(item.get("doc_for_embed") or item.get("dialogue") or ""),
-                "source_file": "content_data/npcs_processed.json",
-                "source_index": index,
-                "metadata": item,
-            })
+            records.append(
+                {
+                    "record_id": f"npc:{name}",
+                    "module": "npcs",
+                    "title": str(item.get("name") or name),
+                    "source": "bilibili_wiki",
+                    "text": str(item.get("doc_for_embed") or item.get("dialogue") or ""),
+                    "source_file": "content_data/npcs_processed.json",
+                    "source_index": index,
+                    "metadata": item,
+                }
+            )
 
     books = _load_json(CONTENT_DIR / "books.json", [])
     if isinstance(books, list):
         for index, item in enumerate(books):
-            records.append({
-                "record_id": f"book:{index}",
-                "module": "books",
-                "title": str(item.get("title") or ""),
-                "source": str(item.get("source") or "bilibili_wiki"),
-                "text": str(item.get("text") or ""),
-                "source_file": "content_data/books.json",
-                "source_index": index,
-                "metadata": item.get("metadata") or {},
-            })
+            records.append(
+                {
+                    "record_id": f"book:{index}",
+                    "module": "books",
+                    "title": str(item.get("title") or ""),
+                    "source": str(item.get("source") or "bilibili_wiki"),
+                    "text": str(item.get("text") or ""),
+                    "source_file": "content_data/books.json",
+                    "source_index": index,
+                    "metadata": item.get("metadata") or {},
+                }
+            )
 
     materials = _load_json(CONTENT_DIR / "materials.json", [])
     if isinstance(materials, list):
         for index, item in enumerate(materials):
-            records.append({
-                "record_id": f"material:{item.get('材料ID') or index}",
-                "module": "materials",
-                "title": str(item.get("名称") or ""),
-                "source": "bilibili_wiki",
-                "text": str(item.get("简介") or ""),
-                "source_file": "content_data/materials.json",
-                "source_index": index,
-                "metadata": item,
-            })
+            records.append(
+                {
+                    "record_id": f"material:{item.get('材料ID') or index}",
+                    "module": "materials",
+                    "title": str(item.get("名称") or ""),
+                    "source": "bilibili_wiki",
+                    "text": str(item.get("简介") or ""),
+                    "source_file": "content_data/materials.json",
+                    "source_index": index,
+                    "metadata": item,
+                }
+            )
 
     collectibles = _load_json(CONTENT_DIR / "collectibles.json", [])
     if isinstance(collectibles, list):
         for index, item in enumerate(collectibles):
-            records.append({
-                "record_id": f"collectible:{item.get('采集物ID') or index}",
-                "module": "collectibles",
-                "title": str(item.get("名称") or ""),
-                "source": "bilibili_wiki",
-                "text": str(item.get("简介") or ""),
-                "source_file": "content_data/collectibles.json",
-                "source_index": index,
-                "metadata": item,
-            })
+            records.append(
+                {
+                    "record_id": f"collectible:{item.get('采集物ID') or index}",
+                    "module": "collectibles",
+                    "title": str(item.get("名称") or ""),
+                    "source": "bilibili_wiki",
+                    "text": str(item.get("简介") or ""),
+                    "source_file": "content_data/collectibles.json",
+                    "source_index": index,
+                    "metadata": item,
+                }
+            )
 
     foods = _load_json(CONTENT_DIR / "foods.json", [])
     if isinstance(foods, list):
         for index, item in enumerate(foods):
-            records.append({
-                "record_id": f"food:{index}",
-                "module": "foods",
-                "title": str(item.get("名称") or ""),
-                "source": "bilibili_wiki",
-                "text": str(item.get("介绍") or ""),
-                "source_file": "content_data/foods.json",
-                "source_index": index,
-                "metadata": item,
-            })
+            records.append(
+                {
+                    "record_id": f"food:{index}",
+                    "module": "foods",
+                    "title": str(item.get("名称") or ""),
+                    "source": "bilibili_wiki",
+                    "text": str(item.get("介绍") or ""),
+                    "source_file": "content_data/foods.json",
+                    "source_index": index,
+                    "metadata": item,
+                }
+            )
 
     monsters = _load_json(CONTENT_DIR / "monsters.json", [])
     if isinstance(monsters, list):
         for index, item in enumerate(monsters):
-            records.append({
-                "record_id": f"monster:{item.get('怪物ID') or index}",
-                "module": "monsters",
-                "title": str(item.get("名称") or ""),
-                "source": "bilibili_wiki",
-                "text": "",
-                "source_file": "content_data/monsters.json",
-                "source_index": index,
-                "metadata": item,
-            })
+            records.append(
+                {
+                    "record_id": f"monster:{item.get('怪物ID') or index}",
+                    "module": "monsters",
+                    "title": str(item.get("名称") or ""),
+                    "source": "bilibili_wiki",
+                    "text": "",
+                    "source_file": "content_data/monsters.json",
+                    "source_index": index,
+                    "metadata": item,
+                }
+            )
 
     recipes = _load_json(CONTENT_DIR / "recipes.json", [])
     if isinstance(recipes, list):
         for index, item in enumerate(recipes):
-            records.append({
-                "record_id": f"recipe:{item.get('食谱ID') or index}",
-                "module": "recipes",
-                "title": str(item.get("名称") or ""),
-                "source": "bilibili_wiki",
-                "text": str(item.get("简介") or ""),
-                "source_file": "content_data/recipes.json",
-                "source_index": index,
-                "metadata": item,
-            })
+            records.append(
+                {
+                    "record_id": f"recipe:{item.get('食谱ID') or index}",
+                    "module": "recipes",
+                    "title": str(item.get("名称") or ""),
+                    "source": "bilibili_wiki",
+                    "text": str(item.get("简介") or ""),
+                    "source_file": "content_data/recipes.json",
+                    "source_index": index,
+                    "metadata": item,
+                }
+            )
 
     for path in sorted(CONTENT_DIR.glob("quests_*.json")):
         if path.name == "quests_processed.json":
@@ -436,17 +458,19 @@ def load_local_records() -> list:
             continue
         for index, item in enumerate(quests):
             metadata = item.get("metadata") or {}
-            records.append({
-                "record_id": f"quest:{path.name}:{index}",
-                "module": "quests",
-                "title": str(item.get("title") or metadata.get("任务名称") or ""),
-                "source": str(item.get("source") or "bilibili_wiki"),
-                "text": str(item.get("text") or ""),
-                "source_file": f"content_data/{path.name}",
-                "source_index": index,
-                "metadata": metadata,
-                "quest_category": str(item.get("category") or ""),
-            })
+            records.append(
+                {
+                    "record_id": f"quest:{path.name}:{index}",
+                    "module": "quests",
+                    "title": str(item.get("title") or metadata.get("任务名称") or ""),
+                    "source": str(item.get("source") or "bilibili_wiki"),
+                    "text": str(item.get("text") or ""),
+                    "source_file": f"content_data/{path.name}",
+                    "source_index": index,
+                    "metadata": metadata,
+                    "quest_category": str(item.get("category") or ""),
+                }
+            )
 
     # 结构化知识库（Python 模块）
     try:
@@ -459,45 +483,52 @@ def load_local_records() -> list:
 
     if kb_roles is not None:
         for index, item in enumerate(kb_roles.角色知识库):
-            records.append({
-                "record_id": f"role:{item.get('角色ID') or index}",
-                "module": "roles",
-                "title": str(item.get("角色名称") or ""),
-                "source": "bilibili_wiki",
-                "text": str(item.get("简介") or ""),
-                "source_file": "genshin_knowledge_base/roles.py",
-                "source_index": index,
-                "metadata": item,
-            })
+            records.append(
+                {
+                    "record_id": f"role:{item.get('角色ID') or index}",
+                    "module": "roles",
+                    "title": str(item.get("角色名称") or ""),
+                    "source": "bilibili_wiki",
+                    "text": str(item.get("简介") or ""),
+                    "source_file": "genshin_knowledge_base/roles.py",
+                    "source_index": index,
+                    "metadata": item,
+                }
+            )
     if kb_weapons is not None:
         for index, item in enumerate(kb_weapons.武器知识库):
-            records.append({
-                "record_id": f"weapon:{item.get('武器ID') or index}",
-                "module": "weapons",
-                "title": str(item.get("武器名称") or ""),
-                "source": "bilibili_wiki",
-                "text": str(item.get("简介") or ""),
-                "source_file": "genshin_knowledge_base/weapons.py",
-                "source_index": index,
-                "metadata": item,
-            })
+            records.append(
+                {
+                    "record_id": f"weapon:{item.get('武器ID') or index}",
+                    "module": "weapons",
+                    "title": str(item.get("武器名称") or ""),
+                    "source": "bilibili_wiki",
+                    "text": str(item.get("简介") or ""),
+                    "source_file": "genshin_knowledge_base/weapons.py",
+                    "source_index": index,
+                    "metadata": item,
+                }
+            )
     if kb_artifacts is not None:
         for index, item in enumerate(kb_artifacts.圣遗物知识库):
-            records.append({
-                "record_id": f"artifact:{item.get('圣遗物ID') or index}",
-                "module": "artifacts",
-                "title": str(item.get("圣遗物名称") or ""),
-                "source": "bilibili_wiki",
-                "text": str(item.get("简介") or ""),
-                "source_file": "genshin_knowledge_base/artifacts.py",
-                "source_index": index,
-                "metadata": item,
-            })
+            records.append(
+                {
+                    "record_id": f"artifact:{item.get('圣遗物ID') or index}",
+                    "module": "artifacts",
+                    "title": str(item.get("圣遗物名称") or ""),
+                    "source": "bilibili_wiki",
+                    "text": str(item.get("简介") or ""),
+                    "source_file": "genshin_knowledge_base/artifacts.py",
+                    "source_index": index,
+                    "metadata": item,
+                }
+            )
 
     return records
 
 
 # ====== 分类逻辑 ======
+
 
 def _scope_bwiki(record: dict, reason: str) -> dict:
     return {
@@ -514,11 +545,8 @@ def _scope_bwiki(record: dict, reason: str) -> dict:
     }
 
 
-def _scope_shared(record: dict, module: str, item: dict, match_type: str,
-                  crawler_docs: dict, notes=None) -> dict:
-    official_text = _find_official_text(
-        crawler_docs, module, item.get("title") or "", item.get("content_id") or ""
-    )
+def _scope_shared(record: dict, module: str, item: dict, match_type: str, crawler_docs: dict, notes=None) -> dict:
+    official_text = _find_official_text(crawler_docs, module, item.get("title") or "", item.get("content_id") or "")
     return {
         "scope": "shared_exact" if match_type == "exact" else "shared_base",
         "official_module": module,
@@ -742,23 +770,27 @@ def load_official_map_text_contents() -> list:
             continue
         blocks = []
         for block_index, block_text in enumerate(raw_blocks):
-            blocks.append({
-                "index": block_index,
-                "text": block_text,
-                "norm": _map_text_norm(block_text),
-                "norm_loose": _map_text_norm_loose(block_text),
-            })
+            blocks.append(
+                {
+                    "index": block_index,
+                    "text": block_text,
+                    "norm": _map_text_norm(block_text),
+                    "norm_loose": _map_text_norm_loose(block_text),
+                }
+            )
         text = "\n".join(block["text"] for block in blocks)
-        pages.append({
-            "content_id": content_id,
-            "title": title,
-            "region": _map_text_region_from_raw(item),
-            "text": text,
-            "norm": _map_text_norm(text),
-            "norm_loose": _map_text_norm_loose(text),
-            "blocks": blocks,
-            "match_source": source_name,
-        })
+        pages.append(
+            {
+                "content_id": content_id,
+                "title": title,
+                "region": _map_text_region_from_raw(item),
+                "text": text,
+                "norm": _map_text_norm(text),
+                "norm_loose": _map_text_norm_loose(text),
+                "blocks": blocks,
+                "match_source": source_name,
+            }
+        )
     return pages
 
 
@@ -791,16 +823,13 @@ def _find_map_text_content_match(local_text: str, pages: list):
     if len(local_norm) < MAP_TEXT_MIN_MATCH_LEN:
         return None
 
-    local_segments = [
-        _map_text_norm(line)
-        for line in local_text.splitlines()
-    ]
+    local_segments = [_map_text_norm(line) for line in local_text.splitlines()]
     local_segments = [segment for segment in local_segments if len(segment) >= MAP_TEXT_MIN_MATCH_LEN]
 
     fragments = []
     if len(local_norm) >= 16:
         mid = max(0, len(local_norm) // 2 - 4)
-        fragments = [local_norm[:8], local_norm[mid:mid + 8], local_norm[-8:]]
+        fragments = [local_norm[:8], local_norm[mid : mid + 8], local_norm[-8:]]
         fragments = [fragment for fragment in fragments if len(fragment) == 8]
 
     block_exact = []
@@ -845,11 +874,13 @@ def _find_map_text_content_match(local_text: str, pages: list):
                         if index not in ordered:
                             ordered.append(index)
                     if len(ordered) == 1:
-                        block_contains.append((
-                            page,
-                            ordered[0],
-                            len(blocks[ordered[0]]["norm"]),
-                        ))
+                        block_contains.append(
+                            (
+                                page,
+                                ordered[0],
+                                len(blocks[ordered[0]]["norm"]),
+                            )
+                        )
                     else:
                         multi_matches.append((page, tuple(ordered)))
 
@@ -863,15 +894,13 @@ def _find_map_text_content_match(local_text: str, pages: list):
 
     if len(block_exact) == 1:
         page, block_index = block_exact[0]
-        return {"page": page, "match_type": "block_exact",
-                "block_index": block_index, "block_indexes": [block_index]}
+        return {"page": page, "match_type": "block_exact", "block_index": block_index, "block_indexes": [block_index]}
     if len(block_exact) > 1:
         return {"match_type": "ambiguous"}
 
     if len(block_loose) == 1:
         page, block_index = block_loose[0]
-        return {"page": page, "match_type": "block_loose",
-                "block_index": block_index, "block_indexes": [block_index]}
+        return {"page": page, "match_type": "block_loose", "block_index": block_index, "block_indexes": [block_index]}
     if len(block_loose) > 1:
         return {"match_type": "ambiguous"}
 
@@ -881,26 +910,32 @@ def _find_map_text_content_match(local_text: str, pages: list):
         same_best = [item for item in block_contains if item[2] == best[2]]
         if len(same_best) == 1:
             page, block_index, _ = best
-            return {"page": page, "match_type": "block_contains",
-                    "block_index": block_index, "block_indexes": [block_index]}
+            return {
+                "page": page,
+                "match_type": "block_contains",
+                "block_index": block_index,
+                "block_indexes": [block_index],
+            }
         return {"match_type": "ambiguous"}
 
     if multi_matches:
         if len(multi_matches) == 1:
             page, block_indexes = multi_matches[0]
-            return {"page": page, "match_type": "multi_blocks",
-                    "block_index": None, "block_indexes": list(block_indexes)}
+            return {
+                "page": page,
+                "match_type": "multi_blocks",
+                "block_index": None,
+                "block_indexes": list(block_indexes),
+            }
         return {"match_type": "ambiguous"}
 
     if len(page_exact) == 1:
-        return {"page": page_exact[0], "match_type": "page_exact",
-                "block_index": None, "block_indexes": []}
+        return {"page": page_exact[0], "match_type": "page_exact", "block_index": None, "block_indexes": []}
     if len(page_exact) > 1:
         return {"match_type": "ambiguous"}
 
     if len(page_loose) == 1:
-        return {"page": page_loose[0], "match_type": "page_loose",
-                "block_index": None, "block_indexes": []}
+        return {"page": page_loose[0], "match_type": "page_loose", "block_index": None, "block_indexes": []}
     if len(page_loose) > 1:
         return {"match_type": "ambiguous"}
 
@@ -913,8 +948,7 @@ def _find_map_text_content_match(local_text: str, pages: list):
         if coverage >= MAP_TEXT_COVERAGE_THRESHOLD:
             scored.append((coverage, page))
     if len(scored) == 1:
-        return {"page": scored[0][1], "match_type": "page_fragment",
-                "block_index": None, "block_indexes": []}
+        return {"page": scored[0][1], "match_type": "page_fragment", "block_index": None, "block_indexes": []}
     if len(scored) > 1:
         return {"match_type": "ambiguous"}
     return None
@@ -951,7 +985,9 @@ def _match_like(record: dict, index: dict, crawler_docs: dict, preferred: str, a
         matches = _match_all(index, record["title"])
         if matches:
             match_module, match_item = matches[0]
-            return _scope_shared_cross(record, match_module, match_item, crawler_docs, ["跨模块同名，需确认内容是否同源"])
+            return _scope_shared_cross(
+                record, match_module, match_item, crawler_docs, ["跨模块同名，需确认内容是否同源"]
+            )
     return _scope_bwiki(record, f"官方 {preferred} 频道无同名条目")
 
 
@@ -964,7 +1000,13 @@ def classify_record(record: dict, index: dict, crawler_docs: dict) -> dict:
         if title.startswith("地图文本"):
             return classify_map_text(record, index, crawler_docs)
         if source == "任务剧情":
-            return _scope_shared_cross(record, "task", {"title": title, "content_id": ""}, crawler_docs, ["任务剧情摘录：内容与官方任务对话同源"])
+            return _scope_shared_cross(
+                record,
+                "task",
+                {"title": title, "content_id": ""},
+                crawler_docs,
+                ["任务剧情摘录：内容与官方任务对话同源"],
+            )
         if source == "提瓦特编年史":
             return _scope_bwiki(record, "官方无提瓦特编年史对应模块")
         if source == "书籍":
@@ -1002,7 +1044,9 @@ def classify_record(record: dict, index: dict, crawler_docs: dict) -> dict:
         if module_names & {"organization", "domain", "book", "task", "character", "enemy", "map_text"}:
             match_module, item = matches[0]
             return _scope_shared_cross(record, match_module, item, crawler_docs, ["跨模块同名，需确认内容是否同源"])
-        return _scope_review(record, "仅在 item/npc 等弱相关频道发现同名，需人工确认", matches[0][0], matches[0][1].get("title", ""))
+        return _scope_review(
+            record, "仅在 item/npc 等弱相关频道发现同名，需人工确认", matches[0][0], matches[0][1].get("title", "")
+        )
 
     if module == "npcs":
         norm_title = _normalize(title)
@@ -1015,7 +1059,17 @@ def classify_record(record: dict, index: dict, crawler_docs: dict) -> dict:
                 return _scope_shared(record, "npc", item, "base", crawler_docs)
         return _scope_bwiki(record, "官方 NPC 频道无同名/base 名")
 
-    if module in ("books", "weapons", "artifacts", "roles", "foods", "monsters", "materials", "collectibles", "recipes"):
+    if module in (
+        "books",
+        "weapons",
+        "artifacts",
+        "roles",
+        "foods",
+        "monsters",
+        "materials",
+        "collectibles",
+        "recipes",
+    ):
         preferred_map = {
             "books": "book",
             "weapons": "weapon",
@@ -1061,9 +1115,7 @@ def classify_record(record: dict, index: dict, crawler_docs: dict) -> dict:
 
 def classify_map_text(record: dict, index: dict, crawler_docs: dict) -> dict:
     # 1) 先做正文级匹配，解决官方页面名与 B站地点名不一致的问题（如 荆夫港公告板 vs 风息山）。
-    match = _find_map_text_content_match(
-        record.get("text") or "", index.get("map_text_contents") or []
-    )
+    match = _find_map_text_content_match(record.get("text") or "", index.get("map_text_contents") or [])
     if match:
         if match.get("match_type") == "ambiguous":
             return _scope_review(record, "地图文本正文匹配到多个官方页面/块，需人工确认")
@@ -1080,8 +1132,7 @@ def classify_map_text(record: dict, index: dict, crawler_docs: dict) -> dict:
         if page:
             return _scope_shared_content(
                 record,
-                {"page": page, "match_type": "title_location_with_content",
-                 "block_index": None, "block_indexes": []},
+                {"page": page, "match_type": "title_location_with_content", "block_index": None, "block_indexes": []},
                 crawler_docs,
             )
         return _scope_shared(record, "map_text", item, match_type, crawler_docs)
@@ -1151,9 +1202,7 @@ def main() -> int:
     index = build_official_index(catalog)
     map_text_contents = load_official_map_text_contents()
     index["map_text_contents"] = map_text_contents
-    index["map_text_contents_by_id"] = {
-        page["content_id"]: page for page in map_text_contents
-    }
+    index["map_text_contents_by_id"] = {page["content_id"]: page for page in map_text_contents}
     print(f"  官方地图文本正文: {len(map_text_contents)} 页")
     crawler_docs = load_crawler_corpus(CRAWLER_CORPUS_DIR)
 
@@ -1186,8 +1235,7 @@ def main() -> int:
     summary = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "official_catalog": {
-            module: payload.get("count", 0)
-            for module, payload in catalog.get("channels", {}).items()
+            module: payload.get("count", 0) for module, payload in catalog.get("channels", {}).items()
         },
         "local_total": len(classified),
         "scope_counts": dict(scope_counts),
@@ -1195,9 +1243,7 @@ def main() -> int:
         "crawler_corpus_available": bool(crawler_docs),
         "review_total": scope_counts.get("review", 0),
         "bwiki_only_total": scope_counts.get("bwiki_only", 0),
-        "shared_total": sum(
-            count for scope, count in scope_counts.items() if scope.startswith("shared")
-        ),
+        "shared_total": sum(count for scope, count in scope_counts.items() if scope.startswith("shared")),
     }
 
     print("[4/4] 写入...")

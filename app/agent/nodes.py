@@ -4,6 +4,7 @@
 节点共享 GenshinAdvisorState，通过 state 字段传递数据。
 路由函数返回字符串，由 StateGraph 的 add_conditional_edges 映射到下一节点。
 """
+
 import re
 import json
 import time
@@ -13,16 +14,31 @@ from typing import Dict, Any, List, Tuple
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 
 from app.config import (
-    MAX_AGENT_ITERATIONS, MAX_PLAN_RETRIES, MAX_FAST_ITERATIONS, RECENT_TURNS, CONTENT_DIR,
+    MAX_AGENT_ITERATIONS,
+    MAX_PLAN_RETRIES,
+    MAX_FAST_ITERATIONS,
+    RECENT_TURNS,
+    CONTENT_DIR,
 )
 from app.llm import (
-    llm, plan_llm, plan_llm_l2, assess_llm, llm_invoke_with_retry, _select_answer_llm,
-    answer_llm_medium, answer_llm_deep, answer_llm_l3, mechanism_judge_llm,
+    llm,
+    plan_llm,
+    plan_llm_l2,
+    assess_llm,
+    llm_invoke_with_retry,
+    _select_answer_llm,
+    answer_llm_medium,
+    answer_llm_deep,
+    answer_llm_l3,
+    mechanism_judge_llm,
 )
 from app.schema import (
     GenshinAdvisorState,
-    AGENT_SYSTEM_PROMPT_PLAN, AGENT_SYSTEM_PROMPT_ANSWER, AGENT_SYSTEM_PROMPT_FAST,
-    AGENT_SYSTEM_PROMPT_L3_ANSWER, L3_WEAK_ENTITY_TAG,
+    AGENT_SYSTEM_PROMPT_PLAN,
+    AGENT_SYSTEM_PROMPT_ANSWER,
+    AGENT_SYSTEM_PROMPT_FAST,
+    AGENT_SYSTEM_PROMPT_L3_ANSWER,
+    L3_WEAK_ENTITY_TAG,
 )
 from app.progress import _emit_progress, _cancel_events
 from app.trace_recorder import emit as trace_emit
@@ -35,17 +51,22 @@ _HIDDEN_TOOL_NAMES = {"search_world"}
 
 def _get_initial_tools():
     """返回初始可暴露给 LLM 的工具列表（排除隐藏的碰壁后工具）。"""
-    return [
-        t for t in _tools_by_name.values()
-        if getattr(t, "name", "") not in _HIDDEN_TOOL_NAMES
-    ]
+    return [t for t in _tools_by_name.values() if getattr(t, "name", "") not in _HIDDEN_TOOL_NAMES]
+
 
 from app.tools.query import find_similar_quest_names
 from app.retrieval import _sanitize_query, _is_compound_hit, _judge_alias_sandbox_batch, TITLE_REGISTRY
 from app.agent.coref import resolve_coreference
 from app.data import (
-    角色知识库, 地区知识库, 任务知识库, 武器知识库, 圣遗物知识库, 素材知识库,
-    _npcs_data, _normalize_for_match, _load_content_json,
+    角色知识库,
+    地区知识库,
+    任务知识库,
+    武器知识库,
+    圣遗物知识库,
+    素材知识库,
+    _npcs_data,
+    _normalize_for_match,
+    _load_content_json,
 )
 from character_aliases import ALIAS_MAP, ALIASES_SORTED
 from intent_router import route_intent, get_tools_for_intent, get_pseudo_legendary_note
@@ -53,6 +74,7 @@ from wiki_entry_graph import WikiEntryGraph, DEFAULT_OUTPUT as WIKI_GRAPH_OUTPUT
 
 
 # ====== 多轮对话摘要 ======
+
 
 def _summarize_conversation(existing_summary: str, turns: List[Dict[str, str]]) -> str:
     """用 LLM 将多轮对话压缩为一段摘要"""
@@ -62,7 +84,7 @@ def _summarize_conversation(existing_summary: str, turns: List[Dict[str, str]]) 
 
     prompt = f"""将以下多轮对话压缩为一段简短摘要（100-200字），只保留用户关注的核心话题和关键信息点。
 
-已有摘要：{existing_summary if existing_summary else '（无）'}
+已有摘要：{existing_summary if existing_summary else "（无）"}
 
 对话内容：
 {turns_text}
@@ -82,7 +104,7 @@ def _summarize_conversation(existing_summary: str, turns: List[Dict[str, str]]) 
         # 摘要失败就简单拼接话题关键词
         topics = set()
         for t in turns:
-            topics.add(t['user'][:30])
+            topics.add(t["user"][:30])
         return existing_summary + "；" + "；".join(list(topics)[-3:])
 
 
@@ -99,8 +121,8 @@ def _alias_scan(sanitized: str, match_text: str) -> Tuple[list, list, list, list
     返回 (alias_notes_parts, alias_pairs, covered_spans, compound_candidates)。
     """
     alias_notes_parts = []  # 收集别名说明，最终拼接为系统消息补充
-    alias_pairs = []        # 结构化别名映射 [(别名, 规范名)]，供下游确定性身份直答使用
-    covered_spans = []      # 已接受别名覆盖的 (start, end) 区间，防止子串重复判断
+    alias_pairs = []  # 结构化别名映射 [(别名, 规范名)]，供下游确定性身份直答使用
+    covered_spans = []  # 已接受别名覆盖的 (start, end) 区间，防止子串重复判断
     compound_candidates = []  # 批量待判断候选 (alias, canonical, context, pos, span)
 
     for alias in ALIASES_SORTED:
@@ -174,7 +196,7 @@ def _build_alias_notes(alias_notes_parts) -> str:
         multi_entity_note = (
             f"\n[强制要求] 用户问题包含 {len(alias_notes_parts)} 个实体：{entity_list}。"
             f"你的回答必须覆盖以上全部 {len(alias_notes_parts)} 个实体，严禁只回答其中一部分。"
-            f"如果某个实体的信息在工具返回中暂缺，也必须先说明已知部分，再对缺失部分说明\"当前知识库未收录\"。\n"
+            f'如果某个实体的信息在工具返回中暂缺，也必须先说明已知部分，再对缺失部分说明"当前知识库未收录"。\n'
         )
 
     # 注意：alias_notes 的展示格式为 `"X" 指 Y`，是 alias_pairs 的文本化；
@@ -230,7 +252,7 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 2) 已接受的长别名覆盖的区间，其子串不再单独判断（如“雷电将军”已命中则“将军”跳过）；
     # 3) 剩余需要 AI 沙箱判断的复合命中合并为一次批量调用，避免逐个串行。
     # ·/- 归一化：用户常用 "-" 代替 "·"（如 "芙宁娜-德-枫丹"），统一转为 "·" 后再匹配
-    match_text = sanitized.replace('-', '·')
+    match_text = sanitized.replace("-", "·")
     alias_notes_parts, alias_pairs, covered_spans, compound_candidates = _alias_scan(sanitized, match_text)
 
     # 批量 AI 沙箱判断：一次调用处理所有复合命中候选
@@ -247,19 +269,27 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
         f", DeepSeek批量 {batch_duration_ms:.1f}ms"
         f", 候选 {batch_candidate_count} 个"
     )
-    trace_emit("rewrite", {
+    trace_emit(
+        "rewrite",
+        {
+            "user_query": user_query,
+            "coref_changed": coref_changed,
+            "rewritten_query": sanitized,
+            "alias_notes": alias_notes,
+            "alias_pairs": alias_pairs or [],
+            "alias_count": len(alias_notes_parts),
+            "run_id": state.get("run_id"),
+            "duration_ms": round(total_duration_ms, 2),
+            "batch_duration_ms": round(batch_duration_ms, 2),
+            "batch_candidate_count": batch_candidate_count,
+        },
+    )
+    return {
         "user_query": user_query,
-        "coref_changed": coref_changed,
         "rewritten_query": sanitized,
         "alias_notes": alias_notes,
-        "alias_pairs": alias_pairs or [],
-        "alias_count": len(alias_notes_parts),
-        "run_id": state.get("run_id"),
-        "duration_ms": round(total_duration_ms, 2),
-        "batch_duration_ms": round(batch_duration_ms, 2),
-        "batch_candidate_count": batch_candidate_count,
-    })
-    return {"user_query": user_query, "rewritten_query": sanitized, "alias_notes": alias_notes, "alias_pairs": alias_pairs or None}
+        "alias_pairs": alias_pairs or None,
+    }
 
 
 ASSESS_PROMPT = """你是原神剧情助手的查询分类器。你的唯一任务是判断用户问题属于哪种类型。
@@ -277,7 +307,6 @@ ASSESS_PROMPT = """你是原神剧情助手的查询分类器。你的唯一任�
 只输出一个词：L1 或 L2。不要输出任何其他内容。"""
 
 
-
 _CONCEPT_ESSENCE_MARKERS = ("是什么", "什么是", "何为", "本质", "定义", "含义", "意思")
 
 
@@ -290,9 +319,22 @@ def _is_concept_essence_question(user_query: str, conversation_summary: str = ""
     query = (user_query or "").strip()
     if not query or not any(marker in query for marker in _CONCEPT_ESSENCE_MARKERS):
         return False
-    if any(marker in query for marker in (
-            "是谁", "指谁", "哪个角色", "哪一位",
-            "包含几幕", "有哪些子任务", "有几幕", "第几幕", "章节", "任务", "之章")):
+    if any(
+        marker in query
+        for marker in (
+            "是谁",
+            "指谁",
+            "哪个角色",
+            "哪一位",
+            "包含几幕",
+            "有哪些子任务",
+            "有几幕",
+            "第几幕",
+            "章节",
+            "任务",
+            "之章",
+        )
+    ):
         return False
     try:
         labels = route_intent(
@@ -319,8 +361,22 @@ _MECHANISM_NAME_PATTERNS = (
     re.compile(r"称为([\u4e00-\u9fff]{2,6}?)" + _MECHANISM_NAME_BOUNDARY),
 )
 _MECHANISM_NAME_STOPWORDS = {
-    "故事", "梦境", "记忆", "力量", "东西", "事情", "方法", "方式",
-    "世界", "时间", "生命", "存在", "原因", "结果", "问题", "答案",
+    "故事",
+    "梦境",
+    "记忆",
+    "力量",
+    "东西",
+    "事情",
+    "方法",
+    "方式",
+    "世界",
+    "时间",
+    "生命",
+    "存在",
+    "原因",
+    "结果",
+    "问题",
+    "答案",
 }
 
 
@@ -353,11 +409,57 @@ def _extract_mechanism_terms(messages) -> List[str]:
 
 _MECHANISM_CONTEXT_WINDOW = 300
 _MECHANISM_FOCUS_STOPWORDS = {
-    "为什么", "为何", "原因", "机制", "原理", "怎么", "如何", "什么", "是谁", "谁", "哪些", "哪个", "多少", "几点", "哪里",
-    "的", "了", "是", "在", "有", "和", "与", "把", "被", "让", "使",
-    "会", "能", "可", "要", "还", "就", "都", "也", "不", "没", "很",
-    "之后", "以后", "因为", "所以", "如果", "但是", "而是", "不是",
-    "彻底", "完全", "没有", "是不是", "为什么说", "什么叫做",
+    "为什么",
+    "为何",
+    "原因",
+    "机制",
+    "原理",
+    "怎么",
+    "如何",
+    "什么",
+    "是谁",
+    "谁",
+    "哪些",
+    "哪个",
+    "多少",
+    "几点",
+    "哪里",
+    "的",
+    "了",
+    "是",
+    "在",
+    "有",
+    "和",
+    "与",
+    "把",
+    "被",
+    "让",
+    "使",
+    "会",
+    "能",
+    "可",
+    "要",
+    "还",
+    "就",
+    "都",
+    "也",
+    "不",
+    "没",
+    "很",
+    "之后",
+    "以后",
+    "因为",
+    "所以",
+    "如果",
+    "但是",
+    "而是",
+    "不是",
+    "彻底",
+    "完全",
+    "没有",
+    "是不是",
+    "为什么说",
+    "什么叫做",
 }
 
 
@@ -377,7 +479,7 @@ def _extract_query_focus_terms(user_query: str, exclude_terms=None) -> List[str]
     terms: List[str] = []
     for length in (4, 3, 2):
         for i in range(0, len(cleaned) - length + 1):
-            piece = cleaned[i:i + length]
+            piece = cleaned[i : i + length]
             if piece in _MECHANISM_FOCUS_STOPWORDS or piece in exclude:
                 continue
             # 片段里如果带英文/数字，单独保留；纯中文片段若完全由
@@ -441,6 +543,7 @@ def _mechanism_judge_relevant(term: str, user_query: str, windows: List[str]) ->
         return False
     return False
 
+
 def _mechanism_exclude_names(alias_pairs, user_query: str) -> set:
     """不参与「共现=相关」预筛的名字集合。
 
@@ -448,7 +551,7 @@ def _mechanism_exclude_names(alias_pairs, user_query: str) -> set:
     就会让无关机制名通过预筛（H3 问纳西妲年龄，"童话"被误注入）。
     """
     exclude = set()
-    for pair in (alias_pairs or []):
+    for pair in alias_pairs or []:
         if isinstance(pair, (list, tuple)):
             for item in pair:
                 if isinstance(item, str):
@@ -469,11 +572,7 @@ def _mechanism_term_kept(term: str, user_query: str, messages, focus_terms) -> b
         return True
     windows = _mechanism_context_windows(messages, term)
     # 预筛：机制名上下文和问题关注词有共现，说明大概率相关。
-    prescreen_hit = any(
-        ft in window
-        for ft in focus_terms
-        for window in windows
-    )
+    prescreen_hit = any(ft in window for ft in focus_terms for window in windows)
     if prescreen_hit:
         return True
     # 预筛没把握时交给小模型裁判；小模型只输出是/否。
@@ -514,25 +613,32 @@ def assess_query(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 防止 assess_query 误判导致 L1 越权处理复杂问题
     alias_notes = state.get("alias_notes", "") or ""
     entity_count = alias_notes.count("指") if alias_notes else 0
-    structure_pattern = re.compile(r'(几幕|子任务|包含哪些|有哪些子任务|章节结构|幕数|任务结构|完整剧情|讲了什么|清单|列举)')
+    structure_pattern = re.compile(
+        r"(几幕|子任务|包含哪些|有哪些子任务|章节结构|幕数|任务结构|完整剧情|讲了什么|清单|列举)"
+    )
     structure_hit = bool(structure_pattern.search(user_query))
     conversation_summary = state.get("conversation_summary", "") or ""
     turn_number = len(state.get("conversation_history") or [])
     concept_hit = _is_concept_essence_question(user_query, conversation_summary, turn_number)
     if len(user_query) > 30 or entity_count >= 2 or structure_hit or concept_hit:
         execution_mode = "L2"
-        print(f"  -> 硬规则触发（长度={len(user_query)}、实体={entity_count}、结构类={structure_hit}、概念本质类={concept_hit}），强制 L2")
+        print(
+            f"  -> 硬规则触发（长度={len(user_query)}、实体={entity_count}、结构类={structure_hit}、概念本质类={concept_hit}），强制 L2"
+        )
 
     print(f"  -> 判定: {execution_mode}")
 
-    trace_emit("assess", {
-        "execution_mode": execution_mode,
-        "user_query": user_query,
-        "query_length": len(user_query),
-        "entity_count": entity_count,
-        "hard_rule": len(user_query) > 30 or entity_count >= 2 or concept_hit,
-        "run_id": state.get("run_id"),
-    })
+    trace_emit(
+        "assess",
+        {
+            "execution_mode": execution_mode,
+            "user_query": user_query,
+            "query_length": len(user_query),
+            "entity_count": entity_count,
+            "hard_rule": len(user_query) > 30 or entity_count >= 2 or concept_hit,
+            "run_id": state.get("run_id"),
+        },
+    )
     return {"execution_mode": execution_mode}
 
 
@@ -545,6 +651,7 @@ def route_after_assess(state: GenshinAdvisorState) -> str:
 
 
 # ====== 快速回答节点（L1 路径）======
+
 
 def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     """快速路径：合并 Plan + Answer，使用全部工具，最多 2 轮工具调用。"""
@@ -561,9 +668,7 @@ def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     if cancelled is not None:
         return cancelled
 
-    messages, current_llm_with_tools = _fast_agent_prepare_messages(
-        state, messages, original_query, alias_notes
-    )
+    messages, current_llm_with_tools = _fast_agent_prepare_messages(state, messages, original_query, alias_notes)
 
     short_circuit = _fast_agent_code_shortcuts(messages, original_query, iteration)
     if short_circuit is not None:
@@ -654,7 +759,7 @@ def _fast_agent_forced_answer(state, messages, iteration):
     # 剥离最后一条 AIMessage 的 tool_calls（工具未执行，防止 LLM 困惑）
     for i in range(len(messages) - 1, -1, -1):
         msg = messages[i]
-        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
             msg.tool_calls = []
             msg.additional_kwargs = {}
             break
@@ -667,7 +772,7 @@ def _fast_agent_forced_answer(state, messages, iteration):
             response = llm_invoke_with_retry(messages)
         except Exception:
             response = AIMessage(content=f"抱歉，处理出错：{e}")
-    content = response.content if hasattr(response, 'content') else ''
+    content = response.content if hasattr(response, "content") else ""
     # 空内容兜底：与下方正常收尾分支保持一致——工具已执行、模型却吐空串时，
     # 不能把空串交给用户（前端会渲染成「（无回复）」）。
     if not content or not content.strip():
@@ -684,7 +789,15 @@ def _fast_agent_forced_answer(state, messages, iteration):
 
 def _fast_agent_tool_round(state, messages, iteration, current_llm_with_tools):
     """正常轮次：调用带工具的 LLM；有 tool_calls 交回循环，否则直接收尾返回。"""
-    trace_emit("llm_start", {"role": "fast", "iteration": iteration + 1, "run_id": state.get("run_id"), "model": getattr(current_llm_with_tools, "model_name", None)})
+    trace_emit(
+        "llm_start",
+        {
+            "role": "fast",
+            "iteration": iteration + 1,
+            "run_id": state.get("run_id"),
+            "model": getattr(current_llm_with_tools, "model_name", None),
+        },
+    )
     try:
         response = current_llm_with_tools.invoke(messages)
     except Exception as e:
@@ -697,10 +810,18 @@ def _fast_agent_tool_round(state, messages, iteration, current_llm_with_tools):
                 "messages": messages,
                 "intent_labels": ["ALL"],
             }
-    trace_emit("llm_end", {"role": "fast", "iteration": iteration + 1, "run_id": state.get("run_id"), "tool_call_count": len(getattr(response, "tool_calls", None) or [])})
+    trace_emit(
+        "llm_end",
+        {
+            "role": "fast",
+            "iteration": iteration + 1,
+            "run_id": state.get("run_id"),
+            "tool_call_count": len(getattr(response, "tool_calls", None) or []),
+        },
+    )
 
     # 有工具调用 → 继续循环
-    if hasattr(response, 'tool_calls') and response.tool_calls:
+    if hasattr(response, "tool_calls") and response.tool_calls:
         print(f"  -> 调用 {len(response.tool_calls)} 个工具: {[tc['name'] for tc in response.tool_calls]}")
         return {
             "messages": [response],
@@ -708,7 +829,7 @@ def _fast_agent_tool_round(state, messages, iteration, current_llm_with_tools):
         }
 
     # 无工具调用 → 直接返回回答
-    content = response.content if hasattr(response, 'content') else ''
+    content = response.content if hasattr(response, "content") else ""
     # 空内容兜底：工具已返回"未找到"等结果，但 LLM 仍可能返回空串，此时明确告知未收录
     if not content or not content.strip():
         content = "当前知识库未收录。"
@@ -758,22 +879,22 @@ def _extract_json_tool_calls(content: str) -> List[Dict[str, Any]]:
         return []
 
     candidates = []
-    marker_pos = content.find('【工具调用】')
+    marker_pos = content.find("【工具调用】")
     if marker_pos >= 0:
         segment = content[marker_pos:]
-        segment = re.sub(r'^```(?:json)?\s*', '', segment)
+        segment = re.sub(r"^```(?:json)?\s*", "", segment)
         candidates.append(segment)
 
-    m = re.search(r'```json\s*(.*?)```', content, re.S)
+    m = re.search(r"```json\s*(.*?)```", content, re.S)
     if m:
         candidates.append(m.group(1))
 
     for segment in candidates:
-        start = segment.find('[')
-        end = segment.rfind(']')
+        start = segment.find("[")
+        end = segment.rfind("]")
         if start < 0 or end <= start:
             continue
-        raw = segment[start:end + 1]
+        raw = segment[start : end + 1]
         try:
             data = json.loads(raw)
         except Exception:
@@ -801,12 +922,14 @@ def _normalize_json_tool_calls(raw_calls: List[Any], allowed_tool_names: set) ->
             continue
         if name not in allowed_tool_names:
             continue
-        result.append({
-            "name": name,
-            "args": args,
-            "id": f"call_json_{i + 1}",
-            "type": "tool_call",
-        })
+        result.append(
+            {
+                "name": name,
+                "args": args,
+                "id": f"call_json_{i + 1}",
+                "type": "tool_call",
+            }
+        )
     return result
 
 
@@ -818,6 +941,7 @@ def _parse_plan_json_tool_calls(content: str, allowed_tool_names: set) -> List[D
 # ====== 搜索碰壁后补充暴露世界/组织检索工具 ======
 # search_all 不覆盖 lore.json 和 NPC 所属组织；当普通搜索未命中时，
 # 才把 search_world 追加到后续 Plan 轮次的工具集中，初始不暴露。
+
 
 def _is_search_dead_end(messages) -> bool:
     """判断本轮对话中是否已有搜索类工具返回未命中。
@@ -852,6 +976,7 @@ def _maybe_add_dead_end_search_world(messages, routed_tools):
 
 # ====== 统一 Agent 循环（L2 路径）======
 
+
 def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     """规划阶段：分析用户问题，输出【执行报告】和工具调用。不生成最终回答。"""
     iteration = state.get("iteration", 0) or 0
@@ -861,7 +986,7 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     intent_labels = state.get("intent_labels", [])
 
     # ---- 前置拦截：P16 超短/无意义输入 ----
-    cleaned = re.sub(r'[^\u4e00-\u9fff\w]', '', original_query)
+    cleaned = re.sub(r"[^\u4e00-\u9fff\w]", "", original_query)
     if len(cleaned) < 3:
         print(f"  -> [前置拦截] 无效输入（清洗后长度={len(cleaned)}），直接返回引导语")
         return {"final_response": "请提出具体的原神剧情相关问题，我会尽力解答。", "messages": []}
@@ -899,12 +1024,15 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         routed_tools = _maybe_add_named_entity_tools(state, original_query, routed_tools)
         tool_names = [t.name for t in routed_tools]
         print(f"  [路由] 注入工具({len(routed_tools)}个): {tool_names}")
-        trace_emit("route", {
-            "intent_labels": intent_labels,
-            "injected_tools": tool_names,
-            "turn_number": turn_number,
-            "run_id": state.get("run_id"),
-        })
+        trace_emit(
+            "route",
+            {
+                "intent_labels": intent_labels,
+                "injected_tools": tool_names,
+                "turn_number": turn_number,
+                "run_id": state.get("run_id"),
+            },
+        )
 
         # ---- 步骤3：构建本轮 llm_with_tools ----
         current_llm_with_tools = plan_llm_l2.bind_tools(routed_tools)
@@ -927,9 +1055,13 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         # 构建消息：SystemPrompt + 最近N轮历史 + 当前问题
         # 显式 Context Cache：SystemPrompt 作为稳定前缀打 cache_control 标记，
         # 同一会话后续 plan 轮次可命中缓存，减少 Prefill 耗时。
-        messages = [SystemMessage(content=[
-            {"type": "text", "text": system_content, "cache_control": {"type": "ephemeral"}},
-        ])]
+        messages = [
+            SystemMessage(
+                content=[
+                    {"type": "text", "text": system_content, "cache_control": {"type": "ephemeral"}},
+                ]
+            )
+        ]
 
         # 注入最近 N 轮对话历史
         conv_history = state.get("conversation_history") or []
@@ -948,18 +1080,18 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         routed_tools = _maybe_add_entity_graph_tool(original_query, routed_tools)
         routed_tools = _maybe_add_named_entity_tools(state, original_query, routed_tools)
         # 搜索碰壁后补充暴露 search_world（lore/NPC组织），初始不暴露。
-        had_search_world = any(
-            getattr(t, "name", "") == "search_world" for t in routed_tools
-        )
+        had_search_world = any(getattr(t, "name", "") == "search_world" for t in routed_tools)
         routed_tools = _maybe_add_dead_end_search_world(messages, routed_tools)
-        if not had_search_world and any(
-            getattr(t, "name", "") == "search_world" for t in routed_tools
-        ):
-            messages.append(SystemMessage(content=(
-                "系统提示：常规搜索（search_all/hybrid_search）已碰壁。"
-                "现已补充工具 search_world，可搜索世界观设定、组织/NPC背景（如至冬组织名、lore.json 条目）。"
-                "若目标名称可能属于此类数据，请调用 search_world 继续检索。"
-            )))
+        if not had_search_world and any(getattr(t, "name", "") == "search_world" for t in routed_tools):
+            messages.append(
+                SystemMessage(
+                    content=(
+                        "系统提示：常规搜索（search_all/hybrid_search）已碰壁。"
+                        "现已补充工具 search_world，可搜索世界观设定、组织/NPC背景（如至冬组织名、lore.json 条目）。"
+                        "若目标名称可能属于此类数据，请调用 search_world 继续检索。"
+                    )
+                )
+            )
         current_llm_with_tools = plan_llm_l2.bind_tools(routed_tools)
 
     # 任务未命中后的确定性恢复：在让 LLM 自由选择下一步之前，先走 search_all → 相似名纠错。
@@ -992,8 +1124,15 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     if relationship_auto is not None:
         return relationship_auto
 
-
-    trace_emit("llm_start", {"role": "plan", "iteration": iteration + 1, "run_id": state.get("run_id"), "model": getattr(current_llm_with_tools, "model_name", None)})
+    trace_emit(
+        "llm_start",
+        {
+            "role": "plan",
+            "iteration": iteration + 1,
+            "run_id": state.get("run_id"),
+            "model": getattr(current_llm_with_tools, "model_name", None),
+        },
+    )
     try:
         response = current_llm_with_tools.invoke(messages)
     except Exception as e:
@@ -1007,21 +1146,33 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
                 "messages": messages,
                 "intent_labels": intent_labels,
             }
-    trace_emit("llm_end", {"role": "plan", "iteration": iteration + 1, "status": "success", "run_id": state.get("run_id"), "tool_call_count": len(getattr(response, "tool_calls", None) or [])})
+    trace_emit(
+        "llm_end",
+        {
+            "role": "plan",
+            "iteration": iteration + 1,
+            "status": "success",
+            "run_id": state.get("run_id"),
+            "tool_call_count": len(getattr(response, "tool_calls", None) or []),
+        },
+    )
 
     # 保存执行计划（response.content 即模型输出的【执行报告】文本）
-    plan_content = response.content if hasattr(response, 'content') else ''
-    print(f"  [PlanOut] 第{iteration+1}轮 plan_content长度={len(plan_content)}")
+    plan_content = response.content if hasattr(response, "content") else ""
+    print(f"  [PlanOut] 第{iteration + 1}轮 plan_content长度={len(plan_content)}")
 
-    trace_emit("plan", {
-        "iteration": iteration + 1,
-        "execution_plan": plan_content[:500],
-        "tool_call_names": [tc.get("name") for tc in (getattr(response, "tool_calls", None) or [])],
-        "run_id": state.get("run_id"),
-    })
+    trace_emit(
+        "plan",
+        {
+            "iteration": iteration + 1,
+            "execution_plan": plan_content[:500],
+            "tool_call_names": [tc.get("name") for tc in (getattr(response, "tool_calls", None) or [])],
+            "run_id": state.get("run_id"),
+        },
+    )
 
     # 有工具调用 → 继续循环，不生成回答
-    if hasattr(response, 'tool_calls') and response.tool_calls:
+    if hasattr(response, "tool_calls") and response.tool_calls:
         print(f"  -> 调用 {len(response.tool_calls)} 个工具: {[tc['name'] for tc in response.tool_calls]}")
         if iteration + 1 >= MAX_AGENT_ITERATIONS:
             print(f"  -> 已达到最大迭代次数({MAX_AGENT_ITERATIONS})，本轮后进入回答阶段")
@@ -1039,15 +1190,20 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     allowed_tool_names = {t.name for t in routed_tools}
     json_tool_calls = _parse_plan_json_tool_calls(plan_content, allowed_tool_names)
     if json_tool_calls:
-        print(f"  -> [JSON工具块] 从执行报告提取 {len(json_tool_calls)} 个工具: {[tc['name'] for tc in json_tool_calls]}")
+        print(
+            f"  -> [JSON工具块] 从执行报告提取 {len(json_tool_calls)} 个工具: {[tc['name'] for tc in json_tool_calls]}"
+        )
         structured_response = AIMessage(content=plan_content, tool_calls=json_tool_calls)
-        trace_emit("plan", {
-            "iteration": iteration + 1,
-            "execution_plan": plan_content[:500],
-            "tool_call_names": [tc["name"] for tc in json_tool_calls],
-            "tool_call_source": "json_block",
-            "run_id": state.get("run_id"),
-        })
+        trace_emit(
+            "plan",
+            {
+                "iteration": iteration + 1,
+                "execution_plan": plan_content[:500],
+                "tool_call_names": [tc["name"] for tc in json_tool_calls],
+                "tool_call_source": "json_block",
+                "run_id": state.get("run_id"),
+            },
+        )
         if iteration + 1 >= MAX_AGENT_ITERATIONS:
             print(f"  -> 已达到最大迭代次数({MAX_AGENT_ITERATIONS})，本轮后进入回答阶段")
         return {
@@ -1057,25 +1213,36 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             "intent_labels": intent_labels,
         }
 
-
     # wiki 图：多任务 + 地图文本的确定性补全（挂载点B）。
     # LLM 想零工具收工时，若任务/地图文本还没补齐，代码直接补发，Planner 不能提前收工。
     graph_map_auto = _maybe_auto_graph_map_texts(
-        state, messages, routed_tools, iteration, response=response,
+        state,
+        messages,
+        routed_tools,
+        iteration,
+        response=response,
     )
     if graph_map_auto is not None:
         return graph_map_auto
 
     # wiki 图：题面点名的设定页/组织页确定性补全（挂载点B）。
     entity_auto = _maybe_auto_entity_entry(
-        state, messages, routed_tools, iteration, response=response,
+        state,
+        messages,
+        routed_tools,
+        iteration,
+        response=response,
     )
     if entity_auto is not None:
         return entity_auto
 
     # 点名任务/书籍的确定性读全文（挂载点B）：Planner 想零工具收工但全文还没读时补读。
     full_text_read_auto = _maybe_auto_full_text_read(
-        state, messages, routed_tools, iteration, response=response,
+        state,
+        messages,
+        routed_tools,
+        iteration,
+        response=response,
     )
     if full_text_read_auto is not None:
         return full_text_read_auto
@@ -1083,19 +1250,26 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 概念三视图补位（挂载点B）：LLM 本轮没出任何工具调用且想进入回答阶段，
     # 先检查概念维度是否齐；不齐则代码直接补发，Planner 不能提前收工。
     concept_auto = _maybe_auto_concept_dimension(
-        state, messages, routed_tools, iteration,
-        intent_labels=intent_labels, response=response,
+        state,
+        messages,
+        routed_tools,
+        iteration,
+        intent_labels=intent_labels,
+        response=response,
     )
     if concept_auto is not None:
         return concept_auto
 
     # 关系/情感原因补搜（挂载点B）：LLM 想零工具收工时，若关系维度未覆盖则自动补一发。
     relationship_auto = _maybe_auto_relationship_search(
-        state, messages, routed_tools, iteration, response=response,
+        state,
+        messages,
+        routed_tools,
+        iteration,
+        response=response,
     )
     if relationship_auto is not None:
         return relationship_auto
-
 
     # 无工具调用 → 检查是否需要强制重试
     plan_retry_count = state.get("plan_retry", 0) or 0
@@ -1110,22 +1284,20 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     else:
         stripped = original_query.strip()
         MATH_GREETING_PATTERN = re.compile(
-            r'^[\d\s\+\-\*/\.=\(\)\？\?]+$'         # 纯数学表达式（无中文）
-            r'|^(你好|您好|hi|hello|在吗|谢谢|多谢|再见|拜拜|早上好|晚上好|中午好)[\s！!。.]*$'  # 问候语
+            r"^[\d\s\+\-\*/\.=\(\)\？\?]+$"  # 纯数学表达式（无中文）
+            r"|^(你好|您好|hi|hello|在吗|谢谢|多谢|再见|拜拜|早上好|晚上好|中午好)[\s！!。.]*$"  # 问候语
         )
         if MATH_GREETING_PATTERN.match(stripped):
             plan_exit_reason = "math_greeting"
             print("  -> P10 豁免：纯数学/问候语，跳过强制重试")
         # 含中文的数学问题（如"1+1等于几"），用更严格的模式：必须有数字-运算符-数字结构
-        elif re.search(r'\d\s*[\+\-\*/]\s*\d', stripped) and len(stripped) <= 20:
+        elif re.search(r"\d\s*[\+\-\*/]\s*\d", stripped) and len(stripped) <= 20:
             plan_exit_reason = "math_greeting"
             print("  -> P10 豁免：含中文数学表达式，跳过强制重试")
         else:
             # 前一轮已执行工具并返回结果 → Plan Agent 已看过结果，信任其"不需要再搜"的判断
             # 注意：用 hasattr/type 按实际类型检测，而非 isinstance(ToolMessage)，避免 import 依赖
-            has_prior_tool_result = any(
-                type(msg).__name__ == 'ToolMessage' for msg in messages
-            )
+            has_prior_tool_result = any(type(msg).__name__ == "ToolMessage" for msg in messages)
             if has_prior_tool_result:
                 plan_exit_reason = "prior_tool_result"
 
@@ -1136,12 +1308,15 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             print(f"  -> 纯身份查询（别名豁免，{len(alias_matches)}个映射），无工具调用，进入回答阶段")
         else:
             print(f"  -> 无工具调用但符合豁免({plan_exit_reason})，进入回答阶段")
-        trace_emit("plan_exit", {
-            "iteration": iteration + 1,
-            "plan_exit_reason": plan_exit_reason,
-            "alias_count": len(alias_matches),
-            "run_id": state.get("run_id"),
-        })
+        trace_emit(
+            "plan_exit",
+            {
+                "iteration": iteration + 1,
+                "plan_exit_reason": plan_exit_reason,
+                "alias_count": len(alias_matches),
+                "run_id": state.get("run_id"),
+            },
+        )
         return {
             "messages": [response],
             "execution_plan": plan_content,
@@ -1155,31 +1330,53 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         # 动态构建当前可用工具提示（避免硬编码与实际注入工具不匹配）
         tool_hints = []
         for _t in routed_tools:
-            _name = _t.name if hasattr(_t, 'name') else _t.get('name', '?')
-            _desc = _t.description if hasattr(_t, 'description') else _t.get('description', '')
-            _short = _desc.split('\n')[0][:50] if _desc else ''
+            _name = _t.name if hasattr(_t, "name") else _t.get("name", "?")
+            _desc = _t.description if hasattr(_t, "description") else _t.get("description", "")
+            _short = _desc.split("\n")[0][:50] if _desc else ""
             tool_hints.append(f"{_name}（{_short}）" if _short else _name)
         _tool_str = "、".join(tool_hints)
         messages.append(response)
-        messages.append(SystemMessage(content=(
-            "错误：检测到你的规划中没有包含任何工具调用，也没有输出【工具调用】JSON 块。"
-            "对于非身份查询类问题，你必须至少调用一个工具来检索信息。"
-            f"请重新规划，并在【执行报告】后输出【工具调用】JSON 块，格式为："
-            f'[{{"tool": "工具名", "args": {{"参数名": "参数值"}}}}]'
-            f"。当前可调用的工具包括：{_tool_str}。"
-            "你的职责是调用工具获取信息。如果确实搜不到，正常输出执行报告即可，后续阶段会处理未收录情况。"
-        )))
-        trace_emit("llm_start", {"role": "plan_retry", "iteration": iteration + 1, "run_id": state.get("run_id"), "model": getattr(current_llm_with_tools, "model_name", None)})
+        messages.append(
+            SystemMessage(
+                content=(
+                    "错误：检测到你的规划中没有包含任何工具调用，也没有输出【工具调用】JSON 块。"
+                    "对于非身份查询类问题，你必须至少调用一个工具来检索信息。"
+                    f"请重新规划，并在【执行报告】后输出【工具调用】JSON 块，格式为："
+                    f'[{{"tool": "工具名", "args": {{"参数名": "参数值"}}}}]'
+                    f"。当前可调用的工具包括：{_tool_str}。"
+                    "你的职责是调用工具获取信息。如果确实搜不到，正常输出执行报告即可，后续阶段会处理未收录情况。"
+                )
+            )
+        )
+        trace_emit(
+            "llm_start",
+            {
+                "role": "plan_retry",
+                "iteration": iteration + 1,
+                "run_id": state.get("run_id"),
+                "model": getattr(current_llm_with_tools, "model_name", None),
+            },
+        )
         try:
             response = current_llm_with_tools.invoke(messages)
         except Exception as e:
             print(f"  -> [拦截] LLM 重试调用失败: {e}")
             trace_emit("llm_end", {"role": "plan_retry", "status": "error", "run_id": state.get("run_id")})
         else:
-            trace_emit("llm_end", {"role": "plan_retry", "status": "success", "run_id": state.get("run_id"), "tool_call_count": len(getattr(response, "tool_calls", None) or [])})
-            plan_content = response.content if hasattr(response, 'content') else ''
-            if hasattr(response, 'tool_calls') and response.tool_calls:
-                print(f"  -> [拦截] 重试成功，调用 {len(response.tool_calls)} 个工具: {[tc['name'] for tc in response.tool_calls]}")
+            trace_emit(
+                "llm_end",
+                {
+                    "role": "plan_retry",
+                    "status": "success",
+                    "run_id": state.get("run_id"),
+                    "tool_call_count": len(getattr(response, "tool_calls", None) or []),
+                },
+            )
+            plan_content = response.content if hasattr(response, "content") else ""
+            if hasattr(response, "tool_calls") and response.tool_calls:
+                print(
+                    f"  -> [拦截] 重试成功，调用 {len(response.tool_calls)} 个工具: {[tc['name'] for tc in response.tool_calls]}"
+                )
                 if iteration + 1 >= MAX_AGENT_ITERATIONS:
                     print(f"  -> 已达到最大迭代次数({MAX_AGENT_ITERATIONS})，本轮后进入回答阶段")
                 return {
@@ -1192,15 +1389,20 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             # 重试后仍无原生 tool_calls，但正文含【工具调用】JSON → 同样构造真实调用
             retry_json_calls = _parse_plan_json_tool_calls(plan_content, allowed_tool_names)
             if retry_json_calls:
-                print(f"  -> [拦截] 重试 JSON工具块，调用 {len(retry_json_calls)} 个工具: {[tc['name'] for tc in retry_json_calls]}")
+                print(
+                    f"  -> [拦截] 重试 JSON工具块，调用 {len(retry_json_calls)} 个工具: {[tc['name'] for tc in retry_json_calls]}"
+                )
                 structured_retry = AIMessage(content=plan_content, tool_calls=retry_json_calls)
-                trace_emit("plan", {
-                    "iteration": iteration + 1,
-                    "execution_plan": plan_content[:500],
-                    "tool_call_names": [tc["name"] for tc in retry_json_calls],
-                    "tool_call_source": "json_block_retry",
-                    "run_id": state.get("run_id"),
-                })
+                trace_emit(
+                    "plan",
+                    {
+                        "iteration": iteration + 1,
+                        "execution_plan": plan_content[:500],
+                        "tool_call_names": [tc["name"] for tc in retry_json_calls],
+                        "tool_call_source": "json_block_retry",
+                        "run_id": state.get("run_id"),
+                    },
+                )
                 if iteration + 1 >= MAX_AGENT_ITERATIONS:
                     print(f"  -> 已达到最大迭代次数({MAX_AGENT_ITERATIONS})，本轮后进入回答阶段")
                 return {
@@ -1218,12 +1420,15 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     # 重试耗尽 → 进入回答阶段
     print("  -> 无工具调用，进入回答阶段")
-    trace_emit("plan_exit", {
-        "iteration": iteration + 1,
-        "plan_exit_reason": plan_exit_reason,
-        "alias_count": len(alias_matches),
-        "run_id": state.get("run_id"),
-    })
+    trace_emit(
+        "plan_exit",
+        {
+            "iteration": iteration + 1,
+            "plan_exit_reason": plan_exit_reason,
+            "alias_count": len(alias_matches),
+            "run_id": state.get("run_id"),
+        },
+    )
     return {
         "messages": [response],
         "execution_plan": plan_content,
@@ -1278,13 +1483,11 @@ def _is_not_found(tool_message) -> bool:
     只认工具返回开头就是未命中提示的格式；不再对成功返回的整段知识库文本
     做子串搜索，避免把原文中“未找到第二个「镌光铭印」”这类正文误判为未命中。
     """
-    content = tool_message.content if hasattr(tool_message, 'content') else str(tool_message)
+    content = tool_message.content if hasattr(tool_message, "content") else str(tool_message)
     text = str(content).strip()
     if not text:
         return False
     return text.startswith(_NOT_FOUND_PREFIXES)
-
-
 
 
 # ====== 概念本质类问题：三视图确定性覆盖 ======
@@ -1456,11 +1659,21 @@ def _resolve_known_entity_type(subject: str) -> str:
         return "item"
     return ""
 
+
 # 概念问法的触发/排除关键词与抽取模式（模块级常量，避免每次调用重复构造）
 _CONCEPT_MARKERS = ("是什么", "什么是", "何为", "本质", "定义")
 _CONCEPT_EXCLUSIONS = (
-    "是谁", "指谁", "哪个角色", "哪一位",
-    "包含几幕", "有哪些子任务", "有几幕", "第几幕", "章节", "任务", "之章",
+    "是谁",
+    "指谁",
+    "哪个角色",
+    "哪一位",
+    "包含几幕",
+    "有哪些子任务",
+    "有几幕",
+    "第几幕",
+    "章节",
+    "任务",
+    "之章",
 )
 _CONCEPT_QUOTE_PATTERNS = (
     r"[「『]([^」』]{2,16})[」』]",
@@ -1547,8 +1760,7 @@ def _maybe_auto_concept_dimension(state, messages, routed_tools, iteration, inte
         return None
 
     missing = [
-        dim for dim, _template in _CONCEPT_DIMENSION_TEMPLATES
-        if dim not in _covered_concept_dimensions(messages)
+        dim for dim, _template in _CONCEPT_DIMENSION_TEMPLATES if dim not in _covered_concept_dimensions(messages)
     ]
     if not missing:
         return None
@@ -1560,12 +1772,14 @@ def _maybe_auto_concept_dimension(state, messages, routed_tools, iteration, inte
     template_by_dim = dict(_CONCEPT_DIMENSION_TEMPLATES)
     calls = []
     for dim in missing:
-        calls.append({
-            "name": "hybrid_search",
-            "args": {"query": f"{subject} {template_by_dim[dim]}"},
-            "id": f"call_concept_{dim}_{iteration + 1}",
-            "type": "tool_call",
-        })
+        calls.append(
+            {
+                "name": "hybrid_search",
+                "args": {"query": f"{subject} {template_by_dim[dim]}"},
+                "id": f"call_concept_{dim}_{iteration + 1}",
+                "type": "tool_call",
+            }
+        )
 
     missing_names = "、".join(f"{subject} {template_by_dim[dim]}" for dim in missing)
     content = (
@@ -1573,26 +1787,29 @@ def _maybe_auto_concept_dimension(state, messages, routed_tools, iteration, inte
         f"用户问题回显：{state.get('user_query', '')}\n"
         "用户意图：概念本质类问题的三视图检索\n"
         f"工具决策：系统检测到概念「{subject}」的检索维度尚未覆盖，按硬规则自动补齐：{missing_names}。\n"
-        "【工具调用】\n"
-        + json.dumps([{"tool": c["name"], "args": c["args"]} for c in calls], ensure_ascii=False)
+        "【工具调用】\n" + json.dumps([{"tool": c["name"], "args": c["args"]} for c in calls], ensure_ascii=False)
     )
     print(f"  -> [概念三视图] 自动补搜: {missing_names}")
 
-    trace_emit("plan", {
-        "iteration": iteration + 1,
-        "execution_plan": content[:500],
-        "tool_call_names": [c["name"] for c in calls],
-        "tool_call_source": "concept_dimension",
-        "concept": subject,
-        "dimensions": missing,
-        "run_id": state.get("run_id"),
-    })
+    trace_emit(
+        "plan",
+        {
+            "iteration": iteration + 1,
+            "execution_plan": content[:500],
+            "tool_call_names": [c["name"] for c in calls],
+            "tool_call_source": "concept_dimension",
+            "concept": subject,
+            "dimensions": missing,
+            "run_id": state.get("run_id"),
+        },
+    )
     return {
         "messages": [AIMessage(content=content, tool_calls=calls)],
         "execution_plan": content,
         "iteration": iteration + 1,
         "intent_labels": labels,
     }
+
 
 # ====== 情感/关系类问题：双极性关系补搜 ======
 # 设计说明：
@@ -1602,9 +1819,7 @@ def _maybe_auto_concept_dimension(state, messages, routed_tools, iteration, inte
 #   代码只负责“当已有检索没有覆盖关系原因维度时补一发”，不写入任何提示词。
 # - 具体后缀词是可解释的通用关系/情感词，不包含 Golden Test 的专有答案术语。
 
-_RELATIONSHIP_NEGATIVE_PATTERN = re.compile(
-    r"(?:为什么|为何).{0,10}(?:讨厌|恨|怨恨|厌恶|反感|不喜欢|怨)"
-)
+_RELATIONSHIP_NEGATIVE_PATTERN = re.compile(r"(?:为什么|为何).{0,10}(?:讨厌|恨|怨恨|厌恶|反感|不喜欢|怨)")
 _RELATIONSHIP_POSITIVE_PATTERN = re.compile(
     r"(?:为什么|为何).{0,10}(?:喜欢|爱|信任|依赖|欣赏|崇拜|怀念|尊敬|珍惜|感恩)"
 )
@@ -1693,14 +1908,17 @@ def _maybe_auto_relationship_search(state, messages, routed_tools, iteration, re
     )
     print(f"  -> [关系补搜] 自动补搜({polarity}): {search_query}")
 
-    trace_emit("plan", {
-        "iteration": iteration + 1,
-        "execution_plan": content[:500],
-        "tool_call_names": ["hybrid_search"],
-        "tool_call_source": "relationship_dimension",
-        "relationship_polarity": polarity,
-        "run_id": state.get("run_id"),
-    })
+    trace_emit(
+        "plan",
+        {
+            "iteration": iteration + 1,
+            "execution_plan": content[:500],
+            "tool_call_names": ["hybrid_search"],
+            "tool_call_source": "relationship_dimension",
+            "relationship_polarity": polarity,
+            "run_id": state.get("run_id"),
+        },
+    )
     return {
         "messages": [AIMessage(content=content, tool_calls=[tool_call])],
         "execution_plan": content,
@@ -1766,9 +1984,24 @@ _SERIES_MARK_RE = re.compile(r"系列任务[「『]?\[\[([^\]|#]{2,40})\]\]")
 # 词条 full_text 里的顺序元数据字段（story_text 会把它们剥掉）。
 _TASK_META_KEYS = ("触发条件", "前置任务", "后续任务")
 _TASK_META_STOPS = (
-    "触发条件", "前置任务", "后续任务", "起始NPC", "结束NPC",
-    "等级限制", "特殊限制", "任务过程", "任务奖励", "[",
-    "任务条件", "任务描述", "任务名称", "系列任务", "出场人物", "任务地区", "所属版本", "任务编号",
+    "触发条件",
+    "前置任务",
+    "后续任务",
+    "起始NPC",
+    "结束NPC",
+    "等级限制",
+    "特殊限制",
+    "任务过程",
+    "任务奖励",
+    "[",
+    "任务条件",
+    "任务描述",
+    "任务名称",
+    "系列任务",
+    "出场人物",
+    "任务地区",
+    "所属版本",
+    "任务编号",
 )
 _CHAIN_MAX_TASKS = 40
 _ANCHOR_MAX = 6
@@ -1897,8 +2130,12 @@ def _graph_aux(graph):
     if cached is not None:
         return cached
     cached = {
-        "region": set(), "names": {}, "chapters": {}, "chapter_region": {},
-        "series_children": {}, "series_parent": {},
+        "region": set(),
+        "names": {},
+        "chapters": {},
+        "chapter_region": {},
+        "series_children": {},
+        "series_parent": {},
     }
     _GRAPH_AUX_CACHE[id(graph)] = cached
     cached["region"] = _graph_aux_region_vocab(graph)
@@ -1917,7 +2154,7 @@ def _structural_task_aliases(title: str, region: str) -> set:
 
     # 去掉“地区 + 空格”前缀，例如“至冬 在生命的寓所” -> “在生命的寓所”。
     if region and title.startswith(region + " "):
-        aliases.add(title[len(region) + 1:].strip())
+        aliases.add(title[len(region) + 1 :].strip())
     # 去掉首段系列前缀，但不要把地区名本身当成任务别名。
     first = title.split(" ", 1)[0].strip()
     if len(first) >= 2 and first != region:
@@ -1950,7 +2187,7 @@ def _declared_task_aliases(entry, region_vocab) -> list:
     返回 list 而不是 set：插入顺序要与旧实现一致，避免改变最终别名表的迭代顺序。
     """
     out = []
-    for alias in (entry.aliases or []):
+    for alias in entry.aliases or []:
         alias = (alias or "").strip().replace("\xa0", " ")
         if len(alias) < 3 or alias in region_vocab or _TASK_ALIAS_NOISE_RE.match(alias):
             continue
@@ -1997,7 +2234,7 @@ def _task_meta_fields(entry):
         idx = text.find(key)
         if idx < 0:
             continue
-        seg = text[idx + len(key): idx + len(key) + 240]
+        seg = text[idx + len(key) : idx + len(key) + 240]
         cut = len(seg)
         for stop in _TASK_META_STOPS:
             pos = seg.find(stop)
@@ -2135,9 +2372,7 @@ def _drop_covered_entries(graph, matched):
 
     def norm_text(entry):
         if entry.entry_id not in norm_cache:
-            norm_cache[entry.entry_id] = _cover_norm(
-                _entry_story_text(entry) or (entry.full_text or "")
-            )
+            norm_cache[entry.entry_id] = _cover_norm(_entry_story_text(entry) or (entry.full_text or ""))
         return norm_cache[entry.entry_id]
 
     order = {e.entry_id: i for i, e in enumerate(matched)}
@@ -2147,10 +2382,7 @@ def _drop_covered_entries(graph, matched):
         covered = False
         if len(small) >= _COVER_FRAG * 4:
             step = max(_COVER_FRAG, len(small) // _COVER_SAMPLE)
-            frags = [
-                small[i:i + _COVER_FRAG]
-                for i in range(0, len(small) - _COVER_FRAG, step)
-            ]
+            frags = [small[i : i + _COVER_FRAG] for i in range(0, len(small) - _COVER_FRAG, step)]
             for big in kept:
                 big_text = norm_text(big)
                 if len(big_text) < len(small) * 1.2:
@@ -2310,9 +2542,7 @@ def _match_graph_task_titles(graph, query):
     freq_added = _keyword_freq_tasks(graph, keywords, {e.entry_id for e in matched})
     if freq_added:
         matched.extend(freq_added)
-        matched = _keyword_series_tasks(
-            graph, keywords, matched, {e.entry_id for e in matched}
-        )
+        matched = _keyword_series_tasks(graph, keywords, matched, {e.entry_id for e in matched})
     hub_added = _series_hub_tasks(graph, matched, {e.entry_id for e in matched})
     if hub_added:
         matched.extend(hub_added)
@@ -2330,9 +2560,7 @@ def _collect_graph_map_texts(graph, task_entries):
     seen = set()
     task_regions = {t.region for t in task_entries if t.region}
     # 全部任务的合并正文（共现闸门与候选排序都用它，避免被循环内单任务文本覆盖）
-    all_task_text = "\n".join(
-        f"{task.title}\n{_entry_story_text(task) or ''}" for task in task_entries
-    )
+    all_task_text = "\n".join(f"{task.title}\n{_entry_story_text(task) or ''}" for task in task_entries)
     # 先收全部反向引用（优先级 0），再按地区补全（优先级 1），
     # 否则先处理到的任务会把后续任务的 backlink 地图文本抢先标成低优先级。
     for task in task_entries:
@@ -2345,17 +2573,19 @@ def _collect_graph_map_texts(graph, task_entries):
             same_region = bool(source.region) and source.region in task_regions
             if co_hits <= 0 and not same_region:
                 print(
-                    f"  -> [地图闸门] 跳过仅反向链接且零共现、不同地区的地图文本："
-                    f"{source.title} (ID {source.entry_id})"
+                    f"  -> [地图闸门] 跳过仅反向链接且零共现、不同地区的地图文本：{source.title} (ID {source.entry_id})"
                 )
-                trace_emit("filtered_map_text", {
-                    "entry_id": source.entry_id,
-                    "title": source.title,
-                    "entry_type": source.entry_type,
-                    "co_hits": 0,
-                    "same_region": False,
-                    "source": "map_backlink",
-                })
+                trace_emit(
+                    "filtered_map_text",
+                    {
+                        "entry_id": source.entry_id,
+                        "title": source.title,
+                        "entry_type": source.entry_type,
+                        "co_hits": 0,
+                        "same_region": False,
+                        "source": "map_backlink",
+                    },
+                )
                 continue
             seen.add(source.entry_id)
             candidates.append((0, source.entry_id, source))
@@ -2498,20 +2728,25 @@ def _maybe_auto_entity_entry(state, messages, routed_tools, iteration, response=
         "系统确定性补全 wiki 链接图（不传 focus，保留该页开头正文与内部链接）：",
     ]
     for i, (entry_id, title) in enumerate(calls, 1):
-        tool_calls.append({
-            "name": "wiki_graph_get",
-            "args": {"entry_id": entry_id},
-            "id": f"call_auto_entity_{entry_id}_{iteration + 1}",
-            "type": "tool_call",
-        })
+        tool_calls.append(
+            {
+                "name": "wiki_graph_get",
+                "args": {"entry_id": entry_id},
+                "id": f"call_auto_entity_{entry_id}_{iteration + 1}",
+                "type": "tool_call",
+            }
+        )
         content_parts.append(f"{i}. 读取词条 {entry_id} 《{title}》")
     content = "\n".join(content_parts)
     print(f"  -> [词条补全] {[t for _, t in calls]}（设定页/组织页：向量语料无对应集合，确定性补全）")
-    trace_emit("auto_entity_get", {
-        "run_id": state.get("run_id"),
-        "entries": [eid for eid, _ in calls],
-        "titles": [t for _, t in calls],
-    })
+    trace_emit(
+        "auto_entity_get",
+        {
+            "run_id": state.get("run_id"),
+            "entries": [eid for eid, _ in calls],
+            "titles": [t for _, t in calls],
+        },
+    )
     return {
         "messages": [AIMessage(content=content, tool_calls=tool_calls)],
         "execution_plan": content,
@@ -2545,12 +2780,14 @@ def _build_graph_map_tool_calls(original_query: str, calls: list, iteration: int
         "工具决策：系统检测到问题涉及多个任务与地图文本，确定性补全 wiki 链接图：",
     ]
     for i, (entry_id, title) in enumerate(calls, 1):
-        tool_calls.append({
-            "name": "wiki_graph_get",
-            "args": {"entry_id": entry_id},
-            "id": f"call_graph_map_{entry_id}_{iteration + 1}",
-            "type": "tool_call",
-        })
+        tool_calls.append(
+            {
+                "name": "wiki_graph_get",
+                "args": {"entry_id": entry_id},
+                "id": f"call_graph_map_{entry_id}_{iteration + 1}",
+                "type": "tool_call",
+            }
+        )
         content_parts.append(f"{i}. 读取 {entry_id} {title}")
     return tool_calls, "\n".join(content_parts)
 
@@ -2717,7 +2954,7 @@ def _attempted_read_names(messages) -> set:
     for msg in messages:
         if not isinstance(msg, AIMessage):
             continue
-        for tc in (getattr(msg, "tool_calls", None) or []):
+        for tc in getattr(msg, "tool_calls", None) or []:
             if tc.get("name") not in _READ_FULL_TOOLS:
                 continue
             args = tc.get("args", {}) or {}
@@ -2786,21 +3023,26 @@ def _maybe_auto_full_text_read(state, messages, routed_tools, iteration, respons
         "系统确定性补读全文（避免漏掉只在全文里出现的关键句）：",
     ]
     for i, (tool_name, arg_key, raw, _norm) in enumerate(calls, 1):
-        tool_calls.append({
-            "name": tool_name,
-            "args": {arg_key: raw},
-            "id": f"call_auto_read_{i}_{iteration + 1}",
-            "type": "tool_call",
-        })
+        tool_calls.append(
+            {
+                "name": tool_name,
+                "args": {arg_key: raw},
+                "id": f"call_auto_read_{i}_{iteration + 1}",
+                "type": "tool_call",
+            }
+        )
         kind = "书籍" if tool_name == "load_book_content" else "任务"
         content_parts.append(f"{i}. 读取{kind}《{raw}》全文")
     content = "\n".join(content_parts)
     print(f"  -> [读全文补全] 点名但未读全文，确定性补读：{[(n, r) for n, _, r, _ in calls]}")
-    trace_emit("auto_full_text_read", {
-        "run_id": state.get("run_id"),
-        "calls": [{"tool": n, "value": r} for n, _, r, _ in calls],
-        "iteration": iteration + 1,
-    })
+    trace_emit(
+        "auto_full_text_read",
+        {
+            "run_id": state.get("run_id"),
+            "calls": [{"tool": n, "value": r} for n, _, r, _ in calls],
+            "iteration": iteration + 1,
+        },
+    )
     return {
         "messages": [AIMessage(content=content, tool_calls=tool_calls)],
         "execution_plan": content,
@@ -2847,15 +3089,18 @@ def _maybe_auto_graph_map_texts(state, messages, routed_tools, iteration, respon
         f"地图文本={len(map_ids)}: {map_ids}"
     )
 
-    trace_emit("plan", {
-        "iteration": iteration + 1,
-        "execution_plan": content[:500],
-        "tool_call_names": [tc["name"] for tc in tool_calls],
-        "tool_call_source": "graph_map_text",
-        "graph_task_ids": task_ids,
-        "graph_map_ids": map_ids,
-        "run_id": state.get("run_id"),
-    })
+    trace_emit(
+        "plan",
+        {
+            "iteration": iteration + 1,
+            "execution_plan": content[:500],
+            "tool_call_names": [tc["name"] for tc in tool_calls],
+            "tool_call_source": "graph_map_text",
+            "graph_task_ids": task_ids,
+            "graph_map_ids": map_ids,
+            "run_id": state.get("run_id"),
+        },
+    )
     return {
         "messages": [AIMessage(content=content, tool_calls=tool_calls)],
         "execution_plan": content,
@@ -2898,17 +3143,42 @@ def _entry_story_text(entry):
 _ENTITY_INDEX_PATH = WIKI_GRAPH_OUTPUT.parent / "wiki_entity_mention_index.json"
 _ENTITY_INDEX_CACHE = None
 _ENTITY_TYPE_PRIORITY = {
-    "character": 0, "npc": 1, "organization": 2, "artifact": 3,
-    "weapon": 4, "book": 5, "monster": 6, "region_feature": 7,
-    "story_chapter": 8, "gadget": 9, "map_text": 10,
-    "character_anecdote": 11, "task": 12, "activity": 13, "item": 14,
+    "character": 0,
+    "npc": 1,
+    "organization": 2,
+    "artifact": 3,
+    "weapon": 4,
+    "book": 5,
+    "monster": 6,
+    "region_feature": 7,
+    "story_chapter": 8,
+    "gadget": 9,
+    "map_text": 10,
+    "character_anecdote": 11,
+    "task": 12,
+    "activity": 13,
+    "item": 14,
 }
 _SPEAKER_RE = re.compile(r"(?:^|\n)\s*\*?\s*([\u4e00-\u9fff·]{2,10})\s*[：:]")
 _SPEAKER_STOPWORDS = {"旅行者", "派蒙"}
 # 说话人提取的通用噪音词：正文里的物件/笔记/怪物/匿名声音不是人物。
 _SPEAKER_NOISE_KEYWORDS = (
-    "字迹", "笔记", "记录", "留言", "日志", "报告", "告示", "配方", "画框",
-    "书柜", "花瓶", "猫叫", "通讯", "女声", "树妖", "雪精",
+    "字迹",
+    "笔记",
+    "记录",
+    "留言",
+    "日志",
+    "报告",
+    "告示",
+    "配方",
+    "画框",
+    "书柜",
+    "花瓶",
+    "猫叫",
+    "通讯",
+    "女声",
+    "树妖",
+    "雪精",
 )
 _PANORAMIC_ENTITY_MAX = 30
 _PANORAMIC_EXTRA_CHARS = 120000
@@ -2916,29 +3186,119 @@ _PANORAMIC_ENTITY_TEXT_CAP = 6000
 # 说话人名字没有独立角色词条时，只在“正文提及该名字”的档案类词条里找，
 # 避免把闲云/珊瑚宫心海这类泛角色长档案误当成本任务相关角色。
 _UNKNOWN_SPEAKER_TARGET_TYPES = {
-    "artifact", "organization", "story_chapter", "book", "gadget", "item",
+    "artifact",
+    "organization",
+    "story_chapter",
+    "book",
+    "gadget",
+    "item",
 }
 # 实体相关性过滤：只在“正文里出现具体名字/具体别名，或本人就是说话人”时保留。
 # 这里的通用别名/头衔表不是主题词，而是为了防止“妹妹/父亲/偶像”这类泛称别名
 # 把无关的全局角色误判为当前任务相关角色。
-_ENTITY_GENERIC_ALIASES = frozenset({
-    "妹妹", "哥哥", "姐姐", "弟弟", "父亲", "母亲", "爷爷", "奶奶", "叔叔", "阿姨",
-    "偶像", "军师", "仆人", "内鬼", "那个女人", "这个男人", "那个人", "少女", "少年",
-    "男人", "女人", "孩子", "大人", "先生", "小姐", "老板", "店主", "商人", "村民",
-    "冒险家", "接待员", "守卫", "士兵", "记者", "编辑", "厨师", "船夫", "工人",
-    "学徒", "信使", "使者", "观众", "听众", "路人", "魔神", "大门", "山上",
-    "未来", "代价", "奇迹", "团雀", "猫粮", "秘密", "故事", "记忆", "时间",
-    "生命", "灵魂", "愿望",
-})
+_ENTITY_GENERIC_ALIASES = frozenset(
+    {
+        "妹妹",
+        "哥哥",
+        "姐姐",
+        "弟弟",
+        "父亲",
+        "母亲",
+        "爷爷",
+        "奶奶",
+        "叔叔",
+        "阿姨",
+        "偶像",
+        "军师",
+        "仆人",
+        "内鬼",
+        "那个女人",
+        "这个男人",
+        "那个人",
+        "少女",
+        "少年",
+        "男人",
+        "女人",
+        "孩子",
+        "大人",
+        "先生",
+        "小姐",
+        "老板",
+        "店主",
+        "商人",
+        "村民",
+        "冒险家",
+        "接待员",
+        "守卫",
+        "士兵",
+        "记者",
+        "编辑",
+        "厨师",
+        "船夫",
+        "工人",
+        "学徒",
+        "信使",
+        "使者",
+        "观众",
+        "听众",
+        "路人",
+        "魔神",
+        "大门",
+        "山上",
+        "未来",
+        "代价",
+        "奇迹",
+        "团雀",
+        "猫粮",
+        "秘密",
+        "故事",
+        "记忆",
+        "时间",
+        "生命",
+        "灵魂",
+        "愿望",
+    }
+)
 _ENTITY_GENERIC_TITLE_KEYWORDS = (
-    "接待员", "冒险家协会", "商人", "村民", "守卫", "士兵", "记者", "编辑",
-    "厨师", "船夫", "工人", "学徒", "信使", "使者", "观众", "听众", "路人",
-    "老板", "店主", "店员", "摊主", "看守", "酒保", "铁匠", "教练", "保镖",
-    "主管", "服务员", "护卫",
+    "接待员",
+    "冒险家协会",
+    "商人",
+    "村民",
+    "守卫",
+    "士兵",
+    "记者",
+    "编辑",
+    "厨师",
+    "船夫",
+    "工人",
+    "学徒",
+    "信使",
+    "使者",
+    "观众",
+    "听众",
+    "路人",
+    "老板",
+    "店主",
+    "店员",
+    "摊主",
+    "看守",
+    "酒保",
+    "铁匠",
+    "教练",
+    "保镖",
+    "主管",
+    "服务员",
+    "护卫",
 )
 # 非人词条：纳塔龙众、驮兽这类生物页码没有立场与结局，不进角色档案。
 _ENTITY_NONHUMAN_TITLE_KEYWORDS = (
-    "驮兽", "匿叶龙", "嵴锋龙", "绒翼龙", "鳍游龙", "幼龙", "龙众",
+    "驮兽",
+    "匿叶龙",
+    "嵴锋龙",
+    "绒翼龙",
+    "鳍游龙",
+    "幼龙",
+    "龙众",
 )
 # 尘歌壶【洞天】页码是壶内闲聊台词，不是剧情正文，只靠同名变体折叠会把它留成代表条目。
 _ENTITY_EXCLUDE_TITLE_KEYWORDS = ("【洞天】",)
@@ -2947,13 +3307,26 @@ _ENTITY_EXCLUDE_TITLE_KEYWORDS = ("【洞天】",)
 _ENTITY_TITLE_SUFFIX_RE = re.compile(r"【[^】]{1,40}】\s*$")
 # 怪物/兵种有独立 type，不参与实体档案展开。
 _ENTITY_ALLOWED_TYPES = {
-    "character", "npc", "organization", "artifact", "weapon",
-    "book", "story_chapter", "gadget", "item", "region_feature",
+    "character",
+    "npc",
+    "organization",
+    "artifact",
+    "weapon",
+    "book",
+    "story_chapter",
+    "gadget",
+    "item",
+    "region_feature",
 }
 # 图谱一跳扩展：只从任务/地图词条向这些“造物/文献/组织/地点”类型扩展，
 # 不扩展角色/NPC，避免把全局角色噪声带回来。
 _LORE_EXPAND_TYPES = {
-    "artifact", "weapon", "book", "story_chapter", "organization", "region_feature",
+    "artifact",
+    "weapon",
+    "book",
+    "story_chapter",
+    "organization",
+    "region_feature",
 }
 _LORE_EXPAND_MAX = 20
 
@@ -2962,7 +3335,7 @@ def _entity_specific_alias_hits(entry, text):
     """返回实体在正文中的具体名字命中次数（标题 + 非泛称别名）。"""
     title = (entry.title or "").strip()
     hits = text.count(title) if title else 0
-    for alias in (entry.aliases or []):
+    for alias in entry.aliases or []:
         alias = (alias or "").strip()
         if len(alias) < 3 or alias in _ENTITY_GENERIC_ALIASES:
             continue
@@ -2993,7 +3366,7 @@ def _entity_is_speaker(entry, speakers):
     title = (entry.title or "").strip()
     if title and title in speakers:
         return True
-    for alias in (entry.aliases or []):
+    for alias in entry.aliases or []:
         alias = (alias or "").strip()
         if len(alias) >= 3 and alias not in _ENTITY_GENERIC_ALIASES and alias in speakers:
             return True
@@ -3040,9 +3413,7 @@ def _entity_candidates_from_mentions(graph, task_entries, excluded) -> dict:
             entry = graph.get(eid)
             if entry is None or entry.entry_type not in _ENTITY_ALLOWED_TYPES:
                 continue
-            info = candidates.setdefault(
-                eid, {"entry": entry, "known": 0, "speaker": 0, "hits": 0}
-            )
+            info = candidates.setdefault(eid, {"entry": entry, "known": 0, "speaker": 0, "hits": 0})
             info["known"] += 1
     return candidates
 
@@ -3062,9 +3433,7 @@ def _add_speaker_candidates(graph, task_texts, excluded, candidates) -> None:
             title = (entry.title or "").strip()
             if title != name and name not in (entry.aliases or []):
                 continue
-            info = candidates.setdefault(
-                entry.entry_id, {"entry": entry, "known": 0, "speaker": 0, "hits": 0}
-            )
+            info = candidates.setdefault(entry.entry_id, {"entry": entry, "known": 0, "speaker": 0, "hits": 0})
             info["speaker"] += 1
 
 
@@ -3098,9 +3467,7 @@ def _entity_relevance(info, speaker_names, combined_text):
     return speaker_hit, hits
 
 
-def _graph_expanded_entities(
-    graph, task_entries, map_entries, excluded, existing_ids, reference_text
-) -> list:
+def _graph_expanded_entities(graph, task_entries, map_entries, excluded, existing_ids, reference_text) -> list:
     """第 4 步：图谱一跳扩展 + 共现闸门。
 
     只做一跳、只允许 _LORE_EXPAND_TYPES 的类型，避免噪声扩散。
@@ -3130,18 +3497,27 @@ def _graph_expanded_entities(
                     f"  -> [实体闸门] 跳过仅图谱关联且零共现：{neighbor.title} "
                     f"({neighbor.entry_type}, ID {neighbor.entry_id})"
                 )
-                trace_emit("filtered_entity", {
-                    "entry_id": neighbor.entry_id,
-                    "title": neighbor.title,
-                    "entry_type": neighbor.entry_type,
-                    "co_hits": 0,
-                    "source": "graph_expand",
-                })
+                trace_emit(
+                    "filtered_entity",
+                    {
+                        "entry_id": neighbor.entry_id,
+                        "title": neighbor.title,
+                        "entry_type": neighbor.entry_type,
+                        "co_hits": 0,
+                        "source": "graph_expand",
+                    },
+                )
                 continue
-            expanded.append({
-                "entry": neighbor, "known": 0, "speaker": 0,
-                "hits": co_hits, "expand": 1, "weak": True,
-            })
+            expanded.append(
+                {
+                    "entry": neighbor,
+                    "known": 0,
+                    "speaker": 0,
+                    "hits": co_hits,
+                    "expand": 1,
+                    "weak": True,
+                }
+            )
             if len(expanded) >= _LORE_EXPAND_MAX:
                 break
         if len(expanded) >= _LORE_EXPAND_MAX:
@@ -3208,11 +3584,7 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
     if map_entries:
         reference_text += "\n" + "\n".join(_entry_story_text(e) or "" for e in map_entries)
     existing_ids = {info["entry"].entry_id for info in filtered}
-    filtered.extend(
-        _graph_expanded_entities(
-            graph, task_entries, map_entries, excluded, existing_ids, reference_text
-        )
-    )
+    filtered.extend(_graph_expanded_entities(graph, task_entries, map_entries, excluded, existing_ids, reference_text))
 
     ordered = sorted(
         filtered,
@@ -3230,7 +3602,7 @@ def _collect_related_entity_entries(graph, task_entries, task_texts, map_entries
     out = _cap_entity_budget(ordered)
     # 仅图谱关联（第 4 步进包、共现较弱）的条目：证据包内打弱标记，
     # 输出规约要求至多一句带过，L3 覆盖兜底也跳过它们，不强制出现在答案中。
-    weak_ids = {info["entry"].entry_id for info in ordered[:len(out)] if info.get("weak")}
+    weak_ids = {info["entry"].entry_id for info in ordered[: len(out)] if info.get("weak")}
     return out, weak_ids
 
 
@@ -3249,9 +3621,7 @@ def _resolve_panoramic_scope(state, messages, iteration):
         return None
     matched_tasks = _match_graph_task_titles(graph, original_query)
     # 通常要求至少 2 条任务；但题面给了长台词/长专名时，单条溯源任务也构成强证据（SOP 3.8 台词溯源）。
-    if len(matched_tasks) < 2 and not any(
-        len(kw) >= 8 for kw in _query_keywords(graph, original_query)
-    ):
+    if len(matched_tasks) < 2 and not any(len(kw) >= 8 for kw in _query_keywords(graph, original_query)):
         return None
     matched_map_texts = _collect_graph_map_texts(graph, matched_tasks)
     task_texts = [_entry_story_text(e) or (e.full_text or "") for e in matched_tasks]
@@ -3269,23 +3639,18 @@ def _build_panorama_evidence(matched_tasks, matched_map_texts, related_entities,
     ]
     for i, entry in enumerate(matched_tasks, 1):
         text = _entry_story_text(entry) or (entry.full_text or "")
-        parts.append(
-            f"\n===== 任务 {i}: {entry.title} (ID {entry.entry_id}) 共 {len(text)} 字 ====="
-        )
+        parts.append(f"\n===== 任务 {i}: {entry.title} (ID {entry.entry_id}) 共 {len(text)} 字 =====")
         meta = _task_meta_fields(entry)
         if meta:
             parts.append(
-                "顺序元数据（词条 触发条件/前置/后续 字段）："
-                + "；".join(f"{k}：{v[:160]}" for k, v in meta.items())
+                "顺序元数据（词条 触发条件/前置/后续 字段）：" + "；".join(f"{k}：{v[:160]}" for k, v in meta.items())
             )
         parts.append(text)
     if matched_map_texts:
         parts.append("\n\n===== 相关地图文本剧情文本 =====")
         for entry in matched_map_texts:
             text = _entry_story_text(entry) or (entry.full_text or "")
-            parts.append(
-                f"\n----- {entry.title} (ID {entry.entry_id}) 共 {len(text)} 字 -----\n" + text
-            )
+            parts.append(f"\n----- {entry.title} (ID {entry.entry_id}) 共 {len(text)} 字 -----\n" + text)
     if related_entities:
         parts.append("\n\n===== 相关角色/组织/圣遗物/地点剧情档案 =====")
         for entry in related_entities:
@@ -3296,34 +3661,33 @@ def _build_panorama_evidence(matched_tasks, matched_map_texts, related_entities,
             text = _entry_story_text(entry)
             if len(text) > _PANORAMIC_ENTITY_TEXT_CAP:
                 text = text[:_PANORAMIC_ENTITY_TEXT_CAP] + "\n...[档案过长已截断]"
-            parts.append(
-                f"\n----- {title} ({entry.entry_type}, ID {entry.entry_id}) "
-                f"共 {len(text)} 字 -----\n" + text
-            )
+            parts.append(f"\n----- {title} ({entry.entry_type}, ID {entry.entry_id}) 共 {len(text)} 字 -----\n" + text)
     return "\n".join(parts)
 
 
-def _trace_panorama_selection(state, iteration, matched_tasks, matched_map_texts,
-                              related_entities, content) -> None:
+def _trace_panorama_selection(state, iteration, matched_tasks, matched_map_texts, related_entities, content) -> None:
     """打印 + trace：全景旁路选了哪些条目、证据包多大（排查 L3 的首选入口）。"""
     print(
         f"  -> [全景全文旁路] 任务={[e.entry_id for e in matched_tasks]} "
         f"地图={[e.entry_id for e in matched_map_texts]} "
         f"实体档案={[e.entry_id for e in related_entities]} 总字={len(content)}"
     )
-    trace_emit("plan", {
-        "iteration": iteration + 1,
-        "execution_plan": (
-            f"全景全文旁路：{len(matched_tasks)} 个任务全文 + {len(matched_map_texts)} 个地图文本全文 "
-            f"+ {len(related_entities)} 个实体档案"
-        ),
-        "tool_call_names": [],
-        "tool_call_source": "full_text_panoramic",
-        "full_text_task_ids": [e.entry_id for e in matched_tasks],
-        "full_text_map_ids": [e.entry_id for e in matched_map_texts],
-        "full_text_entity_ids": [e.entry_id for e in related_entities],
-        "run_id": state.get("run_id"),
-    })
+    trace_emit(
+        "plan",
+        {
+            "iteration": iteration + 1,
+            "execution_plan": (
+                f"全景全文旁路：{len(matched_tasks)} 个任务全文 + {len(matched_map_texts)} 个地图文本全文 "
+                f"+ {len(related_entities)} 个实体档案"
+            ),
+            "tool_call_names": [],
+            "tool_call_source": "full_text_panoramic",
+            "full_text_task_ids": [e.entry_id for e in matched_tasks],
+            "full_text_map_ids": [e.entry_id for e in matched_map_texts],
+            "full_text_entity_ids": [e.entry_id for e in related_entities],
+            "run_id": state.get("run_id"),
+        },
+    )
 
 
 def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, response=None):
@@ -3335,11 +3699,8 @@ def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, re
     if scope is None:
         return None
     original_query, matched_tasks, matched_map_texts, related_entities, weak_entity_ids = scope
-    content = _build_panorama_evidence(
-        matched_tasks, matched_map_texts, related_entities, weak_entity_ids
-    )
-    _trace_panorama_selection(state, iteration, matched_tasks, matched_map_texts,
-                              related_entities, content)
+    content = _build_panorama_evidence(matched_tasks, matched_map_texts, related_entities, weak_entity_ids)
+    _trace_panorama_selection(state, iteration, matched_tasks, matched_map_texts, related_entities, content)
     return {
         "messages": [ToolMessage(content=content, tool_call_id=f"call_full_panoramic_{iteration + 1}")],
         "execution_plan": f"【执行报告】\n用户问题回显：{original_query}\n用户意图：全景/综合梳理\n工具决策：代码确定性地加载相关词条全文。\n",
@@ -3353,6 +3714,7 @@ def _maybe_auto_full_text_panoramic(state, messages, routed_tools, iteration, re
 # - query_quest/load_quest_content 未命中时，不允许 LLM 自由跳到其他任务/角色；
 #   代码层先强制 search_all 全局检索，全局也无结果时才进入疑似错别字纠正。
 # - 非法跳转（如“影蝶之章”未命中后直接搜“丝柯克”）在代码层被阻断。
+
 
 def _build_tool_name_by_call_id(messages):
     """从 AIMessage.tool_calls 反查 tool_call_id -> 工具名。"""
@@ -3421,6 +3783,7 @@ def _attempted_search_all_queries(messages):
                         queries.add(str(value))
     return queries
 
+
 def _recovery_search_all_payload(state, failed_name: str, iteration: int) -> dict:
     """阶段 1 的返回载荷：强制用 search_all 全局检索该任务名。"""
     content = (
@@ -3438,13 +3801,16 @@ def _recovery_search_all_payload(state, failed_name: str, iteration: int) -> dic
         "id": f"call_recovery_search_{iteration + 1}",
         "type": "tool_call",
     }
-    trace_emit("plan", {
-        "iteration": iteration + 1,
-        "execution_plan": content[:500],
-        "tool_call_names": ["search_all"],
-        "tool_call_source": "auto_recovery_search",
-        "run_id": state.get("run_id"),
-    })
+    trace_emit(
+        "plan",
+        {
+            "iteration": iteration + 1,
+            "execution_plan": content[:500],
+            "tool_call_names": ["search_all"],
+            "tool_call_source": "auto_recovery_search",
+            "run_id": state.get("run_id"),
+        },
+    )
     return {
         "messages": [AIMessage(content=content, tool_calls=[tool_call])],
         "execution_plan": content,
@@ -3456,7 +3822,8 @@ def _recovery_search_all_payload(state, failed_name: str, iteration: int) -> dic
 def _recovery_stage1(state, messages, latest, iteration):
     """阶段 1：任务查询未命中 → 先 search_all 全局检索；不适用返回 None。"""
     failed_name = _tool_call_arg_value(
-        messages, getattr(latest, "tool_call_id", ""),
+        messages,
+        getattr(latest, "tool_call_id", ""),
         ("name", "quest_name", "query"),
     )
     if not failed_name:
@@ -3496,12 +3863,14 @@ def _recovery_original_name(messages, latest, name_by_call_id):
         break
     if prev_failure is not None:
         original_name = _tool_call_arg_value(
-            messages, getattr(prev_failure, "tool_call_id", ""),
+            messages,
+            getattr(prev_failure, "tool_call_id", ""),
             ("name", "quest_name", "query"),
         )
     else:
         original_name = _tool_call_arg_value(
-            messages, getattr(latest, "tool_call_id", ""),
+            messages,
+            getattr(latest, "tool_call_id", ""),
             ("query",),
         )
     return original_name, prev_failure
@@ -3538,13 +3907,16 @@ def _recovery_typo_payload(state, messages, original_name, prev_failure, name_by
         "id": f"call_recovery_typo_{iteration + 1}",
         "type": "tool_call",
     }
-    trace_emit("plan", {
-        "iteration": iteration + 1,
-        "execution_plan": content[:500],
-        "tool_call_names": [retry_tool],
-        "tool_call_source": "auto_recovery_typo",
-        "run_id": state.get("run_id"),
-    })
+    trace_emit(
+        "plan",
+        {
+            "iteration": iteration + 1,
+            "execution_plan": content[:500],
+            "tool_call_names": [retry_tool],
+            "tool_call_source": "auto_recovery_typo",
+            "run_id": state.get("run_id"),
+        },
+    )
     return {
         "messages": [AIMessage(content=content, tool_calls=[tool_call])],
         "execution_plan": content,
@@ -3577,11 +3949,10 @@ def _maybe_auto_task_recovery(state, messages, routed_tools, iteration):
         original_name, prev_failure = _recovery_original_name(messages, latest, name_by_call_id)
         if not original_name:
             return None
-        return _recovery_typo_payload(
-            state, messages, original_name, prev_failure, name_by_call_id, iteration
-        )
+        return _recovery_typo_payload(state, messages, original_name, prev_failure, name_by_call_id, iteration)
 
     return None
+
 
 # ====== 纯别名身份查询确定性识别 ======
 # 设计说明：
@@ -3589,10 +3960,7 @@ def _maybe_auto_task_recovery(state, messages, routed_tools, iteration):
 # - 只放行"纯身份查询"（以是谁/指谁等身份短语结尾）。
 # - 复合句（身份 + 追问，例如"岩王帝君是谁，是璃月的吗"）不属于纯身份查询，
 #   不移交、不豁免，走正常工具流程；这是有意保守，不是正则遗漏。
-_IDENTITY_TAIL_RE = re.compile(
-    r"(?:是谁|指谁|是什么人|是哪位|是什么角色)[？?吗嘛呢啊呀。！!、，\s]*$"
-)
-
+_IDENTITY_TAIL_RE = re.compile(r"(?:是谁|指谁|是什么人|是哪位|是什么角色)[？?吗嘛呢啊呀。！!、，\s]*$")
 
 
 def _parse_alias_mappings(alias_notes: str) -> List[Tuple[str, str]]:
@@ -3631,11 +3999,7 @@ def _get_pure_alias_identity_matches(state: GenshinAdvisorState) -> List[Tuple[s
     if not text or not _IDENTITY_TAIL_RE.search(text):
         return []
 
-    hits = [
-        (alias, canonical)
-        for alias, canonical in _get_alias_pairs(state)
-        if alias in text
-    ]
+    hits = [(alias, canonical) for alias, canonical in _get_alias_pairs(state) if alias in text]
     if not hits:
         return []
 
@@ -3673,21 +4037,59 @@ def _get_pure_alias_identity_matches(state: GenshinAdvisorState) -> List[Tuple[s
 # “介绍一下/讲讲/性格/经历/什么样”需要 Answer LLM 综合工具结果生成自然回答。
 
 _SYNTHESIS_MARKERS = (
-    "介绍", "介绍下", "讲讲", "说说", "描述",
-    "人物故事", "角色故事", "人物经历", "角色经历",
-    "性格", "为人", "什么样", "怎么样", "是个什么样的人",
-    "角色是什么", "角色是谁", "是什么角色",
-    "这个角色是什么", "这个角色是谁", "什么样的角色",
-    "是谁", "指谁", "是什么人", "什么人物", "是哪位", "哪位",
-    "人物简介", "角色简介", "小传", "身份", "背景",
-    "详述", "概括", "讲了什么", "讲什么",
+    "介绍",
+    "介绍下",
+    "讲讲",
+    "说说",
+    "描述",
+    "人物故事",
+    "角色故事",
+    "人物经历",
+    "角色经历",
+    "性格",
+    "为人",
+    "什么样",
+    "怎么样",
+    "是个什么样的人",
+    "角色是什么",
+    "角色是谁",
+    "是什么角色",
+    "这个角色是什么",
+    "这个角色是谁",
+    "什么样的角色",
+    "是谁",
+    "指谁",
+    "是什么人",
+    "什么人物",
+    "是哪位",
+    "哪位",
+    "人物简介",
+    "角色简介",
+    "小传",
+    "身份",
+    "背景",
+    "详述",
+    "概括",
+    "讲了什么",
+    "讲什么",
 )
 
 # 只有用户明确要求“贴原始数据”时，才允许把元数据工具的完整结果直接当作答案；
 # 否则一律走 Answer LLM 综合叙述，避免把角色详情/元数据卡原样糊到用户脸上。
 _RAW_METADATA_REQUEST_MARKERS = (
-    "详情", "详细", "资料", "数据", "角色卡", "人物卡",
-    "原始", "全部", "所有", "完整", "贴出来", "列出来", "列出",
+    "详情",
+    "详细",
+    "资料",
+    "数据",
+    "角色卡",
+    "人物卡",
+    "原始",
+    "全部",
+    "所有",
+    "完整",
+    "贴出来",
+    "列出来",
+    "列出",
 )
 
 
@@ -3794,8 +4196,7 @@ def _evidence_weak_messages(messages) -> List[ToolMessage]:
         weak_mark = f"{EVIDENCE_STRENGTH_TAG} {EVIDENCE_WEAK_MARK}"
     except Exception:
         return []
-    return [m for m in _round_tool_messages(messages)
-            if weak_mark in str(getattr(m, "content", "") or "")]
+    return [m for m in _round_tool_messages(messages) if weak_mark in str(getattr(m, "content", "") or "")]
 
 
 _EVIDENCE_CONFIRM_PROMPT = (
@@ -3825,8 +4226,7 @@ def _confirm_weak_evidence(state) -> None:
     if not weak:
         return
     # 本轮只要有一条强证据就不确认：多跳检索里弱召回常常是补充信息
-    if any(strong_mark in str(getattr(m, "content", "") or "")
-           for m in _round_tool_messages(messages)):
+    if any(strong_mark in str(getattr(m, "content", "") or "") for m in _round_tool_messages(messages)):
         return
 
     question = ""
@@ -3845,13 +4245,16 @@ def _confirm_weak_evidence(state) -> None:
         return
 
     rejected = verdict.startswith("否") or verdict.upper().startswith("NO")
-    trace_emit("relevance_gate", {
-        "stage": "confirm",
-        "verdict": "否" if rejected else "是",
-        "raw": verdict[:20],
-        "weak_count": len(weak),
-        "action": "downgrade" if rejected else "pass",
-    })
+    trace_emit(
+        "relevance_gate",
+        {
+            "stage": "confirm",
+            "verdict": "否" if rejected else "是",
+            "raw": verdict[:20],
+            "weak_count": len(weak),
+            "action": "downgrade" if rejected else "pass",
+        },
+    )
     if not rejected:
         return
     # 只降级不删除：原文仍在 trace/日志；这里改写成标准未找到文案，
@@ -3859,6 +4262,7 @@ def _confirm_weak_evidence(state) -> None:
     for m in weak:
         m.content = f"未找到与「{question[:40]}」相关的内容（相关性确认未通过）。"
     print(f"  -> [相关性闸门] 裁判判否，已降级 {len(weak)} 条弱证据")
+
 
 def _is_no_progress(tool_message) -> bool:
     """重复调用被守卫拦下的返回：不带新信息，按「空转」计。"""
@@ -3877,17 +4281,14 @@ def _count_recent_no_progress(messages) -> int:
         if isinstance(messages[i], HumanMessage):
             turn_start = i + 1
             break
-    return sum(
-        1 for msg in messages[turn_start:]
-        if isinstance(msg, ToolMessage) and _is_no_progress(msg)
-    )
+    return sum(1 for msg in messages[turn_start:] if isinstance(msg, ToolMessage) and _is_no_progress(msg))
 
 
 def _count_recent_tool_failures(messages) -> int:
     """最近一轮 AI 工具调用之后，连续「未找到」的条数（遇到成功即清零并停止）。"""
     failures = 0
     for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
             break
         if isinstance(msg, ToolMessage):
             if _is_not_found(msg):
@@ -3918,9 +4319,11 @@ def _turn_window_stats(messages) -> Tuple[bool, int]:
                 has_any_success = True
                 break
     # 相关性确认判否的次数：连续两轮被判否时不再等 has_any_success（早退保护）
-    rejected = sum(1 for msg in messages[turn_start:]
-                   if isinstance(msg, ToolMessage)
-                   and "相关性确认未通过" in str(getattr(msg, "content", "") or ""))
+    rejected = sum(
+        1
+        for msg in messages[turn_start:]
+        if isinstance(msg, ToolMessage) and "相关性确认未通过" in str(getattr(msg, "content", "") or "")
+    )
     return has_any_success, rejected
 
 
@@ -3928,21 +4331,27 @@ def _trigger_tool_meltdown(messages, failures: int, rejected: int, no_progress: 
     """注入熔断提示并清空最新 AIMessage 的 tool_calls，阻止继续执行工具。"""
     if no_progress >= 2:
         print(f"  -> 重复调用空转({no_progress}次)，进入回答阶段")
-        hint = ('\n\n[系统提示] 连续重复调用同一工具且未带来新信息，已触发熔断。'
-                '请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。')
+        hint = (
+            "\n\n[系统提示] 连续重复调用同一工具且未带来新信息，已触发熔断。"
+            '请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。'
+        )
     elif rejected >= 2:
         print(f"  -> 相关性确认连续判否({rejected}次)，进入回答阶段")
-        hint = ('\n\n[系统提示] 连续 2 轮检索均未通过相关性确认（检索到的内容与问题无关），'
-                '已触发熔断。请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。')
+        hint = (
+            "\n\n[系统提示] 连续 2 轮检索均未通过相关性确认（检索到的内容与问题无关），"
+            '已触发熔断。请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。'
+        )
     else:
         print(f"  -> 连续失败熔断({failures}次)，进入回答阶段")
-        hint = ('\n\n[系统提示] 连续 2 轮搜索均未找到结果，已触发连续失败熔断。'
-                '请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。')
+        hint = (
+            "\n\n[系统提示] 连续 2 轮搜索均未找到结果，已触发连续失败熔断。"
+            '请基于已有信息直接回答用户，如无可用信息则告知"当前知识库未收录"。'
+        )
     for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
             msg.tool_calls = []
             msg.additional_kwargs = {}
-            msg.content = (msg.content or '') + hint
+            msg.content = (msg.content or "") + hint
             break
 
 
@@ -3981,7 +4390,7 @@ def _build_fallback_answer(messages: list, original_query: str) -> str:
     parts = []
     for msg in messages:
         if isinstance(msg, ToolMessage):
-            content = msg.content if hasattr(msg, 'content') else str(msg)
+            content = msg.content if hasattr(msg, "content") else str(msg)
             if content and len(content) > 20:
                 # 截取前 2000 字符
                 truncated = content[:2000]
@@ -3994,8 +4403,12 @@ def _build_fallback_answer(messages: list, original_query: str) -> str:
 
 
 _NOT_FOUND_ANSWER_SNIPPETS = (
-    "当前知识库未收录", "知识库未收录", "未找到相关信息",
-    "没有找到相关信息", "未收录", "无法回答",
+    "当前知识库未收录",
+    "知识库未收录",
+    "未找到相关信息",
+    "没有找到相关信息",
+    "未收录",
+    "无法回答",
 )
 
 
@@ -4014,11 +4427,15 @@ def _retry_answer_as_found(answer_messages, messages, original_query, current_ll
     工具原文拼装，绝不把与 response_mode 矛盾的“未收录”当最终答案。
     """
     retry_messages = list(answer_messages)
-    retry_messages.append(SystemMessage(content=(
-        "注意：response_mode=found，工具返回中已经有证据。"
-        "禁止输出“当前知识库未收录/未找到相关信息/无法回答”这类答复，"
-        "必须基于工具返回原文回答用户问题。"
-    )))
+    retry_messages.append(
+        SystemMessage(
+            content=(
+                "注意：response_mode=found，工具返回中已经有证据。"
+                "禁止输出“当前知识库未收录/未找到相关信息/无法回答”这类答复，"
+                "必须基于工具返回原文回答用户问题。"
+            )
+        )
+    )
     candidates = []
     if current_llm is not answer_llm_medium:
         candidates.append(answer_llm_medium)
@@ -4040,15 +4457,39 @@ def _retry_answer_as_found(answer_messages, messages, original_query, current_ll
 
 _ORG_NAMES_CACHE = None
 _ORG_NAME_SUFFIXES = (
-    "教团", "骑士团", "协会", "旅团", "教令院", "组织", "商会", "公会",
-    "委员会", "军团", "军", "团", "会", "院",
+    "教团",
+    "骑士团",
+    "协会",
+    "旅团",
+    "教令院",
+    "组织",
+    "商会",
+    "公会",
+    "委员会",
+    "军团",
+    "军",
+    "团",
+    "会",
+    "院",
 )
 _COMPARISON_MARKERS = ("异同", "区别", "对比", "比较", "不同", "相同", "差异")
 # 过程性/侵蚀类词：对比分析题里这些词常常来自原文比喻，被模型升格成分析维度。
 # 只用于触发范围修复，不针对具体题目；题目本身出现的词不会触发。
 _PROCESS_WORD_LEXICON = (
-    "磨损", "冲刷", "侵蚀", "消磨", "吞噬", "瓦解", "消逝",
-    "凋零", "腐化", "腐蚀", "污染", "毁灭", "崩解", "撕裂",
+    "磨损",
+    "冲刷",
+    "侵蚀",
+    "消磨",
+    "吞噬",
+    "瓦解",
+    "消逝",
+    "凋零",
+    "腐化",
+    "腐蚀",
+    "污染",
+    "毁灭",
+    "崩解",
+    "撕裂",
 )
 
 
@@ -4120,9 +4561,7 @@ def _rewrite_answer_with_scope(user_query: str, answer: str, drift_terms: List[s
         f"用户问题：{user_query}\n\n"
         f"原答案：\n{answer}\n\n"
         f"需要收紧的越界内容：{drift_text}\n\n"
-        "修复规则：\n"
-        + rules
-        + "输出修正后的完整答案，不要解释修复过程。\n"
+        "修复规则：\n" + rules + "输出修正后的完整答案，不要解释修复过程。\n"
     )
     try:
         response = llm_invoke_with_retry(
@@ -4161,10 +4600,7 @@ def _apply_answer_scope_guard(original_query: str, content: str, messages, state
         if _is_comparison_question(original_query):
             # 对比分析题的漂移大多来自原文里的过程性/侵蚀类比喻词。
             # 这里用确定性词表触发范围修复，不再依赖小模型裁判是否“看见”。
-            drift = [
-                word for word in _PROCESS_WORD_LEXICON
-                if word in content and word not in (original_query or "")
-            ]
+            drift = [word for word in _PROCESS_WORD_LEXICON if word in content and word not in (original_query or "")]
             if drift:
                 print(f"  -> [范围守卫] 对比分析题过程词越界: {drift}")
                 return _rewrite_answer_with_scope(original_query, content, drift, "对比分析题")
@@ -4178,8 +4614,18 @@ def _apply_answer_scope_guard(original_query: str, content: str, messages, state
 # 找得到出处。查无出处＝模型用「煞有介事的引用」包装自己写的话（H1《浮世记》修前就是这个病：
 # 拿《浮浪记》冒充并附原文引用，faithfulness/answer_relevancy 双双掉到 1）。
 _CITATION_META_ABSENCE_MARKERS = (
-    "未在", "未提及", "未包含", "未收录", "未明确", "未找到", "无法回答",
-    "没有", "不包含", "不在", "并不存在", "未验证",
+    "未在",
+    "未提及",
+    "未包含",
+    "未收录",
+    "未明确",
+    "未找到",
+    "无法回答",
+    "没有",
+    "不包含",
+    "不在",
+    "并不存在",
+    "未验证",
 )
 
 
@@ -4188,7 +4634,7 @@ def _is_meta_absence_quote(answer: str, quote: str) -> bool:
     idx = answer.find(quote)
     if idx < 0:
         return False
-    around = answer[max(0, idx - 15):idx + len(quote) + 30]
+    around = answer[max(0, idx - 15) : idx + len(quote) + 30]
     return any(marker in around for marker in _CITATION_META_ABSENCE_MARKERS)
 
 
@@ -4236,8 +4682,15 @@ def _unverified_quotes(answer: str, contexts: str) -> List[str]:
 # 【原文引用】这类标题下的裸台词不带引号，逃得过引号检查；但整段都在声称「逐字引用」，
 # 所以同样要核。标题名与评测器/提示词里用到的写法保持一致。
 _CITATION_SECTION_LABELS = (
-    "原文引用", "原文摘录", "引用原文", "原文片段", "原文对话",
-    "对话原文", "台词原文", "原文", "台词",
+    "原文引用",
+    "原文摘录",
+    "引用原文",
+    "原文片段",
+    "原文对话",
+    "对话原文",
+    "台词原文",
+    "原文",
+    "台词",
 )
 _CITATION_SECTION_HEAD_RE = re.compile(
     r"^\s*(?:#{1,6}\s*|\*\*\s*)?【?(" + "|".join(_CITATION_SECTION_LABELS) + r")】?\s*\*{0,2}\s*$"
@@ -4290,8 +4743,9 @@ def _blockquote_dialogue_lines(answer: str) -> List[str]:
     return out
 
 
-def _unverified_dialogue_lines(answer: str, contexts: str, min_count: int = 3,
-                               exempt_normalized: str = "") -> List[str]:
+def _unverified_dialogue_lines(
+    answer: str, contexts: str, min_count: int = 3, exempt_normalized: str = ""
+) -> List[str]:
     """【原文引用】段与引用块里的台词，是否都能在工具返回里找到出处。
 
     单行对不上可能只是排版/省略号造成的，所以要求累计至少 min_count 行对不上才判不合格，
@@ -4315,9 +4769,9 @@ def _unverified_dialogue_lines(answer: str, contexts: str, min_count: int = 3,
     return unverified if len(unverified) >= min_count else []
 
 
-
-def _enforce_citation_grounding(content, messages, answer_messages, answer_llm, response_mode,
-                                run_id=None, original_query=""):
+def _enforce_citation_grounding(
+    content, messages, answer_messages, answer_llm, response_mode, run_id=None, original_query=""
+):
     """引用自检：查无出处的引号 → 一次纠错重试 → 仍不合格则降级为「未收录」。
 
     全景题（L3）例外：答案近 2 万字、证据包十几万字，重试一次成本极高，且 L3 的引号多是对长段
@@ -4338,9 +4792,7 @@ def _enforce_citation_grounding(content, messages, answer_messages, answer_llm, 
     if panoramic:
         return content
 
-    retry_content = _citation_retry_once(
-        answer_messages, answer_llm, contexts, unverified, unverified_lines, run_id
-    )
+    retry_content = _citation_retry_once(answer_messages, answer_llm, contexts, unverified, unverified_lines, run_id)
     if retry_content:
         return retry_content
     return "当前知识库未收录。"
@@ -4356,21 +4808,14 @@ def _citation_exempt_normalized(original_query, answer_messages):
     # 用户提问与系统提示里出现过的词句不算编造（实测误报：「引蝶之章」是题面里的任务名，
     # 而本次工具返回里恰好没有它，被当成查无出处的引用触发了一次无谓重试）。
     return _strip_for_cite(
-        original_query + "\n" + "\n".join(
-            str(m.content or "") for m in answer_messages if isinstance(m, SystemMessage)
-        )
+        original_query + "\n" + "\n".join(str(m.content or "") for m in answer_messages if isinstance(m, SystemMessage))
     )
 
 
 def _citation_collect_unverified(content, contexts, exempt_normalized):
     """收集查无出处的引号片段与引用段裸行（用户提问/系统提示里的词句豁免）。"""
-    unverified = [
-        q for q in _unverified_quotes(content, contexts)
-        if _strip_for_cite(q) not in exempt_normalized
-    ]
-    unverified_lines = _unverified_dialogue_lines(
-        content, contexts, exempt_normalized=exempt_normalized
-    )
+    unverified = [q for q in _unverified_quotes(content, contexts) if _strip_for_cite(q) not in exempt_normalized]
+    unverified_lines = _unverified_dialogue_lines(content, contexts, exempt_normalized=exempt_normalized)
     return unverified, unverified_lines
 
 
@@ -4380,13 +4825,16 @@ def _report_unverified_citation(run_id, unverified, unverified_lines, panoramic)
         f"  -> [引用自检] 查无出处：引号 {len(unverified)} 个、引用段裸行 {len(unverified_lines)} 行: "
         f"{(unverified + unverified_lines)[:5]}"
     )
-    trace_emit("citation_check", {
-        "run_id": run_id,
-        "unverified": unverified[:20],
-        "unverified_lines": [x[:80] for x in unverified_lines[:20]],
-        "unverified_count": len(unverified) + len(unverified_lines),
-        "panorama": panoramic,
-    })
+    trace_emit(
+        "citation_check",
+        {
+            "run_id": run_id,
+            "unverified": unverified[:20],
+            "unverified_lines": [x[:80] for x in unverified_lines[:20]],
+            "unverified_count": len(unverified) + len(unverified_lines),
+            "panorama": panoramic,
+        },
+    )
 
 
 def _citation_retry_once(answer_messages, answer_llm, contexts, unverified, unverified_lines, run_id):
@@ -4395,16 +4843,20 @@ def _citation_retry_once(answer_messages, answer_llm, contexts, unverified, unve
     重试内容仍有查无出处的内容（引号或引用段裸行），或重试无输出、抛异常时返回空串，
     由调用方降级为「未收录」；通过则返回重写后的内容。
     """
-    retry_messages = list(answer_messages) + [SystemMessage(content=(
-        "===== 引用自检（硬规则）=====\n"
-        "上一版回答里以下内容在工具返回原文中找不到出处"
-        "（前者是标了引号的片段，后者是【原文引用】等标题下的台词/文段）：\n"
-        + "\n".join(f"- 「{q}」" for q in unverified[:10])
-        + "\n".join(f"- {line}" for line in unverified_lines[:10])
-        + "\n工具返回里没有的文字，禁止用「」标成原文引用，也禁止写进【原文引用】这类标题下。"
-        "请重写回答：删除这些内容，或改写成工具返回里真实存在的原句；不得编造，"
-        "也不得只改标点后继续当作引用。其余内容保持原有结构与详细程度。"
-    ))]
+    retry_messages = list(answer_messages) + [
+        SystemMessage(
+            content=(
+                "===== 引用自检（硬规则）=====\n"
+                "上一版回答里以下内容在工具返回原文中找不到出处"
+                "（前者是标了引号的片段，后者是【原文引用】等标题下的台词/文段）：\n"
+                + "\n".join(f"- 「{q}」" for q in unverified[:10])
+                + "\n".join(f"- {line}" for line in unverified_lines[:10])
+                + "\n工具返回里没有的文字，禁止用「」标成原文引用，也禁止写进【原文引用】这类标题下。"
+                "请重写回答：删除这些内容，或改写成工具返回里真实存在的原句；不得编造，"
+                "也不得只改标点后继续当作引用。其余内容保持原有结构与详细程度。"
+            )
+        )
+    ]
     try:
         retry_response = llm_invoke_with_retry(retry_messages, llm_instance=answer_llm)
         retry_content = (getattr(retry_response, "content", "") or "").strip()
@@ -4421,17 +4873,17 @@ def _citation_retry_once(answer_messages, answer_llm, contexts, unverified, unve
         print("  -> [引用自检] 纠错重试通过，引用全部有出处")
         trace_emit("citation_check", {"run_id": run_id, "status": "retry_ok", "unverified_count": 0})
         return retry_content
-    print(
-        f"  -> [引用自检] 重试后仍有 引号 {len(left)} 个 / 引用段裸行 {len(left_lines)} 行，"
-        "降级为未收录"
+    print(f"  -> [引用自检] 重试后仍有 引号 {len(left)} 个 / 引用段裸行 {len(left_lines)} 行，降级为未收录")
+    trace_emit(
+        "citation_check",
+        {
+            "run_id": run_id,
+            "status": "downgraded",
+            "unverified": left[:20],
+            "unverified_lines": [x[:80] for x in left_lines[:20]],
+            "unverified_count": len(left) + len(left_lines),
+        },
     )
-    trace_emit("citation_check", {
-        "run_id": run_id,
-        "status": "downgraded",
-        "unverified": left[:20],
-        "unverified_lines": [x[:80] for x in left_lines[:20]],
-        "unverified_count": len(left) + len(left_lines),
-    })
     return ""
 
 
@@ -4456,7 +4908,9 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     elif any(keyword in original_query for keyword in ("为什么", "为何", "原因", "机制", "原理", "怎么", "如何")):
         answer_llm = answer_llm_medium
         print("  -> [机制/原因类] 强制 medium Answer LLM")
-    print(f"  [AnswerLLM] 意图={intent_labels} → {answer_llm.model_name}, thinking={answer_llm.model_kwargs.get('reasoning_effort', 'none')}, max_tokens={answer_llm.max_tokens}")
+    print(
+        f"  [AnswerLLM] 意图={intent_labels} → {answer_llm.model_name}, thinking={answer_llm.model_kwargs.get('reasoning_effort', 'none')}, max_tokens={answer_llm.max_tokens}"
+    )
 
     # 前置拦截：plan_agent / tool_executor 已产生中断消息，跳过 LLM 调用
     existing_final = state.get("final_response")
@@ -4477,16 +4931,19 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     print("【回答阶段】生成最终回答")
     print("=" * 50)
     _emit_progress("answer_start", {})
-    trace_emit("answer_start", {
-        "run_id": state.get("run_id"),
-        "intent_labels": intent_labels,
-    })
+    trace_emit(
+        "answer_start",
+        {
+            "run_id": state.get("run_id"),
+            "intent_labels": intent_labels,
+        },
+    )
 
     # ---- 构建【执行事实】区块（注入到 prompt 中，防止 LLM 伪造熔断）----
     # 先从 AIMessage.tool_calls 还原工具名，因为自定义 tool_executor 创建 ToolMessage 时没有填 name
     name_by_call_id = {}
     for msg in messages:
-        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
             for tc in msg.tool_calls:
                 tid = tc.get("id")
                 if tid:
@@ -4500,10 +4957,10 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     has_successful_tool = False
 
     for i, msg in enumerate(messages):
-        if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+        if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
             tool_call_count += len(msg.tool_calls)
         elif isinstance(msg, ToolMessage):
-            content = msg.content if hasattr(msg, 'content') else str(msg)
+            content = msg.content if hasattr(msg, "content") else str(msg)
             # 检查是成功还是失败：使用前缀式未命中判定，避免正文子串误判
             is_failure = _is_not_found(msg) or content.strip().startswith("当前知识库未收录")
             is_intercepted = "系统拦截" in content
@@ -4519,7 +4976,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             # 从最近的 AIMessage 中提取该 tool 的参数
             call_args = ""
             for prev_msg in reversed(messages[:i]):
-                if isinstance(prev_msg, AIMessage) and hasattr(prev_msg, 'tool_calls') and prev_msg.tool_calls:
+                if isinstance(prev_msg, AIMessage) and hasattr(prev_msg, "tool_calls") and prev_msg.tool_calls:
                     for tc in prev_msg.tool_calls:
                         if tc.get("name") == tool_name:
                             arg_vals = list(tc.get("args", {}).values())
@@ -4536,7 +4993,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
                 length = len(content)
                 tool_results_summary.append(f"{label}: 成功返回({length}字)")
                 # 对于成功返回的数据，提取一行内容预览
-                content_preview = content.strip().split('\n')[0][:60]
+                content_preview = content.strip().split("\n")[0][:60]
                 if content_preview:
                     tool_results_summary[-1] += f" | {content_preview}"
                 if tool_name in ("load_quest_content", "load_book_content", "find_first_mention"):
@@ -4565,21 +5022,30 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 这里改为按任务线/实体/地图/跨线综合分桶，多节并行生成后拼装。
     if _already_full_text_panoramic(messages):
         from app.agent.l3_panorama import generate_panorama_answer
+
         print("  -> [L3分段] 检测到全景全文，进入分段生成")
         l3_content = generate_panorama_answer(messages, original_query, emit=_emit_progress)
         if l3_content:
-            trace_emit("llm_end", {
-                "role": "answer", "run_id": state.get("run_id"),
-                "status": "success", "final_response_len": len(l3_content),
-                "answer_source": "l3_panorama_sections",
-            })
-            trace_emit("answer_end", {
-                "response_mode": "found",
-                "final_response": l3_content,
-                "short_circuit": False,
-                "answer_source": "l3_panorama_sections",
-                "run_id": state.get("run_id"),
-            })
+            trace_emit(
+                "llm_end",
+                {
+                    "role": "answer",
+                    "run_id": state.get("run_id"),
+                    "status": "success",
+                    "final_response_len": len(l3_content),
+                    "answer_source": "l3_panorama_sections",
+                },
+            )
+            trace_emit(
+                "answer_end",
+                {
+                    "response_mode": "found",
+                    "final_response": l3_content,
+                    "short_circuit": False,
+                    "answer_source": "l3_panorama_sections",
+                    "run_id": state.get("run_id"),
+                },
+            )
             return {"messages": messages, "final_response": l3_content}
         print("  -> [L3分段] 解析失败，回退单次 L3 调用")
 
@@ -4592,15 +5058,17 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             parts = [f"「{alias}」指「{canonical}」" for alias, canonical in alias_matches]
             alias_answer = "；".join(parts) + "。"
             print(f"  -> [代码短路] 纯别名身份直答：{alias_answer}")
-            trace_emit("answer_end", {
-                "response_mode": "found",
-                "final_response": alias_answer,
-                "short_circuit": True,
-                "answer_source": "alias_direct",
-                "run_id": state.get("run_id"),
-            })
+            trace_emit(
+                "answer_end",
+                {
+                    "response_mode": "found",
+                    "final_response": alias_answer,
+                    "short_circuit": True,
+                    "answer_source": "alias_direct",
+                    "run_id": state.get("run_id"),
+                },
+            )
             return {"final_response": alias_answer, "messages": messages}
-
 
     # ---- 代码短路：元数据工具确定性直答 ----
     # 如果本轮只调用了结构化元数据工具，直接复述工具结果，不经过回答 LLM，
@@ -4649,9 +5117,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             system_content += (
                 "\n\n===== 机制名保真（硬规则）=====\n"
                 "工具原文明确给出了以下机制/手段名称，回答必须保留原词，"
-                "不得只用意象、比喻或近义词替代：\n"
-                + "、".join(f"「{term}」" for term in mechanism_terms)
-                + "\n"
+                "不得只用意象、比喻或近义词替代：\n" + "、".join(f"「{term}」" for term in mechanism_terms) + "\n"
             )
 
     # 全景题：证据里包含代码加载的全文，输出规约必须明确要求“逐线逐角色逐地图文本展开”，
@@ -4663,12 +5129,15 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 这从根本上消除了 Answer LLM 忽略 not_found 标记、强行编造内容的可能性
     if response_mode == "not_found":
         print("  -> [代码短路] response_mode=not_found，跳过 LLM 调用，直接返回'未收录'")
-        trace_emit("answer_end", {
-            "response_mode": "not_found",
-            "final_response": "当前知识库未收录。",
-            "short_circuit": True,
-            "run_id": state.get("run_id"),
-        })
+        trace_emit(
+            "answer_end",
+            {
+                "response_mode": "not_found",
+                "final_response": "当前知识库未收录。",
+                "short_circuit": True,
+                "run_id": state.get("run_id"),
+            },
+        )
         return {"final_response": "当前知识库未收录。", "messages": messages}
 
     if alias_notes:
@@ -4679,9 +5148,11 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     # 注入规划阶段的执行报告作为上下文
     if execution_plan:
-        answer_messages.append(SystemMessage(content=(
-            f"以下是规划阶段的简短结论（仅作参考，最终以工具返回原文为准）：\n\n{execution_plan[:500]}"
-        )))
+        answer_messages.append(
+            SystemMessage(
+                content=(f"以下是规划阶段的简短结论（仅作参考，最终以工具返回原文为准）：\n\n{execution_plan[:500]}")
+            )
+        )
 
     # 注入所有对话消息（工具调用和返回结果）
     for msg in messages:
@@ -4694,7 +5165,9 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 兜底"把工具原文当答案。以 user 轮收尾可同时适配所有模板。
     answer_messages.append(HumanMessage(content=f"请基于上述规划结果和工具搜索内容，回答用户问题：{original_query}"))
 
-    trace_emit("llm_start", {"role": "answer", "run_id": state.get("run_id"), "model": getattr(answer_llm, "model_name", None)})
+    trace_emit(
+        "llm_start", {"role": "answer", "run_id": state.get("run_id"), "model": getattr(answer_llm, "model_name", None)}
+    )
     # 流式生成：逐 chunk 推送给前端；失败或疑似截断则回退非流式。
     content_parts = []
     stream_error = None
@@ -4723,7 +5196,11 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         looks_incomplete = False
         if stream_finish_reason == "length":
             looks_incomplete = True
-        elif len(stream_content) < 800 and stream_content and not re.search(r"[。！？!?…」』】）\)\"'”’]$", stream_content):
+        elif (
+            len(stream_content) < 800
+            and stream_content
+            and not re.search(r"[。！？!?…」』】）\)\"'”’]$", stream_content)
+        ):
             looks_incomplete = True
         if looks_incomplete:
             print(
@@ -4735,7 +5212,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     if stream_error is not None or not content_parts:
         try:
             response = llm_invoke_with_retry(answer_messages, llm_instance=answer_llm)
-            content = response.content if hasattr(response, 'content') else ''
+            content = response.content if hasattr(response, "content") else ""
         except Exception as e:
             content = f"抱歉，处理出错：{e}"
         # 兜底：如果 LLM 返回空内容（reasoning 耗尽 token 预算），根据工具返回结果拼凑回答
@@ -4759,25 +5236,36 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 引用自检：答案里的引号片段必须在工具返回里找得到出处；查无出处先纠错重试一次，
     # 仍不合格降级为「未收录」（L3 长答案只记 trace，不重试不降级）。
     content = _enforce_citation_grounding(
-        content, messages, answer_messages, answer_llm, response_mode,
-        state.get("run_id"), original_query,
+        content,
+        messages,
+        answer_messages,
+        answer_llm,
+        response_mode,
+        state.get("run_id"),
+        original_query,
     )
 
-    trace_emit("llm_end", {
-        "role": "answer",
-        "run_id": state.get("run_id"),
-        "status": "success",
-        "final_response_len": len(content),
-        "stream_finish_reason": stream_finish_reason,
-        "stream_fallback": stream_error is not None,
-    })
+    trace_emit(
+        "llm_end",
+        {
+            "role": "answer",
+            "run_id": state.get("run_id"),
+            "status": "success",
+            "final_response_len": len(content),
+            "stream_finish_reason": stream_finish_reason,
+            "stream_fallback": stream_error is not None,
+        },
+    )
 
-    trace_emit("answer_end", {
-        "response_mode": response_mode,
-        "final_response": content,
-        "short_circuit": False,
-        "run_id": state.get("run_id"),
-    })
+    trace_emit(
+        "answer_end",
+        {
+            "response_mode": response_mode,
+            "final_response": content,
+            "short_circuit": False,
+            "run_id": state.get("run_id"),
+        },
+    )
     return {
         "messages": answer_messages,
         "final_response": content,

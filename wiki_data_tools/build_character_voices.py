@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """从米游社 channel_25 构建角色语音档案与归一化评价关系表（仅汉语，落盘 content_data/character_voices.json、voice_relations.json）。"""
+
 import json, re, html, hashlib, importlib.util, os, sys
 from collections import Counter, defaultdict
 from bs4 import BeautifulSoup
@@ -21,6 +22,7 @@ def load_known():
     alias_map = {}
     try:
         from character_aliases import ALIAS_MAP as _AM
+
         alias_map.update(_AM)
     except Exception as e:
         print("alias load warn", e, file=sys.stderr)
@@ -70,7 +72,29 @@ def parse_about(name):
     return None
 
 
-TOPIC_ABOUT_KEYS = ["神之眼", "月之轮", "女皇", "尘世七执政", "星之楔", "月之意志", "三月女神", "深渊力量", "风之神", "岩之神", "雷之神", "草之神", "火之神", "水神", "狐耳女人", "我们", "自己", "母亲", "父亲", "父母", "亲人"]
+TOPIC_ABOUT_KEYS = [
+    "神之眼",
+    "月之轮",
+    "女皇",
+    "尘世七执政",
+    "星之楔",
+    "月之意志",
+    "三月女神",
+    "深渊力量",
+    "风之神",
+    "岩之神",
+    "雷之神",
+    "草之神",
+    "火之神",
+    "水神",
+    "狐耳女人",
+    "我们",
+    "自己",
+    "母亲",
+    "父亲",
+    "父母",
+    "亲人",
+]
 
 
 def is_topic_about(raw):
@@ -139,10 +163,17 @@ def main():
                             continue
                         line_name_counter[lname] += 1
                         about_raw = parse_about(lname)
-                        rec = {"character": title, "line_name": lname, "content": content,
-                               "audio_url": row.get("audio_url") or "", "source": "m153"}
+                        rec = {
+                            "character": title,
+                            "line_name": lname,
+                            "content": content,
+                            "audio_url": row.get("audio_url") or "",
+                            "source": "m153",
+                        }
                         if about_raw:
-                            parts = split_multi_target(about_raw) if re.search(r"[和与、,，]", about_raw) else [about_raw]
+                            parts = (
+                                split_multi_target(about_raw) if re.search(r"[和与、,，]", about_raw) else [about_raw]
+                            )
                             for part in parts:
                                 about = resolve_name(part, names, alias_map)
                                 if about:
@@ -208,14 +239,22 @@ def main():
                     if marks:
                         for i, mark in enumerate(marks):
                             inner = mark.group(1).strip()
-                            body = content_text[mark.end(): marks[i + 1].start() if i + 1 < len(marks) else len(content_text)].strip()
+                            body = content_text[
+                                mark.end() : marks[i + 1].start() if i + 1 < len(marks) else len(content_text)
+                            ].strip()
                             if not body:
                                 continue
-                            rec = {"character": speaker, "speaker": speaker,
-                                   "speaker_type": "playable" if speaker in names else "npc",
-                                   "target": target, "target_type": "playable" if target in names else "nonplayable",
-                                   "line_name": inner, "content": body,
-                                   "audio_url": "", "source": "m2861"}
+                            rec = {
+                                "character": speaker,
+                                "speaker": speaker,
+                                "speaker_type": "playable" if speaker in names else "npc",
+                                "target": target,
+                                "target_type": "playable" if target in names else "nonplayable",
+                                "line_name": inner,
+                                "content": body,
+                                "audio_url": "",
+                                "source": "m2861",
+                            }
                             relations.append(rec)
                             if speaker in names:
                                 stats["m2861_relation"] += 1
@@ -223,11 +262,17 @@ def main():
                                 review["unresolved_speaker"].append(dict(rec, speaker_raw=speaker_raw))
                                 stats["m2861_npc_speaker"] += 1
                     else:
-                        rec = {"character": speaker, "speaker": speaker,
-                               "speaker_type": "playable" if speaker in names else "npc",
-                               "target": target, "target_type": "playable" if target in names else "nonplayable",
-                               "line_name": f"关于{target}", "content": content_text,
-                               "audio_url": "", "source": "m2861"}
+                        rec = {
+                            "character": speaker,
+                            "speaker": speaker,
+                            "speaker_type": "playable" if speaker in names else "npc",
+                            "target": target,
+                            "target_type": "playable" if target in names else "nonplayable",
+                            "line_name": f"关于{target}",
+                            "content": content_text,
+                            "audio_url": "",
+                            "source": "m2861",
+                        }
                         relations.append(rec)
                         if speaker in names:
                             stats["m2861_relation"] += 1
@@ -262,7 +307,9 @@ def main():
             if not dedup[key].get("audio_url") and rec.get("audio_url"):
                 dedup[key]["audio_url"] = rec.get("audio_url")
     rel_list = sorted(dedup.values(), key=lambda r: (r["target"], r["speaker"], r["line_name"]))
-    json.dump({"count": len(rel_list), "edges": rel_list}, open(OUT_REL, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    json.dump(
+        {"count": len(rel_list), "edges": rel_list}, open(OUT_REL, "w", encoding="utf-8"), ensure_ascii=False, indent=1
+    )
     json.dump(dict(profiles), open(OUT_PROFILE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     json.dump(review, open(OUT_REVIEW, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
@@ -279,16 +326,38 @@ def main():
         item["incoming_relation_count"] = sum(1 for r in rel_list if r["target"] == name)
         characters[name] = item
     voice_data = {"version": "1.0", "source": "mihoyo_channel_25", "language": "汉语", "characters": characters}
-    relation_data = {"version": "1.0", "source": "mihoyo_channel_25", "language": "汉语", "count": len(rel_list), "edges": rel_list}
-    json.dump(voice_data, open(os.path.join(content_dir, "character_voices.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    json.dump(relation_data, open(os.path.join(content_dir, "voice_relations.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    relation_data = {
+        "version": "1.0",
+        "source": "mihoyo_channel_25",
+        "language": "汉语",
+        "count": len(rel_list),
+        "edges": rel_list,
+    }
+    json.dump(
+        voice_data,
+        open(os.path.join(content_dir, "character_voices.json"), "w", encoding="utf-8"),
+        ensure_ascii=False,
+        indent=1,
+    )
+    json.dump(
+        relation_data,
+        open(os.path.join(content_dir, "voice_relations.json"), "w", encoding="utf-8"),
+        ensure_ascii=False,
+        indent=1,
+    )
 
-    stats_out = {"char_pages": char_pages, "has_153": has153, "has_2861": has2861,
-                 "has_chinese_tab": has_cn, "counts": dict(stats), "relations_dedup": len(rel_list),
-                 "unique_speakers": len({r["speaker"] for r in rel_list}),
-                 "unique_targets": len({r["target"] for r in rel_list}),
-                 "top_line_names": line_name_counter.most_common(40),
-                 "review_counts": {k: len(v) for k, v in review.items()}}
+    stats_out = {
+        "char_pages": char_pages,
+        "has_153": has153,
+        "has_2861": has2861,
+        "has_chinese_tab": has_cn,
+        "counts": dict(stats),
+        "relations_dedup": len(rel_list),
+        "unique_speakers": len({r["speaker"] for r in rel_list}),
+        "unique_targets": len({r["target"] for r in rel_list}),
+        "top_line_names": line_name_counter.most_common(40),
+        "review_counts": {k: len(v) for k, v in review.items()},
+    }
     json.dump(stats_out, open(OUT_STATS, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print(json.dumps(stats_out, ensure_ascii=False, indent=1))
     sample = [r for r in rel_list if r["speaker"] == "爱可菲" and r["target"] == "芙宁娜"][:3]
