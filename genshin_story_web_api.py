@@ -620,7 +620,7 @@ def _valid_session_id(session_id: str) -> bool:
     return bool(_SESSION_ID_RE.fullmatch(session_id or ""))
 
 
-def _tenant_session_dir(tenant: str = None) -> str:
+def _tenant_session_dir(tenant: str | None = None) -> str:
     """当前命名空间的会话目录。
 
     命名空间名来自 API_TOKENS 的显式命名或口令哈希，只含 [A-Za-z0-9_-]，
@@ -641,7 +641,7 @@ def _session_key(tenant: str, session_id: str) -> str:
     return f"{tenant or '_local'}:{session_id}"
 
 
-def _session_file(session_id: str, tenant: str = None) -> str:
+def _session_file(session_id: str, tenant: str | None = None) -> str:
     """获取会话存储文件路径。
 
     进入路径拼接的文件名不直接使用入参：先按白名单逐字符重建，再与原值比对，
@@ -654,7 +654,7 @@ def _session_file(session_id: str, tenant: str = None) -> str:
     return os.path.join(_tenant_session_dir(tenant), "session_" + safe_id + ".json")
 
 
-def _load_session_from_disk(session_id: str, tenant: str = None) -> dict:
+def _load_session_from_disk(session_id: str, tenant: str | None = None) -> dict:
     """从 JSON 文件加载会话记录"""
     fpath = _session_file(session_id, tenant)
     if os.path.exists(fpath):
@@ -666,7 +666,7 @@ def _load_session_from_disk(session_id: str, tenant: str = None) -> dict:
     return {"pairs": [], "summary": ""}
 
 
-def _save_session_to_disk(session_id: str, data: dict, tenant: str = None):
+def _save_session_to_disk(session_id: str, data: dict, tenant: str | None = None):
     """将会话记录写入 JSON 文件（随机临时文件 + 原子替换，避免并发写互相截断）"""
     if not _valid_session_id(session_id):
         raise ValueError("非法的 session_id")

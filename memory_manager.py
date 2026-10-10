@@ -167,6 +167,8 @@ class GenshinConversationMemory:
 
         try:
             ST = self._sentence_transformer
+            if ST is None:  # 收窄 Optional：未初始化成功时不该走到这里
+                return None
             model = ST(self.embedding_model_name)
             embedding = model.encode(text).tolist()
             self._collection.add(
@@ -187,6 +189,8 @@ class GenshinConversationMemory:
 
         try:
             ST = self._sentence_transformer
+            if ST is None:
+                return []
             model = ST(self.embedding_model_name)
             query_emb = model.encode(query).tolist()
             results = self._collection.query(

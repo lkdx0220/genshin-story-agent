@@ -11,7 +11,7 @@ import time
 import os
 from typing import Dict, Any, List, Tuple
 
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, ToolMessage
 
 from app.config import (
     MAX_AGENT_ITERATIONS,
@@ -714,7 +714,7 @@ def _fast_agent_prepare_messages(state, messages, original_query, alias_notes):
     if conv_summary:
         system_content += f"\n\n## 之前的对话摘要\n{conv_summary}"
 
-    messages = [SystemMessage(content=system_content)]
+    messages: List[BaseMessage] = [SystemMessage(content=system_content)]
 
     # 注入最近 N 轮对话历史
     conv_history = state.get("conversation_history") or []
@@ -5162,7 +5162,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         system_content += alias_notes
 
     # 构建回答阶段的上下文：系统提示 + 执行报告 + 所有工具返回 + 用户原始问题
-    answer_messages = [SystemMessage(content=system_content)]
+        answer_messages: List[BaseMessage] = [SystemMessage(content=system_content)]
 
     # 注入规划阶段的执行报告作为上下文
     if execution_plan:
@@ -5225,7 +5225,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
                 f"  -> [流式] 疑似截断（finish_reason={stream_finish_reason or 'unknown'}，"
                 f"长度={len(stream_content)}），回退非流式重试"
             )
-            stream_error = "stream_incomplete"
+            stream_error = "stream_incomplete"  # type: ignore[assignment]  # 该变量承载回退原因：异常对象或字符串标记
 
     if stream_error is not None or not content_parts:
         try:
