@@ -9,7 +9,7 @@ import os
 import re
 import json
 from collections import OrderedDict
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.config import CONTENT_DIR
 
@@ -25,8 +25,14 @@ try:
         圣遗物知识库,
     )
 except ImportError:
-    角色知识库, 地区知识库, 主线剧情知识库 = [], [], []
-    武器知识库, 任务知识库, 素材知识库, 圣遗物知识库 = [], [], [], []
+    # 显式注解：否则被推断成 list[<nothing>]，工具层的 item['字段'] 全会退化成 object
+    角色知识库: List[Dict[str, Any]] = []
+    地区知识库: List[Dict[str, Any]] = []
+    主线剧情知识库: List[Dict[str, Any]] = []
+    武器知识库: List[Dict[str, Any]] = []
+    任务知识库: List[Dict[str, Any]] = []
+    素材知识库: List[Dict[str, Any]] = []
+    圣遗物知识库: List[Dict[str, Any]] = []
 
 # ====== NPC 数据（供 query_character 兜底）======
 _npcs_data = {}

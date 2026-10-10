@@ -605,7 +605,7 @@ def _anchor_truncate(state: dict) -> list:
     return anchored
 
 
-def _anchor_entities(query: str) -> Tuple[List[str], List[Tuple[str, List[str]]]]:
+def _anchor_entities(query: str) -> Tuple[List[str], List[Tuple[str, List[str]]], str]:
     """Stage 0：扫描查询中的已知实体，返回 (候选标签, 锚定实体列表)。
 
     匹配策略（按优先级）：
