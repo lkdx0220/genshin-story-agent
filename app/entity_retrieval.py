@@ -182,16 +182,22 @@ def _snippet(body: str, names: Sequence[str], width: int = 170) -> str:
 
 
 def grade_body(entry: dict, names: Sequence[str], cast: set) -> Tuple[Optional[str], str, int, int]:
-    """返回 (等级 | None, 证据, 正文提及次数, 表大小)。
+    """返回 (等级 | None, 证据, 正文提及次数, 表大小)。None = 不算参与（不产出行）。
 
-    None 表示**权威排除**：该任务有出场人物表，但表里没有这个角色 → 不算参与。
+    三种 None：
+    - 有出场人物表但表里没这个角色（权威排除）；
+    - 正文净化后提及数为 0（提及只存在于前情提要/元数据里——人工抽查反馈：证据里根本没有人，
+      这种条目必须丢弃，否则会给出"没提到他"的假证据）。
     """
     body = story_body(entry)
     count = sum(body.count(n) for n in names if n)
     if cast:
         if any(n in cast for n in names):
-            return LEVEL_CAST, _snippet(body, names), count, len(cast)
+            evidence = _snippet(body, names) if count else f"出场人物表（{len(cast)} 人）：{'、'.join(sorted(cast)[:12])}"
+            return LEVEL_CAST, evidence, count, len(cast)
         return None, "", count, len(cast)
+    if count == 0:
+        return None, "", 0, 0  # 正文里没提到 → 前情提要/标题里的提及不算证据
     if _speaker_hits(body, names) > 0:
         return LEVEL_LINE, _snippet(body, names), count, 0
     if _action_hits(body, names) > 0:
