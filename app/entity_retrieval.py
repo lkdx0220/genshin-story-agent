@@ -148,7 +148,16 @@ def _action_hits(entry: dict, names: Sequence[str]) -> int:
 
 
 def _snippet(entry: dict, names: Sequence[str], width: int = 110) -> str:
+    """挑证据片段：**优先该角色的台词行**，没有台词再退回首次提及上下文。
+
+    为什么要按这个顺序：'强·有台词' 的条目若只截首次提及，常截到"别人提到他"的那句
+    （如"果然和钟离说的一样"），人工抽检和 LLM 都会误判为"只是被提到"。
+    """
     text = entry.get("story_text") or entry.get("full_text") or ""
+    for match in _SPEAKER_RE.finditer(text):
+        if match.group(1) in names:
+            start = match.start()
+            return text[start:start + width].replace("\n", " ")
     for name in names:
         idx = text.find(name)
         if idx >= 0:
