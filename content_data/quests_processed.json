@@ -436,8 +436,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "小茂",
+      "泊溯",
+      "娄三",
+      "浮锦"
+    ],
+    "cast_source": "metadata"
   },
   "刀剑成梦": {
     "title": "刀剑成梦",
@@ -468,8 +473,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "「公义」",
+      "松平",
+      "石川",
+      "九条政仁"
+    ],
+    "cast_source": "metadata"
   },
   "为一座绿色的岛屿…": {
     "title": "为一座绿色的岛屿…",
@@ -500,8 +510,11 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "维娜",
+      "爱依菈"
+    ],
+    "cast_source": "metadata"
   },
   "我，游火人": {
     "title": "我，游火人",
@@ -613,8 +626,10 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "埃兹莉"
+    ],
+    "cast_source": "metadata"
   },
   "知人知面": {
     "title": "知人知面",
@@ -906,8 +921,11 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "花散里",
+      "稻城萤美"
+    ],
+    "cast_source": "metadata"
   },
   "最后的审判": {
     "title": "最后的审判",
@@ -936,8 +954,12 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "伊斯托利亚",
+      "彩特琳德",
+      "梅兰塔"
+    ],
+    "cast_source": "metadata"
   },
   "美容专家": {
     "title": "美容专家",
@@ -1005,8 +1027,16 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "加尔恰",
+      "路通",
+      "迦雅",
+      "梅莘",
+      "梅康顿",
+      "巴比斯",
+      "戈伦德兰"
+    ],
+    "cast_source": "metadata"
   },
   "梦醒时分": {
     "title": "梦醒时分",
@@ -1038,8 +1068,16 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "「绿松石」",
+      "奥奇坎",
+      "科潘",
+      "蒂图",
+      "雷格巴",
+      "玻娜",
+      "库库尔坎"
+    ],
+    "cast_source": "metadata"
   },
   "绀田事话": {
     "title": "绀田事话",
@@ -1072,8 +1110,14 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "花散里",
+      "双叶",
+      "绀田传助",
+      "小猛",
+      "柴门惠理"
+    ],
+    "cast_source": "metadata"
   },
   "到灯塔去": {
     "title": "到灯塔去",
@@ -1104,8 +1148,10 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "菲林斯"
+    ],
+    "cast_source": "metadata"
   },
   "故鸢吹归，再宿堂楼": {
     "title": "故鸢吹归，再宿堂楼",
@@ -1318,8 +1364,15 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "浮锦",
+      "老陆头",
+      "阿金",
+      "罗叔",
+      "沃特蒙泰涅",
+      "小茂"
+    ],
+    "cast_source": "metadata"
   },
   "隐行谛勘，秽金之罪（第一天）": {
     "title": "隐行谛勘，秽金之罪（第一天）",
@@ -1436,8 +1489,11 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "曼科",
+      "小家伙"
+    ],
+    "cast_source": "metadata"
   },
   "自远方吹来的音讯": {
     "title": "自远方吹来的音讯",
@@ -1515,8 +1571,14 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "小呜斯",
+      "「敲钟人」",
+      "埃斯特",
+      "卡西奥多",
+      "斯库拉"
+    ],
+    "cast_source": "metadata"
   },
   "全新的巡礼": {
     "title": "全新的巡礼",
@@ -1549,8 +1611,21 @@
     ],
     "category": "传说任务",
     "source_file": "quests_传说任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "伊安珊",
+      "玛薇卡",
+      "欣切尔",
+      "玛拉妮",
+      "卡齐娜",
+      "基尼奇",
+      "阿乔",
+      "欧洛伦",
+      "茜特菈莉",
+      "帕兰",
+      "恩铁戈",
+      "希巴拉克"
+    ],
+    "cast_source": "metadata"
   },
   "送仙": {
     "title": "送仙",
@@ -1638,8 +1713,48 @@
     ],
     "category": "魔神任务",
     "source_file": "quests_魔神任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "玛薇卡",
+      "希诺宁",
+      "茜特菈莉",
+      "卡齐娜",
+      "达尔戈",
+      "阿尔妲",
+      "科科庞",
+      "蓬普",
+      "努斯妲",
+      "特波兹",
+      "乌图伦库",
+      "阿奇亚库",
+      "瓦伊妲",
+      "瓦卡尔",
+      "维莎",
+      "阿乌琪",
+      "阿希莉",
+      "玛亚薇",
+      "瓦曼",
+      "拉曼",
+      "奇马利",
+      "雅蕾希",
+      "阿卡马",
+      "乌兰塔",
+      "斯塔杜欣",
+      "卡马加",
+      "古塞尼科夫",
+      "奥希娜",
+      "基尼奇",
+      "阿乔",
+      "安蒂妮",
+      "特沃德罗斯",
+      "马提库伊",
+      "伊莫莎",
+      "阿孔",
+      "波蒂薇",
+      "克维库",
+      "卡皮塔诺",
+      "欧洛伦"
+    ],
+    "cast_source": "metadata"
   },
   "因为她的罪恶滔天…": {
     "title": "因为她的罪恶滔天…",
@@ -1673,8 +1788,16 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "婕德",
+      "奈兰",
+      "雷兹吉",
+      "芭别尔",
+      "门达斯",
+      "乌格威",
+      "尤夫腾"
+    ],
+    "cast_source": "metadata"
   },
   "真相隐于影中": {
     "title": "真相隐于影中",
@@ -1792,8 +1915,15 @@
     ],
     "category": "魔神任务",
     "source_file": "quests_魔神任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "艾尔海森",
+      "赛诺",
+      "迪希雅",
+      "坎蒂丝",
+      "安普叔",
+      "伊萨克"
+    ],
+    "cast_source": "metadata"
   },
   "匿于日常之禁忌": {
     "title": "匿于日常之禁忌",
@@ -1870,8 +2000,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "瓦伊诺",
+      "波泽娜",
+      "莱里",
+      "茜斯柯"
+    ],
+    "cast_source": "metadata"
   },
   "为了龙伙伴": {
     "title": "为了龙伙伴",
@@ -2367,8 +2502,12 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "瑾武",
+      "志琼",
+      "克里托夫"
+    ],
+    "cast_source": "metadata"
   },
   "终归沉寂": {
     "title": "终归沉寂",
@@ -2446,8 +2585,14 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "提尔扎德",
+      "哲伯莱勒",
+      "婕德",
+      "奔奔",
+      "萨梅尔"
+    ],
+    "cast_source": "metadata"
   },
   "一夜建成的乐园": {
     "title": "一夜建成的乐园",
@@ -2580,8 +2725,22 @@
     ],
     "category": "魔神任务",
     "source_file": "quests_魔神任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "卡桑",
+      "赛诺",
+      "夏妮",
+      "伊萨克",
+      "杰巴里",
+      "沙坎",
+      "马坎",
+      "坎蒂丝",
+      "迪希雅",
+      "札齐",
+      "德利瓦",
+      "恩古尔",
+      "安普叔"
+    ],
+    "cast_source": "metadata"
   },
   "水下夜想曲": {
     "title": "水下夜想曲",
@@ -2614,8 +2773,12 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "小呜斯",
+      "斯库拉",
+      "波爱修斯"
+    ],
+    "cast_source": "metadata"
   },
   "温泉之乡": {
     "title": "温泉之乡",
@@ -2885,8 +3048,15 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "莉诺尔",
+      "卡特皮拉",
+      "艾蒂安",
+      "诺瓦勒斯",
+      "莫莱妮",
+      "莫普瓦"
+    ],
+    "cast_source": "metadata"
   },
   "存于云天的至福之解": {
     "title": "存于云天的至福之解",
@@ -3060,8 +3230,10 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "小家伙"
+    ],
+    "cast_source": "metadata"
   },
   "「救世主」": {
     "title": "「救世主」",
@@ -3231,8 +3403,14 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "芭别尔",
+      "尤夫腾",
+      "叶夫格拉夫",
+      "伊廖沙",
+      "奥列斯特"
+    ],
+    "cast_source": "metadata"
   },
   "星夜之章": {
     "title": "星夜之章",
@@ -3266,8 +3444,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "兰纳真",
+      "米农",
+      "齐里",
+      "卢妮雅"
+    ],
+    "cast_source": "metadata"
   },
   "吉祥具书·初篇": {
     "title": "吉祥具书·初篇",
@@ -3302,8 +3485,12 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "兰利遮",
+      "加扎里",
+      "罗因贾"
+    ],
+    "cast_source": "metadata"
   },
   "一波三折的辗转": {
     "title": "一波三折的辗转",
@@ -3386,8 +3573,25 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "刻晴",
+      "萍姥姥",
+      "烟绯",
+      "留云借风真君",
+      "甘雨",
+      "申鹤",
+      "七七",
+      "白术",
+      "菲尔戈黛特",
+      "魈",
+      "朋义",
+      "若心",
+      "康胜",
+      "行秋",
+      "鸿兴",
+      "重云"
+    ],
+    "cast_source": "metadata"
   },
   "通往卡皮托林的阶梯": {
     "title": "通往卡皮托林的阶梯",
@@ -3417,8 +3621,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "小呜斯",
+      "斯库拉",
+      "波爱修斯",
+      "卡西奥多"
+    ],
+    "cast_source": "metadata"
   },
   "特训": {
     "title": "特训",
@@ -3499,8 +3708,18 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "「莫基」",
+      "曼恩",
+      "霍夫曼",
+      "莉普哈特",
+      "彩特琳德",
+      "尼西里塔",
+      "伊斯托利亚",
+      "乔瑟夫斯",
+      "劳姆希尔妲"
+    ],
+    "cast_source": "metadata"
   },
   "《异邦人喧哗旅！！》": {
     "title": "《异邦人喧哗旅！！》",
@@ -3534,8 +3753,14 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "古田",
+      "笹野",
+      "小春",
+      "泽维尔",
+      "冈崎陆斗"
+    ],
+    "cast_source": "metadata"
   },
   "前调·花债": {
     "title": "前调·花债",
@@ -3613,8 +3838,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "玛梅赫",
+      "西摩尔",
+      "雅各布",
+      "厄里那斯"
+    ],
+    "cast_source": "metadata"
   },
   "人来人往": {
     "title": "人来人往",
@@ -3693,8 +3923,11 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "黑蛋",
+      "哥伦比娅"
+    ],
+    "cast_source": "metadata"
   },
   "蛇与蝎的亡命舞": {
     "title": "蛇与蝎的亡命舞",
@@ -3887,8 +4120,21 @@
     ],
     "category": "传说任务",
     "source_file": "quests_传说任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "茜特菈莉",
+      "玛薇卡",
+      "阿乔",
+      "卡齐娜",
+      "基尼奇",
+      "玛拉妮",
+      "欧洛伦",
+      "咔库库",
+      "希诺宁",
+      "恰斯卡",
+      "伊安珊",
+      "尤庇娅"
+    ],
+    "cast_source": "metadata"
   },
   "奇门术息灾平昏寿，护摩法净世定幽冥": {
     "title": "奇门术息灾平昏寿，护摩法净世定幽冥",
@@ -4194,8 +4440,25 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "芙佳",
+      "艾尤恩",
+      "洛梅",
+      "嘉莱娜",
+      "薇尔妲",
+      "芙洛",
+      "洛耶茨",
+      "柯妮莉娅",
+      "伊诺米娅",
+      "伊梅娜",
+      "塞德娜",
+      "那维莱特",
+      "珀西芙",
+      "丰泰",
+      "莱欧斯利",
+      "希格雯"
+    ],
+    "cast_source": "metadata"
   },
   "因愧疚而生的医术": {
     "title": "因愧疚而生的医术",
@@ -4382,8 +4645,12 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "渊上",
+      "亚琉",
+      "露子"
+    ],
+    "cast_source": "metadata"
   },
   "乱象识真面": {
     "title": "乱象识真面",
@@ -4462,8 +4729,10 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "玄冬林檎"
+    ],
+    "cast_source": "metadata"
   },
   "梅洛彼得堡": {
     "title": "梅洛彼得堡",
@@ -4592,8 +4861,12 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "马塞拉",
+      "利露帕尔",
+      "塔德菈"
+    ],
+    "cast_source": "metadata"
   },
   "沙漠竞逐": {
     "title": "沙漠竞逐",
@@ -4674,8 +4947,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "婕德",
+      "阿萨里格",
+      "利露帕尔",
+      "芭别尔"
+    ],
+    "cast_source": "metadata"
   },
   "行于正确之路": {
     "title": "行于正确之路",
@@ -4829,8 +5107,10 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "萨莎"
+    ],
+    "cast_source": "metadata"
   },
   "阴燃": {
     "title": "阴燃",
@@ -4971,8 +5251,15 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "婕德",
+      "阿萨里格",
+      "阿德菲",
+      "利露帕尔",
+      "芭别尔",
+      "马塞拉"
+    ],
+    "cast_source": "metadata"
   },
   "危机四伏": {
     "title": "危机四伏",
@@ -5008,8 +5295,14 @@
     ],
     "category": "魔神任务",
     "source_file": "quests_魔神任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "烟绯",
+      "夜兰",
+      "荒泷一斗",
+      "久岐忍",
+      "魈"
+    ],
+    "cast_source": "metadata"
   },
   "再临！金苹果假日": {
     "title": "再临！金苹果假日",
@@ -5124,8 +5417,15 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "卡特皮拉",
+      "安",
+      "西摩尔",
+      "纳齐森科鲁兹",
+      "玛丽安",
+      "玛梅赫"
+    ],
+    "cast_source": "metadata"
   },
   "以世界之格的诉说": {
     "title": "以世界之格的诉说",
@@ -5200,8 +5500,18 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "瑟琳",
+      "玛梅赫",
+      "西摩尔",
+      "格蕾丝蒂",
+      "芙佳",
+      "薇尔妲",
+      "伊洛丝",
+      "凯库巴德",
+      "凯伊卡"
+    ],
+    "cast_source": "metadata"
   },
   "步入阳光之下": {
     "title": "步入阳光之下",
@@ -5355,8 +5665,14 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "兰钵答",
+      "兰陀尼什",
+      "兰耆都",
+      "兰阐荼",
+      "兰弥那离"
+    ],
+    "cast_source": "metadata"
   },
   "聚于湖畔的外乡之客": {
     "title": "聚于湖畔的外乡之客",
@@ -5489,8 +5805,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "叶洛亚",
+      "爱莉厄",
+      "阿咚",
+      "弗莱库"
+    ],
+    "cast_source": "metadata"
   },
   "他们行过星空": {
     "title": "他们行过星空",
@@ -5671,8 +5992,22 @@
     ],
     "category": "部族纪闻",
     "source_file": "quests_部族纪闻.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "茜特菈莉",
+      "蒙吕松",
+      "阿蒂克",
+      "巴杜卢",
+      "艾列尔",
+      "格洛德克",
+      "卡胡鲁",
+      "阿依瓦丁",
+      "贝苏琪",
+      "乔甘",
+      "特拉波",
+      "庇兰",
+      "厄切敏"
+    ],
+    "cast_source": "metadata"
   },
   "匿于人海的预言之谜": {
     "title": "匿于人海的预言之谜",
@@ -5768,8 +6103,15 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "柴门二郎",
+      "柴门克巳",
+      "柴门惠理",
+      "石川",
+      "小野",
+      "小仓优"
+    ],
+    "cast_source": "metadata"
   },
   "一曲瑶琴与谁听": {
     "title": "一曲瑶琴与谁听",
@@ -5860,8 +6202,11 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "奇科娅",
+      "小家伙"
+    ],
+    "cast_source": "metadata"
   },
   "空军钓鱼佬": {
     "title": "空军钓鱼佬",
@@ -5892,8 +6237,10 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "德拉萝诗"
+    ],
+    "cast_source": "metadata"
   },
   "为了过去的孩子们": {
     "title": "为了过去的孩子们",
@@ -5929,8 +6276,11 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "兰罗摩",
+      "兰穆护昆达"
+    ],
+    "cast_source": "metadata"
   },
   "无忧节": {
     "title": "无忧节",
@@ -5966,8 +6316,33 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "兰拉迦",
+      "兰罗摩",
+      "兰加惟",
+      "兰修提袈",
+      "兰陀娑",
+      "兰耶娑",
+      "兰般度",
+      "兰百梨迦",
+      "兰贡迪",
+      "兰那库拉",
+      "兰伽卢",
+      "兰迦鲁",
+      "兰纳真",
+      "兰纳迦",
+      "兰利遮",
+      "兰帕卡提",
+      "兰萨卡",
+      "兰茶荼",
+      "兰非拉",
+      "兰阿帕斯",
+      "兰难世",
+      "兰梨娄",
+      "兰伊舍",
+      "兰犍多"
+    ],
+    "cast_source": "metadata"
   },
   "独舞者的序幕": {
     "title": "独舞者的序幕",
@@ -6052,8 +6427,24 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "阿玛兹亚",
+      "兰罗摩",
+      "兰拉迦",
+      "兰伊舍",
+      "兰加惟",
+      "兰伽卢",
+      "兰纳迦",
+      "兰帕卡提",
+      "兰卑浮",
+      "兰玛尼",
+      "兰犍多",
+      "兰梨娄",
+      "兰难世",
+      "兰随尼",
+      "兰耶师"
+    ],
+    "cast_source": "metadata"
   },
   "千里寻音迹难觅": {
     "title": "千里寻音迹难觅",
@@ -6190,8 +6581,18 @@
     ],
     "category": "魔神任务",
     "source_file": "quests_魔神任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "艾尔海森",
+      "赛诺",
+      "夏妮",
+      "拉扎克",
+      "坎蒂丝",
+      "迪希雅",
+      "伊萨克",
+      "安普叔",
+      "拉赫曼"
+    ],
+    "cast_source": "metadata"
   },
   "你的往事如一座花园": {
     "title": "你的往事如一座花园",
@@ -6396,8 +6797,12 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "祖尔宛",
+      "斯露莎",
+      "那先朱那"
+    ],
+    "cast_source": "metadata"
   },
   "曾有人追猎月亮": {
     "title": "曾有人追猎月亮",
@@ -6484,8 +6889,14 @@
     ],
     "category": "部族纪闻",
     "source_file": "quests_部族纪闻.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "爱维莉",
+      "希诺宁",
+      "特拉佐莉",
+      "延古",
+      "特拉帕尔"
+    ],
+    "cast_source": "metadata"
   },
   "翻越朝霭之墙": {
     "title": "翻越朝霭之墙",
@@ -6522,8 +6933,12 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "小家伙",
+      "玻娜",
+      "「绿松石」"
+    ],
+    "cast_source": "metadata"
   },
   "秋沙钱汤的经营危机": {
     "title": "秋沙钱汤的经营危机",
@@ -6563,8 +6978,18 @@
     ],
     "category": "传说任务",
     "source_file": "quests_传说任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "蓝川丞",
+      "百日白白音",
+      "柴葉紫",
+      "梦见月瑞希",
+      "八重神子",
+      "薄田",
+      "海彦",
+      "金井",
+      "江村中弥"
+    ],
+    "cast_source": "metadata"
   },
   "沉寂之地的枪声": {
     "title": "沉寂之地的枪声",
@@ -6709,8 +7134,18 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "托萝莎",
+      "让克",
+      "欧芙",
+      "「曲线」",
+      "「勇猛落落莓」",
+      "博兰德！郎勃罗梭！",
+      "凯万",
+      "马德莱娜",
+      "罗谢"
+    ],
+    "cast_source": "metadata"
   },
   "凯旋的远征者": {
     "title": "凯旋的远征者",
@@ -6855,8 +7290,40 @@
     ],
     "category": "魔神任务",
     "source_file": "quests_魔神任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "欧莎薇",
+      "伊约芭",
+      "哈隆加",
+      "莉乌娅",
+      "拉曼",
+      "阿奇亚库",
+      "库纳克",
+      "利别科",
+      "瓦曼",
+      "瓦卡尔",
+      "吉恩布",
+      "奇马利",
+      "雅蕾希",
+      "阿卡马",
+      "马兹拉",
+      "涅兰",
+      "托赫兰妮",
+      "托托",
+      "希诺宁",
+      "卡齐娜",
+      "帕加尔",
+      "阿尤",
+      "恰斯卡",
+      "葵可",
+      "科米娜",
+      "玛薇卡",
+      "幼小的匿叶龙",
+      "玛拉妮",
+      "伊安珊",
+      "欧洛伦",
+      "基尼奇"
+    ],
+    "cast_source": "metadata"
   },
   "智慧筑屋，凿成七柱": {
     "title": "智慧筑屋，凿成七柱",
@@ -6893,8 +7360,17 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "凯瑟琳",
+      "门达斯",
+      "乌格威",
+      "阿德菲",
+      "马塞拉",
+      "尤夫腾",
+      "芭别尔",
+      "婕德"
+    ],
+    "cast_source": "metadata"
   },
   "划破宁静的枪响": {
     "title": "划破宁静的枪响",
@@ -7035,8 +7511,16 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "纳赫蒂加尔",
+      "提尔扎德",
+      "婕德",
+      "奔奔",
+      "哲伯莱勒",
+      "奥米德",
+      "米尔萨德"
+    ],
+    "cast_source": "metadata"
   },
   "狩猎者，预见者": {
     "title": "狩猎者，预见者",
@@ -7176,8 +7660,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "安妮兹卡",
+      "马科拉",
+      "阿洛契卡",
+      "德兹斯拉沃"
+    ],
+    "cast_source": "metadata"
   },
   "妖雾重重": {
     "title": "妖雾重重",
@@ -7355,8 +7844,12 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "凯瑟琳",
+      "墨田",
+      "阿釜"
+    ],
+    "cast_source": "metadata"
   },
   "先驱": {
     "title": "先驱",
@@ -7396,8 +7889,10 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "黑蛋"
+    ],
+    "cast_source": "metadata"
   },
   "试胆大会": {
     "title": "试胆大会",
@@ -7488,8 +7983,16 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "凯瑟琳（稻妻）",
+      "辛焱",
+      "矢田幸喜",
+      "九条裟罗",
+      "渡部",
+      "「式大将」",
+      "达达利亚"
+    ],
+    "cast_source": "metadata"
   },
   "毁灭预兆与最后的通牒": {
     "title": "毁灭预兆与最后的通牒",
@@ -7523,8 +8026,11 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "小家伙",
+      "库库尔坎"
+    ],
+    "cast_source": "metadata"
   },
   "旧影重现": {
     "title": "旧影重现",
@@ -7786,8 +8292,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "志琼",
+      "海迪夫",
+      "夜兰",
+      "沐宁"
+    ],
+    "cast_source": "metadata"
   },
   "坠落之梦": {
     "title": "坠落之梦",
@@ -7942,8 +8453,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "墨田",
+      "珊瑚",
+      "龙二",
+      "罗尔德"
+    ],
+    "cast_source": "metadata"
   },
   "战歌吟唱时": {
     "title": "战歌吟唱时",
@@ -7984,8 +8500,15 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "安莱夫",
+      "叶洛亚",
+      "罗洛",
+      "比约恩",
+      "弗莱库",
+      "伊捷莉"
+    ],
+    "cast_source": "metadata"
   },
   "白马闲游记": {
     "title": "白马闲游记",
@@ -8142,8 +8665,12 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "黑蛋",
+      "哥伦比娅",
+      "玛歌"
+    ],
+    "cast_source": "metadata"
   },
   "猎人们的相聚": {
     "title": "猎人们的相聚",
@@ -8686,8 +9213,22 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "香菱",
+      "北斗",
+      "辛焱",
+      "魈",
+      "烟绯",
+      "言笑",
+      "凝光",
+      "天叔",
+      "刻晴",
+      "锅巴",
+      "萍姥姥",
+      "甘雨",
+      "钟离"
+    ],
+    "cast_source": "metadata"
   },
   "月影轮番登台": {
     "title": "月影轮番登台",
@@ -8728,8 +9269,32 @@
     ],
     "category": "魔神任务",
     "source_file": "quests_魔神任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "凯瑟琳（挪德卡莱）",
+      "哥伦比娅",
+      "卡尼",
+      "明娜",
+      "索妮齐娅",
+      "莎莱卡",
+      "韦克塞尔",
+      "法尔伽",
+      "菈乌玛",
+      "努昂诺塔",
+      "杜林",
+      "阿贝多",
+      "菲林斯",
+      "奈芙尔",
+      "雅珂达",
+      "维伊科",
+      "米埃里蒂",
+      "库乌提",
+      "伊尔玛妲",
+      "琪埃洛",
+      "凯图",
+      "达利米日",
+      "萨塔蒂耶图"
+    ],
+    "cast_source": "metadata"
   },
   "全能美食队·职责之内": {
     "title": "全能美食队·职责之内",
@@ -8768,8 +9333,21 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "旭东",
+      "芭尔瓦涅",
+      "朱莉",
+      "龟井宗久",
+      "法尔扎",
+      "尤努斯",
+      "卡玛尔",
+      "沙瓦玛",
+      "尼特",
+      "纳巴提",
+      "纳里曼",
+      "玛亚姆"
+    ],
+    "cast_source": "metadata"
   },
   "为同一片土地": {
     "title": "为同一片土地",
@@ -8812,8 +9390,36 @@
     ],
     "category": "魔神任务",
     "source_file": "quests_魔神任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "尤庇娅",
+      "伊安珊",
+      "马特兰",
+      "胡里约",
+      "奥杜力",
+      "巴哈蒂",
+      "亚蕾琪",
+      "穆托塔",
+      "阿图科",
+      "柯奇妲",
+      "奥科兰",
+      "穆纳伊",
+      "伊卡力",
+      "库阿勒",
+      "乌茨勒",
+      "黛希特莉",
+      "伊图提娅",
+      "阿邦迪",
+      "卡皮塔诺",
+      "古瑟雷德",
+      "阿乔",
+      "基尼奇",
+      "玛拉妮",
+      "卡齐娜",
+      "茜特菈莉",
+      "欧洛伦",
+      "希诺宁"
+    ],
+    "cast_source": "metadata"
   },
   "虚空劫灰往世书": {
     "title": "虚空劫灰往世书",
@@ -9041,8 +9647,14 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "科扎特利",
+      "阿尔沃",
+      "索林",
+      "托奇特莉",
+      "索尔顿"
+    ],
+    "cast_source": "metadata"
   },
   "空月归乡": {
     "title": "空月归乡",
@@ -9206,8 +9818,10 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "「末缀之劫」"
+    ],
+    "cast_source": "metadata"
   },
   "向着迷烟飘往之处": {
     "title": "向着迷烟飘往之处",
@@ -9251,8 +9865,15 @@
     ],
     "category": "魔神任务",
     "source_file": "quests_魔神任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "茜特菈莉",
+      "欧洛伦",
+      "卡皮塔诺",
+      "科斯特利茨基",
+      "科约帕（话事处官员）",
+      "夏安卡"
+    ],
+    "cast_source": "metadata"
   },
   "红与黑": {
     "title": "红与黑",
@@ -9297,8 +9918,15 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "托萝莎",
+      "「曲线」",
+      "大当家",
+      "「勇猛落落莓」",
+      "某不知名小弟",
+      "伯拉尔"
+    ],
+    "cast_source": "metadata"
   },
   "审判日": {
     "title": "审判日",
@@ -9605,8 +10233,15 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "安",
+      "小卷心菜",
+      "阿尔",
+      "雅克",
+      "凯特上校",
+      "莫里"
+    ],
+    "cast_source": "metadata"
   },
   "「升炼研巧万策金」": {
     "title": "「升炼研巧万策金」",
@@ -9710,8 +10345,18 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "拉娜",
+      "艾方索",
+      "优丹",
+      "卡乌斯",
+      "素达蓓",
+      "阿玛兹亚",
+      "耶沙法特",
+      "婕叶",
+      "巴兰"
+    ],
+    "cast_source": "metadata"
   },
   "告密的心": {
     "title": "告密的心",
@@ -9753,8 +10398,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "托尔芬",
+      "丹尤莎·谢斯特宁",
+      "卓里克·谢斯特宁",
+      "福金"
+    ],
+    "cast_source": "metadata"
   },
   "水色潮痕": {
     "title": "水色潮痕",
@@ -9795,8 +10445,12 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "维吉尔",
+      "卢卡",
+      "桑尼"
+    ],
+    "cast_source": "metadata"
   },
   "当一切镌刻成碑": {
     "title": "当一切镌刻成碑",
@@ -9997,8 +10651,11 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "墨田",
+      "阿釜"
+    ],
+    "cast_source": "metadata"
   },
   "轰鸣与暗涌": {
     "title": "轰鸣与暗涌",
@@ -10110,8 +10767,40 @@
     ],
     "category": "魔神任务",
     "source_file": "quests_魔神任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "茜特菈莉",
+      "夏安卡",
+      "蒂索克",
+      "因娜",
+      "玛拉妮",
+      "伊安珊",
+      "葵可",
+      "恰斯卡",
+      "玛薇卡",
+      "希诺宁",
+      "卡齐娜",
+      "爱维莉",
+      "帕加尔",
+      "萨科巴",
+      "伊蒂莉",
+      "乌苏坎",
+      "延索",
+      "陀达罗",
+      "沃蕾",
+      "达布亚",
+      "莎迪蕾",
+      "巴拉诺夫",
+      "奈赫西",
+      "特蒂赫莉",
+      "戈利科夫",
+      "狄雷",
+      "雅诺斯基",
+      "欧洛伦",
+      "奥坎比",
+      "卡皮塔诺",
+      "塔尔科"
+    ],
+    "cast_source": "metadata"
   },
   "问题与答案": {
     "title": "问题与答案",
@@ -10157,8 +10846,21 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "罗谢",
+      "让克",
+      "欧芙",
+      "托萝莎",
+      "「曲线」",
+      "凯万",
+      "博兰德！郎勃罗梭！",
+      "大当家",
+      "「勇猛落落莓」",
+      "马德莱娜",
+      "前来阻挡的愚人众",
+      "伯拉尔"
+    ],
+    "cast_source": "metadata"
   },
   "事犹未了": {
     "title": "事犹未了",
@@ -10200,8 +10902,16 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "爱维琳",
+      "维娜",
+      "安洛丝",
+      "科罗德",
+      "莱赫妲尔",
+      "爱依菈",
+      "索洛维"
+    ],
+    "cast_source": "metadata"
   },
   "雷穆利亚的最后一日": {
     "title": "雷穆利亚的最后一日",
@@ -10245,8 +10955,14 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "小呜斯",
+      "埃斯特（雷穆利亚）",
+      "斯库拉",
+      "卡西奥多",
+      "波爱修斯"
+    ],
+    "cast_source": "metadata"
   },
   "逆焰": {
     "title": "逆焰",
@@ -10505,8 +11221,18 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "凯瑟琳",
+      "博尼法兹",
+      "米尔萨德",
+      "奥米德",
+      "哲伯莱勒",
+      "提尔扎德",
+      "纳赫蒂加尔",
+      "婕德",
+      "奔奔"
+    ],
+    "cast_source": "metadata"
   },
   "识藏日": {
     "title": "识藏日",
@@ -10801,8 +11527,18 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "苏玛克",
+      "汉佩克",
+      "奥贡",
+      "潘帕",
+      "托赞",
+      "阿妮拉",
+      "特纳华",
+      "伊茨昆",
+      "塔力帕"
+    ],
+    "cast_source": "metadata"
   },
   "循着过往的足迹": {
     "title": "循着过往的足迹",
@@ -11124,8 +11860,12 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "尤考姆",
+      "蒂图",
+      "小家伙"
+    ],
+    "cast_source": "metadata"
   },
   "热砂之梦": {
     "title": "热砂之梦",
@@ -11175,8 +11915,18 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "纳赫蒂加尔",
+      "婕德",
+      "提尔扎德",
+      "哲伯莱勒",
+      "奥米德",
+      "米尔萨德",
+      "奔奔",
+      "萨梅尔",
+      "博尼法兹"
+    ],
+    "cast_source": "metadata"
   },
   "当一切回归于水": {
     "title": "当一切回归于水",
@@ -11279,8 +12029,12 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "笹野",
+      "小春",
+      "泽维尔"
+    ],
+    "cast_source": "metadata"
   },
   "于月光下重逢": {
     "title": "于月光下重逢",
@@ -11394,8 +12148,11 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "涅朵奇卡",
+      "拉斯科尔尼科夫"
+    ],
+    "cast_source": "metadata"
   },
   "来试试「七圣召唤」吧！": {
     "title": "来试试「七圣召唤」吧！",
@@ -11446,8 +12203,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "蒂玛乌斯",
+      "玛格丽特",
+      "恕筠",
+      "斯万"
+    ],
+    "cast_source": "metadata"
   },
   "彼时漫天异彩": {
     "title": "彼时漫天异彩",
@@ -11491,8 +12253,14 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "凯瑟琳（须弥）",
+      "毕洛",
+      "那先朱那",
+      "斯露莎",
+      "祖尔宛"
+    ],
+    "cast_source": "metadata"
   },
   "旁白的注脚": {
     "title": "旁白的注脚",
@@ -11870,8 +12638,14 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "小茂",
+      "灵渊",
+      "浮锦",
+      "罗叔",
+      "老陆头"
+    ],
+    "cast_source": "metadata"
   },
   "寒鸦的系谱": {
     "title": "寒鸦的系谱",
@@ -11923,8 +12697,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "托尔芬",
+      "海捷德",
+      "雷勒",
+      "西维"
+    ],
+    "cast_source": "metadata"
   },
   "皆为预言": {
     "title": "皆为预言",
@@ -12179,8 +12958,15 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "玛梅赫",
+      "伊洛丝",
+      "凯库巴德",
+      "凯伊卡",
+      "雅各布",
+      "西摩尔"
+    ],
+    "cast_source": "metadata"
   },
   "月亮升起的地方": {
     "title": "月亮升起的地方",
@@ -12326,8 +13112,15 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "卡特皮拉",
+      "安",
+      "西摩尔",
+      "雅各布",
+      "阿尔",
+      "雅克"
+    ],
+    "cast_source": "metadata"
   },
   "「月引周巡之述演」": {
     "title": "「月引周巡之述演」",
@@ -12449,8 +13242,54 @@
     ],
     "category": "魔神任务",
     "source_file": "quests_魔神任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "哥伦比娅",
+      "奈芙尔",
+      "菈乌玛",
+      "杜林",
+      "流浪者",
+      "凯瑟琳（挪德卡莱）",
+      "法尔伽",
+      "尼可",
+      "阿贝多",
+      "芭比洛斯",
+      "艾莉丝",
+      "梅妲",
+      "多莉",
+      "溪泉",
+      "帕蒂沙兰",
+      "威尔",
+      "埃斯诺尔",
+      "罗泽尔",
+      "维萨",
+      "板栗",
+      "柑橘",
+      "埃斯唐普",
+      "红莓",
+      "奥雷卢",
+      "贾契克",
+      "卡嘉",
+      "加莉娜",
+      "菲林斯",
+      "勒梅蒂",
+      "雅珂达",
+      "莉伊妲",
+      "阿蕾奇诺",
+      "索妮齐娅",
+      "坎托尔",
+      "莉莉希",
+      "桑多涅",
+      "考斯奇",
+      "林布",
+      "爱诺",
+      "伊涅芙",
+      "努昂诺塔",
+      "茜雅",
+      "利乌芭",
+      "阿舍鲁",
+      "杜马沃捷"
+    ],
+    "cast_source": "metadata"
   },
   "正如日出日落": {
     "title": "正如日出日落",
@@ -12509,8 +13348,34 @@
     ],
     "category": "魔神任务",
     "source_file": "quests_魔神任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "希诺宁",
+      "玛薇卡",
+      "茜特菈莉",
+      "玛拉妮",
+      "卡齐娜",
+      "基尼奇",
+      "阿米娜",
+      "阿乔",
+      "欧洛伦",
+      "伊安珊",
+      "胡阿库",
+      "恰斯卡",
+      "基奈",
+      "嘉伊帕",
+      "哈恩薇",
+      "阿尤",
+      "安帕奥",
+      "奥菈雅",
+      "卡赫伊娅",
+      "波鲁亚",
+      "祖马力",
+      "维查玛",
+      "阿伊勒",
+      "赫纳卡",
+      "塞妲"
+    ],
+    "cast_source": "metadata"
   },
   "流沙如泪的神殿": {
     "title": "流沙如泪的神殿",
@@ -12573,8 +13438,15 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "婕德",
+      "阿萨里格",
+      "利露帕尔",
+      "芭别尔",
+      "尤夫腾",
+      "马塞拉"
+    ],
+    "cast_source": "metadata"
   },
   "最初的那抹月光": {
     "title": "最初的那抹月光",
@@ -12719,8 +13591,41 @@
     ],
     "category": "魔神任务",
     "source_file": "quests_魔神任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "努昂诺塔",
+      "菈乌玛",
+      "艾莉丝",
+      "哥伦比娅",
+      "勒梅蒂",
+      "加莉娜",
+      "索妮齐娅",
+      "莱赫妲尔",
+      "加普依",
+      "莎莱卡",
+      "莉伊妲",
+      "考斯奇",
+      "阿尔希普",
+      "柳佳",
+      "林布",
+      "杜马沃捷",
+      "法尔伽",
+      "尼可",
+      "杜林",
+      "阿贝多",
+      "流浪者",
+      "阿蕾奇诺",
+      "桑多涅",
+      "拉撒抹培",
+      "瓦犹达娜",
+      "阿答法奈",
+      "高拉默",
+      "奈芙尔",
+      "雅珂达",
+      "爱诺",
+      "伊涅芙",
+      "菲林斯"
+    ],
+    "cast_source": "metadata"
   },
   "富豪游戏": {
     "title": "富豪游戏",
@@ -12788,8 +13693,28 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "莫莱妮",
+      "嘉维娜",
+      "达希",
+      "艾蒂安",
+      "格内薇芙",
+      "雷维",
+      "莉诺尔",
+      "诺瓦勒斯",
+      "克兰茨",
+      "嘉维娅",
+      "布兰",
+      "埃尔瓦德",
+      "卡特皮拉",
+      "布瓦列特",
+      "埃纳夫",
+      "德拉索",
+      "尼扎米",
+      "富尔蒙",
+      "梅亚"
+    ],
+    "cast_source": "metadata"
   },
   "最后的特诺奇兹托克人（世界任务）": {
     "title": "最后的特诺奇兹托克人（世界任务）",
@@ -12848,8 +13773,14 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "渊上",
+      "普克莱",
+      "勒拉",
+      "茜特菈莉",
+      "帕帕"
+    ],
+    "cast_source": "metadata"
   },
   "枫丹科学院，停滞于一片废墟上": {
     "title": "枫丹科学院，停滞于一片废墟上",
@@ -12928,8 +13859,18 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "凯瑟琳（枫丹）",
+      "德斯诺斯",
+      "纳克",
+      "克洛妮艾",
+      "沙尔梅",
+      "孔雅",
+      "舒瓦瑟尔",
+      "雷蒙多",
+      "希塞蕾"
+    ],
+    "cast_source": "metadata"
   },
   "聚光灯下谎言成影": {
     "title": "聚光灯下谎言成影",
