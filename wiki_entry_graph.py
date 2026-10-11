@@ -1092,11 +1092,12 @@ def _clean_bwiki_field(value: str) -> str:
 
 
 def _bwiki_processed_text(item: Dict[str, Any]) -> str:
-    """把 quests_processed 条目压成兜底正文（summary + chunks）。"""
+    """把 quests_processed 条目压成兜底正文。
+
+    只使用原始 chunk，不把 summary（早期检索方案生成的大纲）拼进剧情正文；
+    否则图里会出现“大纲+原文”的混合节点。
+    """
     parts: List[str] = []
-    summary = item.get("summary")
-    if isinstance(summary, str) and summary.strip():
-        parts.append(summary.strip())
     for key in ("chunks_bm25", "chunks_vec"):
         value = item.get(key)
         if isinstance(value, list):
@@ -1185,6 +1186,7 @@ def _bwiki_merge_row(entries: Dict[tuple, Dict[str, Any]], row: Dict[str, Any]) 
 
 def _bwiki_backfill(entries: Dict[tuple, Dict[str, Any]], processed: Dict[str, Any]) -> None:
     """raw 文件没覆盖到的任务，用 processed 的 chunks 补建条目。"""
+    existing_titles = {_norm_meta_key(row.get("title") or "") for row in entries.values()}
     for title, item in processed.items():
         if not isinstance(item, dict):
             continue
@@ -1196,7 +1198,7 @@ def _bwiki_backfill(entries: Dict[tuple, Dict[str, Any]], processed: Dict[str, A
             continue
         task = str(item.get("title") or title).strip()
         key = ("", "", _norm_meta_key(task))
-        if key in entries:
+        if key in entries or _norm_meta_key(task) in existing_titles:
             continue
         entries[key] = {
             "title": task,
