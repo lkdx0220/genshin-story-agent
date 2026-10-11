@@ -54,16 +54,75 @@ def find_matches(cards, title: str):
     if not q:
         return []
     exact = [c for c in cards if norm_title(c["title"]) == q]
-    if exact:
-        return exact
     contains = [c for c in cards if q and (q in norm_title(c["title"]) or norm_title(c["title"]) in q)]
-    return contains[:5]
+    merged = []
+    seen = set()
+    for c in exact + contains:
+        key = (c["title"], c["content_id"])
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(c)
+    # 任务频道 43 优先，活动频道 105 次之
+    merged.sort(key=lambda c: 0 if c.get("channel") == TASK_CHANNEL else 1)
+    return merged[:12]
+
+
+def _collect_dialogue(obj, out):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "dialogue" and isinstance(value, str):
+                text = mt.plain(value)
+                if text:
+                    out.append(text)
+            else:
+                _collect_dialogue(value, out)
+    elif isinstance(obj, list):
+        for value in obj:
+            _collect_dialogue(value, out)
+
+
+def extract_dialogue_text(page):
+    """只提取剧情对话模块的 dialogue 内容，不混入任务概述/奖励/活动说明。"""
+    lines = []
+    for module in page.get("modules") or []:
+        if not isinstance(module, dict):
+            continue
+        name = str(module.get("name") or "").strip()
+        comps = module.get("components") or []
+        is_dialogue_module = name == "剧情对话" or any(
+            str((c or {}).get("component_id") or "") == "interactive_dialogue"
+            for c in comps if isinstance(c, dict)
+        )
+        if not is_dialogue_module:
+            continue
+        for comp in comps:
+            if not isinstance(comp, dict):
+                continue
+            data = comp.get("data")
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except Exception:
+                    continue
+            _collect_dialogue(data, lines)
+    # 去重、保序
+    out = []
+    seen = set()
+    for line in lines:
+        line = line.strip()
+        if not line or line in seen:
+            continue
+        seen.add(line)
+        out.append(line)
+    return "\n".join(out)
 
 
 def parse_page(content_id):
     page = mh.fetch_entry_page(content_id)
     if not page:
         return None
+    dialogue_text = extract_dialogue_text(page)
     groups = mt.group_modules_from_page(page)
     best = None
     for group in groups:
@@ -73,18 +132,33 @@ def parse_page(content_id):
             continue
         if best is None or len(text) > len(best[1]):
             best = (title, text, group)
-    if not best:
+    if not best and not dialogue_text:
         return None
-    title, text, group = best
-    meta = mt.extract_metadata(group, {}, "")
-    speakers = re.findall(r"(?:^|\n)\s*\*?\s*([^\n：:]{1,20}?)\s*[：:]", text)
+    if best:
+        title, full_text, group = best
+        meta = mt.extract_metadata(group, {}, "")
+    else:
+        title, full_text, group, meta = "", "", None, {}
+    if dialogue_text:
+        return {
+            "group_title": title,
+            "text": dialogue_text,
+            "text_len": len(dialogue_text),
+            "speaker_lines": len(re.findall(r"(?:^|\n)\s*\*?\s*([^\n：:]{1,20}?)\s*[：:]", dialogue_text)),
+            "cast": meta.get("出场人物", ""),
+            "metadata": meta,
+            "has_dialogue": True,
+            "full_text": full_text,
+        }
     return {
         "group_title": title,
-        "text": text,
-        "text_len": len(text),
-        "speaker_lines": len(speakers),
+        "text": full_text,
+        "text_len": len(full_text),
+        "speaker_lines": len(re.findall(r"(?:^|\n)\s*\*?\s*([^\n：:]{1,20}?)\s*[：:]", full_text)),
         "cast": meta.get("出场人物", ""),
         "metadata": meta,
+        "has_dialogue": False,
+        "full_text": full_text,
     }
 
 
@@ -122,19 +196,30 @@ def main():
     for index, target in enumerate(targets, 1):
         title = target["title"]
         matches = find_matches(cards, title)
-        if not matches:
+        chosen = None
+        chosen_parsed = None
+        for match in matches:
+            parsed = parse_page(match["content_id"])
+            if not parsed:
+                time.sleep(args.delay)
+                continue
+            if chosen is None or (parsed.get("has_dialogue") and not (chosen_parsed or {}).get("has_dialogue")):
+                chosen = match
+                chosen_parsed = parsed
+            if parsed.get("has_dialogue"):
+                break
+            time.sleep(args.delay)
+        if not chosen:
             records.append({"title": title, "source": target["source"], "found": False})
         else:
-            match = matches[0]
-            parsed = parse_page(match["content_id"])
             records.append({
                 "title": title,
                 "source": target["source"],
                 "found": True,
-                "match_title": match["title"],
-                "content_id": match["content_id"],
-                "channel": match["channel"],
-                "parsed": parsed,
+                "match_title": chosen["title"],
+                "content_id": chosen["content_id"],
+                "channel": chosen["channel"],
+                "parsed": chosen_parsed,
             })
         if index % 10 == 0 or index == len(targets):
             print(f"[{index}/{len(targets)}]")
