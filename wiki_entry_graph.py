@@ -122,6 +122,8 @@ class WikiEntry:
     entry_kind: str = ""
     # v6：极短占位条目，实体检索应跳过
     story_placeholder: bool = False
+    # v6：已确认无其他角色（仅旅行者/派蒙）
+    cast_absent: bool = False
 
     def __post_init__(self):
         """观测枢 OCR 误字修正。
@@ -171,6 +173,7 @@ class WikiEntry:
             "cast_scope": self.cast_scope or None,
             "entry_kind": self.entry_kind or None,
             "story_placeholder": True if self.story_placeholder else None,
+            "cast_absent": True if self.cast_absent else None,
         }
 
     @classmethod
@@ -204,6 +207,7 @@ class WikiEntry:
             cast_scope=str(data.get("cast_scope") or ""),
             entry_kind=str(data.get("entry_kind") or ""),
             story_placeholder=bool(data.get("story_placeholder") or False),
+            cast_absent=bool(data.get("cast_absent") or False),
         )
 
 
@@ -1401,11 +1405,27 @@ def _load_cast_records() -> Dict[str, tuple]:
     return records
 
 
+_ACT_TASK_RE = re.compile(r"第[一二三四五六七八九十百0-9]+[回幕章].*?[「『](.+?)[」』]")
+
+
+def _extract_act_task_name(title: str) -> str:
+    """从“系列名 第N回/幕 「具体任务名」”中取出具体任务名。"""
+    title = str(title or "")
+    match = _ACT_TASK_RE.search(title)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"[「『](.+?)[」』]\s*$", title)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
 def apply_cast_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
     """给图中 entry_type 为 task / activity 的条目写入 cast / cast_source。
 
     - task：逐任务 cast；
-    - activity：活动主页的 event-level cast（cast_scope=activity）。
+    - activity：活动主页的 event-level cast（cast_scope=activity）；
+    - 单幕条目优先匹配具体任务名，避免整活动 cast 误当本幕权威。
     """
     records = _load_cast_records()
     stats = {
@@ -1416,6 +1436,7 @@ def apply_cast_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
         "metadata": 0,
         "infobox_text": 0,
         "speaker_lines": 0,
+        "activity_inherited": 0,
         "empty": 0,
     }
     for entry in graph.entries.values():
@@ -1425,7 +1446,11 @@ def apply_cast_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
             stats["task_total"] += 1
         else:
             stats["activity_total"] += 1
+        act_task = _extract_act_task_name(entry.title) if entry.entry_type == "task" else ""
         pair = records.get(entry.title) or records.get(_norm_meta_key(entry.title))
+        if not pair and act_task:
+            pair = records.get(act_task) or records.get(_norm_meta_key(act_task))
+        inherited = False
         if not pair:
             for alias in entry.aliases:
                 alias = str(alias or "").strip()
@@ -1433,11 +1458,17 @@ def apply_cast_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
                     continue
                 pair = records.get(alias) or records.get(_norm_meta_key(alias))
                 if pair:
+                    if act_task:
+                        # 单幕条目没有本幕字段时，只能回退到活动整页 cast：
+                        # 必须标 activity_inherited，不能标成 metadata。
+                        inherited = True
                     break
         cast: List[str] = []
         source = ""
         if pair:
             cast, source = pair[0], pair[1]
+            if inherited:
+                source = "activity_inherited"
         if not cast:
             cast = _cast_from_infobox_text(entry.full_text)
             source = "infobox_text" if cast else ""
@@ -1550,6 +1581,52 @@ def apply_story_placeholder_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
                     matched = True
                     break
         entry.story_placeholder = bool(matched)
+        if matched:
+            stats["matched"] += 1
+    return stats
+
+
+def _load_cast_absent_titles() -> set:
+    """本地 metadata.cast_absent=True / cast_source=protagonist_only 的标题。"""
+    titles = set()
+    content_dir = BASE_DIR / "content_data"
+    for path in sorted(content_dir.glob("quests_*.json")):
+        if "processed" in path.name or ".bak" in path.name or "before" in path.name:
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        items = data if isinstance(data, list) else list(data.values())
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            metadata = item.get("metadata") or {}
+            absent = bool(metadata.get("cast_absent")) or str(metadata.get("cast_source") or "") == "protagonist_only"
+            if not absent:
+                continue
+            title = str(item.get("title") or metadata.get("任务名称") or "").strip()
+            if title:
+                titles.add(title)
+                titles.add(_norm_meta_key(title))
+    return titles
+
+
+def apply_cast_absent_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
+    """把本地 cast_absent / protagonist_only 标记同步到图。"""
+    titles = _load_cast_absent_titles()
+    stats = {"matched": 0, "total": len(titles)}
+    for entry in graph.entries.values():
+        if entry.entry_type not in ("task", "activity"):
+            continue
+        matched = entry.title in titles or _norm_meta_key(entry.title) in titles
+        if not matched:
+            for alias in entry.aliases:
+                alias = str(alias or "").strip()
+                if alias and (alias in titles or _norm_meta_key(alias) in titles):
+                    matched = True
+                    break
+        entry.cast_absent = bool(matched)
         if matched:
             stats["matched"] += 1
     return stats
@@ -1848,6 +1925,7 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
     cast_stats = apply_cast_to_graph(graph)
     entry_kind_stats = apply_entry_kind_to_graph(graph)
     placeholder_stats = apply_story_placeholder_to_graph(graph)
+    cast_absent_stats = apply_cast_absent_to_graph(graph)
     entry_kind_coverage = apply_entry_kind_coverage(graph)
     graph.meta = {
         "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1860,6 +1938,7 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
         "entry_kind": entry_kind_stats,
         "entry_kind_coverage": entry_kind_coverage,
         "story_placeholder": placeholder_stats,
+        "cast_absent": cast_absent_stats,
         "dirty_links": [],
     }
     return graph
