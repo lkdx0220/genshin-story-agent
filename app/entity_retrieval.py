@@ -161,11 +161,24 @@ def _clean_cast_value(value: str) -> set:
 
 @lru_cache(maxsize=1)
 def metadata_cast_map() -> Dict[str, frozenset]:
-    """title → 权威出场人物表，来源是**结构化元数据** content_data/quests_*.json 的 metadata.出场人物。
+    """title → 权威出场人物表。
 
-    这是比从 full_text 正则解析更可靠的一手数据（我们此前完全没用上它）。
+    T3 之后优先读取 wiki_entry_graph.json 的 `cast`（已结构化落库），
+    再用 content_data/quests_*.json 的 metadata.出场人物 补漏。
     """
     out: Dict[str, frozenset] = {}
+    try:
+        by_id, _ = _graph_and_index()
+        for entry in by_id.values():
+            if entry.get("entry_type") != "task":
+                continue
+            title = str(entry.get("title") or "")
+            cast = entry.get("cast") or []
+            if title and cast:
+                out[title] = frozenset(str(c) for c in cast if isinstance(c, str) and c)
+    except Exception:
+        pass
+
     if not QUEST_DIR.is_dir():
         return out
     for path in sorted(QUEST_DIR.glob("quests_*.json")):
@@ -181,7 +194,7 @@ def metadata_cast_map() -> Dict[str, frozenset]:
                 continue
             title = str(item.get("title") or item.get("name") or "")
             cast = _clean_cast_value((item.get("metadata") or {}).get("出场人物") or "")
-            if title and cast:
+            if title and cast and title not in out:
                 out[title] = frozenset(cast)
     return out
 
@@ -260,6 +273,9 @@ def _entity_tasks(name: str) -> Tuple[str, Dict[str, dict]]:
             sid = str(m.get("entry_id"))
             entry = by_id.get(sid)
             if not entry or entry.get("entry_type") != "task":
+                continue
+            # T4：活动内读物/彩蛋等非剧情条目不进入实体检索候选集。
+            if entry.get("entry_kind") == "lore_item":
                 continue
             slot = tasks.setdefault(sid, {"count": 0, "variants": set()})
             slot["count"] += int(m.get("count") or 0)

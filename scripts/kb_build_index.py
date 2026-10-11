@@ -14,6 +14,7 @@ import os
 import sys
 import json
 import re
+import subprocess
 import time
 from typing import Dict, List
 
@@ -749,6 +750,13 @@ def _index_all(store: KBVectorStore):
     print(f"\n[建库] 全部完成! 总计 {total} 条向量")
     print(f"  各集合: {stats}")
     print(f"  存储路径: {VECTOR_DIR}")
+
+    # T1：索引完成后做一次 cast 完备性巡检（只写 kb_vectors/cast_coverage.json，不改数据）
+    try:
+        coverage_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cast_coverage.py")
+        subprocess.run([sys.executable, coverage_script], check=False)
+    except Exception as error:
+        print(f"[cast] 完备性巡检失败: {error}")
 
 
 if __name__ == "__main__":

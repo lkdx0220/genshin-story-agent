@@ -113,6 +113,11 @@ class WikiEntry:
     updated_at: str = ""
     # v4：来源标记。mihoyo=米游社观测枢；bwiki=B站 wiki 等补充源
     source: str = "mihoyo"
+    # v5：任务权威出场人物表（T3 结构化落库）
+    cast: List[str] = field(default_factory=list)
+    cast_source: str = ""
+    # v5：任务类型标记（T4）：quest / lore_item / unknown
+    entry_kind: str = ""
 
     def __post_init__(self):
         """观测枢 OCR 误字修正。
@@ -157,6 +162,9 @@ class WikiEntry:
             "status": self.status,
             "updated_at": self.updated_at,
             "source": self.source,
+            "cast": self.cast or None,
+            "cast_source": self.cast_source or None,
+            "entry_kind": self.entry_kind or None,
         }
 
     @classmethod
@@ -185,6 +193,9 @@ class WikiEntry:
             status=str(data.get("status", "ok")),
             updated_at=str(data.get("updated_at", "")),
             source=str(data.get("source", "mihoyo") or "mihoyo"),
+            cast=list(data.get("cast") or []),
+            cast_source=str(data.get("cast_source") or ""),
+            entry_kind=str(data.get("entry_kind") or ""),
         )
 
 
@@ -997,6 +1008,7 @@ _BWIKI_ALLOWED_TYPES = (
     "伴月纪闻",
     "游逸旅闻",
     "彩蛋剧情",
+    "限时任务",
 )
 _BWIKI_EXCLUDE_TITLE_KEYWORDS = ("额外对话/彩蛋", "教程", "活动说明", "NPC对话")
 _ACT_NAME_RE = re.compile(r"第[一二三四五六七八九十0-9]+(?:幕|回|章)|尾声|序奏|序章|间章|幕间")
@@ -1286,6 +1298,176 @@ def _text_covered(needle: str, haystack: str, samples: int = 20, frag: int = 24)
     return total > 0 and hits / total >= 0.5
 
 
+# ====== T3：权威出场人物表结构化落库 ======
+
+_CAST_FIELD_RE = re.compile(r"出场人物\s*[:：]\s*([^\n]{2,500})")
+_CAST_SPLIT_RE = re.compile(r"[、,，;；/]")
+
+
+def _clean_cast_parts(raw, whole_invalid: bool = True) -> List[str]:
+    """清洗 cast 字段，保留原始顺序。
+
+    whole_invalid=True 用于 metadata.出场人物：整段出现 = / | / 任务描述 直接判脏。
+    whole_invalid=False 用于 full_text 里的出场人物行：只逐项过滤，和 app.parse_cast 对齐。
+    """
+    value = str(raw or "").strip()
+    if not value:
+        return []
+    if whole_invalid and ("=" in value or "|" in value or "任务描述" in value):
+        return []
+    names: List[str] = []
+    seen = set()
+    for chunk in _CAST_SPLIT_RE.split(value):
+        name = chunk.strip().strip("[]【】")
+        if not name or len(name) > 12:
+            continue
+        if "=" in name or "版本" in name or "任务" in name:
+            continue
+        if name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
+def _cast_from_infobox_text(text: str) -> List[str]:
+    """从 full_text / text 的「出场人物：...」行解析；只解析页面已有字段，不做正文推断。"""
+    text = str(text or "")
+    for match in _CAST_FIELD_RE.finditer(text):
+        names = _clean_cast_parts(match.group(1), whole_invalid=False)
+        if names:
+            return names
+    return []
+
+
+def _load_cast_records() -> Dict[str, tuple]:
+    """title / 归一化 title -> (cast_list, cast_source)。"""
+    records: Dict[str, tuple] = {}
+    content_dir = BASE_DIR / "content_data"
+    for path in sorted(content_dir.glob("quests_*.json")):
+        if "processed" in path.name or ".bak" in path.name or "before" in path.name:
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        items = data if isinstance(data, list) else list(data.values())
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or (item.get("metadata") or {}).get("任务名称") or "").strip()
+            if not title:
+                continue
+            metadata = item.get("metadata") or {}
+            raw = metadata.get("出场人物")
+            cast = _clean_cast_parts(raw)
+            if cast:
+                source = "metadata"
+            else:
+                cast = _cast_from_infobox_text(item.get("text") or "")
+                source = "infobox_text" if cast else ""
+            if not cast:
+                continue
+            records[title] = (cast, source)
+            records.setdefault(_norm_meta_key(title), (cast, source))
+    return records
+
+
+def apply_cast_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
+    """给图中 entry_type == "task" 的条目写入 cast / cast_source。"""
+    records = _load_cast_records()
+    stats = {
+        "task_total": 0,
+        "with_cast": 0,
+        "metadata": 0,
+        "infobox_text": 0,
+        "empty": 0,
+    }
+    for entry in graph.entries.values():
+        if entry.entry_type != "task":
+            continue
+        stats["task_total"] += 1
+        pair = records.get(entry.title) or records.get(_norm_meta_key(entry.title))
+        if not pair:
+            for alias in entry.aliases:
+                alias = str(alias or "").strip()
+                if not alias:
+                    continue
+                pair = records.get(alias) or records.get(_norm_meta_key(alias))
+                if pair:
+                    break
+        cast: List[str] = []
+        source = ""
+        if pair:
+            cast, source = pair[0], pair[1]
+        if not cast:
+            cast = _cast_from_infobox_text(entry.full_text)
+            source = "infobox_text" if cast else ""
+        entry.cast = cast
+        entry.cast_source = source
+        if cast:
+            stats["with_cast"] += 1
+            if source in stats:
+                stats[source] += 1
+        else:
+            stats["empty"] += 1
+    return stats
+
+
+def _load_entry_kind_records() -> Dict[str, str]:
+    """title / 归一化 title -> entry_kind（quest/lore_item/unknown）。"""
+    records: Dict[str, str] = {}
+    content_dir = BASE_DIR / "content_data"
+    for path in sorted(content_dir.glob("quests_*.json")):
+        if "processed" in path.name or ".bak" in path.name or "before" in path.name:
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        items = data if isinstance(data, list) else list(data.values())
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            metadata = item.get("metadata") or {}
+            kind = str(metadata.get("entry_kind") or item.get("entry_kind") or "").strip()
+            if not title or not kind:
+                continue
+            records[title] = kind
+            records.setdefault(_norm_meta_key(title), kind)
+    return records
+
+
+def apply_entry_kind_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
+    """给图中 entry_type == "task" 的条目写入 entry_kind（T4）。"""
+    records = _load_entry_kind_records()
+    stats = {"task_total": 0, "quest": 0, "lore_item": 0, "unknown": 0, "empty": 0}
+    for entry in graph.entries.values():
+        if entry.entry_type != "task":
+            continue
+        stats["task_total"] += 1
+        kind = records.get(entry.title) or records.get(_norm_meta_key(entry.title)) or ""
+        if not kind:
+            for alias in entry.aliases:
+                alias = str(alias or "").strip()
+                if not alias:
+                    continue
+                kind = records.get(alias) or records.get(_norm_meta_key(alias)) or ""
+                if kind:
+                    break
+        # 防止别名匹配串到读物记录：图内正文若明显是任务剧情/任务流程，不标为 lore_item。
+        if kind == "lore_item":
+            text = entry.story_text or entry.full_text or ""
+            if re.search(r"(?:^|\n)\s*\*?\s*[\u4e00-\u9fff·]{2,10}\s*[：:]", text) or "任务流程" in text or "任务剧情" in text:
+                kind = "quest"
+        entry.entry_kind = kind
+        if kind in stats:
+            stats[kind] += 1
+        else:
+            stats["empty"] += 1
+    return stats
+
+
 def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
     """把 B 站 wiki 语料合并进图。
 
@@ -1444,12 +1626,16 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
             graph.add(entry)
 
     bwiki_stats = merge_bwiki_entries(graph)
+    cast_stats = apply_cast_to_graph(graph)
+    entry_kind_stats = apply_entry_kind_to_graph(graph)
     graph.meta = {
         "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "entry_count": len(graph.entries),
         "link_count": sum(len(e.links) for e in graph.entries.values()),
         "sources": sources_meta,
         "bwiki": bwiki_stats,
+        "cast": cast_stats,
+        "entry_kind": entry_kind_stats,
         "dirty_links": [],
     }
     return graph
