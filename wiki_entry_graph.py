@@ -116,6 +116,8 @@ class WikiEntry:
     # v5：任务权威出场人物表（T3 结构化落库）
     cast: List[str] = field(default_factory=list)
     cast_source: str = ""
+    # v6：cast 作用域：task / activity
+    cast_scope: str = ""
     # v5：任务类型标记（T4）：quest / lore_item / unknown
     entry_kind: str = ""
 
@@ -164,6 +166,7 @@ class WikiEntry:
             "source": self.source,
             "cast": self.cast or None,
             "cast_source": self.cast_source or None,
+            "cast_scope": self.cast_scope or None,
             "entry_kind": self.entry_kind or None,
         }
 
@@ -195,6 +198,7 @@ class WikiEntry:
             source=str(data.get("source", "mihoyo") or "mihoyo"),
             cast=list(data.get("cast") or []),
             cast_source=str(data.get("cast_source") or ""),
+            cast_scope=str(data.get("cast_scope") or ""),
             entry_kind=str(data.get("entry_kind") or ""),
         )
 
@@ -1330,6 +1334,9 @@ def _clean_cast_parts(raw, whole_invalid: bool = True) -> List[str]:
             continue
         if "=" in name or "版本" in name or "任务" in name:
             continue
+        # 活动主页字段污染：开启时间、开启条件、玩法说明、轶事之一等不是角色名。
+        if any(token in name for token in ("时间", "条件", "开启", "结束", "奖励", "说明", "玩法", "关卡", "轶事", "活动", "地区", "攻略", "商店", "兑换", "词条", "导航", "列表")):
+            continue
         if name not in seen:
             seen.add(name)
             names.append(name)
@@ -1380,20 +1387,29 @@ def _load_cast_records() -> Dict[str, tuple]:
 
 
 def apply_cast_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
-    """给图中 entry_type == "task" 的条目写入 cast / cast_source。"""
+    """给图中 entry_type 为 task / activity 的条目写入 cast / cast_source。
+
+    - task：逐任务 cast；
+    - activity：活动主页的 event-level cast（cast_scope=activity）。
+    """
     records = _load_cast_records()
     stats = {
         "task_total": 0,
+        "activity_total": 0,
         "with_cast": 0,
+        "activity_with_cast": 0,
         "metadata": 0,
         "infobox_text": 0,
         "speaker_lines": 0,
         "empty": 0,
     }
     for entry in graph.entries.values():
-        if entry.entry_type != "task":
+        if entry.entry_type not in ("task", "activity"):
             continue
-        stats["task_total"] += 1
+        if entry.entry_type == "task":
+            stats["task_total"] += 1
+        else:
+            stats["activity_total"] += 1
         pair = records.get(entry.title) or records.get(_norm_meta_key(entry.title))
         if not pair:
             for alias in entry.aliases:
@@ -1412,8 +1428,11 @@ def apply_cast_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
             source = "infobox_text" if cast else ""
         entry.cast = cast
         entry.cast_source = source
+        entry.cast_scope = entry.entry_type
         if cast:
             stats["with_cast"] += 1
+            if entry.entry_type == "activity":
+                stats["activity_with_cast"] += 1
             if source in stats:
                 stats[source] += 1
         else:
@@ -1591,6 +1610,75 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
     return stats
 
 
+def _merge_aliases(dst: WikiEntry, src: WikiEntry) -> None:
+    for alias in [src.title] + list(src.aliases or []):
+        alias = str(alias or "").strip()
+        if alias and alias not in dst.aliases:
+            dst.aliases.append(alias)
+
+
+def dedupe_graph_by_title(graph: WikiEntryGraph) -> Dict[str, int]:
+    """保守去重：同标题优先保留 B 站/有 cast/正文更长的节点。
+
+    - task vs adventure_guild：以 task（B站）为准，合并 adventure_guild 的更长正文；
+    - activity 重复：保留有 cast/正文更长的活动页；
+    - task 重复：只合并明显桩条目（正文极短且另一条有正文）。
+    正文都足够长且不同的同名 task 视为不同剧情，不强行合并。
+    """
+    stats = {"guild_merged": 0, "activity_merged": 0, "task_stub_merged": 0}
+    groups: Dict[str, List[WikiEntry]] = {}
+    for entry in graph.entries.values():
+        groups.setdefault(_norm_meta_key(entry.title), []).append(entry)
+    removed: set = set()
+    for entries in groups.values():
+        if len(entries) < 2:
+            continue
+        tasks = [e for e in entries if e.entry_type == "task" and e.entry_id not in removed]
+        guilds = [e for e in entries if e.entry_type == "adventure_guild" and e.entry_id not in removed]
+        acts = [e for e in entries if e.entry_type == "activity" and e.entry_id not in removed]
+
+        # 1) adventure_guild 与 task 同标题：task（B站）优先，保留更长正文。
+        if tasks and guilds:
+            canonical = max(tasks, key=lambda e: (e.source == "bwiki", bool(e.cast), len(e.story_text or "")))
+            for guild in guilds:
+                if len(guild.story_text or "") > len(canonical.story_text or ""):
+                    canonical.story_text = guild.story_text
+                    canonical.full_text = guild.full_text
+                _merge_aliases(canonical, guild)
+                removed.add(guild.entry_id)
+                stats["guild_merged"] += 1
+
+        # 2) activity 同标题重复：保留有 cast/正文更长的，合并其余短桩。
+        if len(acts) > 1:
+            canonical = max(acts, key=lambda e: (bool(e.cast), len(e.story_text or "")))
+            for act in acts:
+                if act.entry_id == canonical.entry_id:
+                    continue
+                if len(act.story_text or "") < 200 or (not act.cast and canonical.cast and len(act.story_text or "") < 500):
+                    _merge_aliases(canonical, act)
+                    removed.add(act.entry_id)
+                    stats["activity_merged"] += 1
+
+        # 3) task 同标题：只合并明显桩条目。
+        if len(tasks) > 1:
+            canonical = max(tasks, key=lambda e: (e.source == "bwiki", bool(e.cast), len(e.story_text or "")))
+            for task in tasks:
+                if task.entry_id == canonical.entry_id:
+                    continue
+                if len(task.story_text or "") < 50 or (not task.cast and canonical.cast and len(task.story_text or "") < 200):
+                    _merge_aliases(canonical, task)
+                    removed.add(task.entry_id)
+                    stats["task_stub_merged"] += 1
+
+    for eid in removed:
+        graph.entries.pop(eid, None)
+    if removed:
+        for entry in graph.entries.values():
+            if entry.links:
+                entry.links = [link for link in entry.links if link.target_id not in removed]
+    return stats
+
+
 def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
     """全量图构建：读取 content_data/wiki_raw/channel_*.json 全部频道词条。
 
@@ -1648,6 +1736,7 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
             graph.add(entry)
 
     bwiki_stats = merge_bwiki_entries(graph)
+    dedupe_stats = dedupe_graph_by_title(graph)
     cast_stats = apply_cast_to_graph(graph)
     entry_kind_stats = apply_entry_kind_to_graph(graph)
     graph.meta = {
@@ -1656,6 +1745,7 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
         "link_count": sum(len(e.links) for e in graph.entries.values()),
         "sources": sources_meta,
         "bwiki": bwiki_stats,
+        "dedupe": dedupe_stats,
         "cast": cast_stats,
         "entry_kind": entry_kind_stats,
         "dirty_links": [],
