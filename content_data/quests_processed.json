@@ -2200,8 +2200,13 @@
     ],
     "category": "世界任务",
     "source_file": "quests_世界任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "阿幸",
+      "虎之助",
+      "泽维尔",
+      "愚人众先遣队"
+    ],
+    "cast_source": "speaker_lines"
   },
   "宵暗御所黑染": {
     "title": "宵暗御所黑染",

@@ -38,12 +38,12 @@ _BAD_SUBSTRINGS = (
     "书柜", "本子", "牌子", "屏幕", "终端", "机关", "机械", "系统",
     "童谣", "歌谣", "文章", "小说", "剧本", "广告", "纸条", "便签",
     "手册", "档案", "资料", "导游", "增益", "效果", "属性", "状态", "机制",
-    "MediaWiki",
+    "MediaWiki", "神像", "雕像", "过场动画", "动画", "CG", "幻影", "残影",
+    "影子", "回响",
 )
 _PROTAGONISTS = {"旅行者", "派蒙", "空", "荧", "哥哥", "妹妹"}
 _SPECIAL_ARCHON_NO_CAST = {"鸟瞰风物", "异常的权柄", "不期而遇", "被夺之泪"}
 _SPECIAL_ARCHON_SPEAKER = {"我们不会孤军奋战"}
-_TARGET_CATEGORIES = {"传说任务", "活动剧情"}
 
 
 def is_valid_cast(raw) -> bool:
@@ -57,6 +57,7 @@ def is_extra(title: str, category: str) -> bool:
 
 def clean_speaker(name: str) -> str:
     name = str(name or "").strip().lstrip("*").strip()
+    name = re.sub(r"[（(](?:心声|画外音|内心独白|内心)[）)]$", "", name).strip()
     name = name.strip("、,，;；/ ")
     return name
 
@@ -124,9 +125,8 @@ def main():
             title = str(item.get("title") or "")
             is_special_no_cast = title in _SPECIAL_ARCHON_NO_CAST
             is_special_speaker = title in _SPECIAL_ARCHON_SPEAKER
-            target = is_special_no_cast or is_special_speaker or category in _TARGET_CATEGORIES or is_extra(title, category)
-            if not target:
-                continue
+            # 所有缺 cast 的剧情条目都走说话人提取；
+            # 已有官方 cast 的条目在上面已跳过，不会被覆盖。
 
             if is_special_no_cast:
                 metadata.pop("出场人物", None)
