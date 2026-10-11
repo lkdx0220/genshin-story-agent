@@ -149,8 +149,13 @@
     ],
     "category": "传说任务",
     "source_file": "quests_传说任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "娜维娅",
+      "莱斯利",
+      "弗洛朗",
+      "科尔特"
+    ],
+    "cast_source": "speaker_lines"
   },
   "「奔霄颂玉轮」": {
     "title": "「奔霄颂玉轮」",
@@ -595,8 +600,21 @@
     ],
     "category": "传说任务",
     "source_file": "quests_传说任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "希格雯",
+      "「加斯东」",
+      "莱欧斯利",
+      "朗贝萨",
+      "莫嘉娜",
+      "「波顿」",
+      "「昂利」",
+      "希娅",
+      "博格诺",
+      "安蒂布",
+      "奥德丽",
+      "贝尔特朗"
+    ],
+    "cast_source": "speaker_lines"
   },
   "美梦帕伊提提": {
     "title": "美梦帕伊提提",
@@ -993,8 +1011,21 @@
     ],
     "category": "传说任务",
     "source_file": "quests_传说任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "希格雯",
+      "卡嘉妮",
+      "拉瓦特",
+      "伊丝翠",
+      "奥利亚克",
+      "埃里克",
+      "莱欧斯利",
+      "奥迪伦",
+      "波顿",
+      "吕克",
+      "韦尔赛",
+      "库尔布瓦"
+    ],
+    "cast_source": "speaker_lines"
   },
   "超越时空之空想": {
     "title": "超越时空之空想",
@@ -2203,8 +2234,23 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "平山",
+      "小野寺",
+      "村田",
+      "枫原万叶",
+      "神里绫华",
+      "温迪",
+      "阿贝多",
+      "九条裟罗",
+      "浅川",
+      "行秋",
+      "枫原义庆",
+      "神里绫人",
+      "八重神子",
+      "聪美"
+    ],
+    "cast_source": "speaker_lines"
   },
   "特别行动": {
     "title": "特别行动",
@@ -4225,8 +4271,22 @@
     ],
     "category": "传说任务",
     "source_file": "quests_传说任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "林尼",
+      "洛伦佐",
+      "埃德蒙多",
+      "「没疤脸」帕奇诺",
+      "「粉刷匠」德尼禄",
+      "嘉玛",
+      "琳妮特",
+      "愿望清单",
+      "博纳",
+      "劳莉",
+      "巴尔塔萨",
+      "格拉西亚",
+      "多洛拉"
+    ],
+    "cast_source": "speaker_lines"
   },
   "众生的渴求": {
     "title": "众生的渴求",
@@ -5547,8 +5607,20 @@
     ],
     "category": "传说任务",
     "source_file": "quests_传说任务.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "「仆人」",
+      "沙普洛",
+      "福尔茨",
+      "林尼",
+      "克雷薇",
+      "菲约尔",
+      "南特伊",
+      "琳妮特",
+      "菲米尼",
+      "埃卢瓦尔",
+      "「仆人"
+    ],
+    "cast_source": "speaker_lines"
   },
   "你所不在的时空": {
     "title": "你所不在的时空",
@@ -11478,8 +11550,21 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "font-family",
+      "font-size",
+      "color",
+      "text-align",
+      "background",
+      "border-left",
+      "float",
+      "border",
+      "display",
+      "height",
+      "padding",
+      "min-width"
+    ],
+    "cast_source": "speaker_lines"
   },
   "合成台疑案": {
     "title": "合成台疑案",
@@ -12827,8 +12912,21 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "font-family",
+      "font-size",
+      "color",
+      "text-align",
+      "background",
+      "border-left",
+      "float",
+      "border",
+      "display",
+      "height",
+      "padding",
+      "min-width"
+    ],
+    "cast_source": "speaker_lines"
   },
   "命运的回声": {
     "title": "命运的回声",
@@ -13177,8 +13275,10 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "则将进入"
+    ],
+    "cast_source": "speaker_lines"
   },
   "月亮回家的夜晚": {
     "title": "月亮回家的夜晚",
@@ -14044,8 +14144,11 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "方妮雅",
+      "艾玛托"
+    ],
+    "cast_source": "speaker_lines"
   },
   "「茸茸城堡大喵险」 - 额外对话/彩蛋": {
     "title": "「茸茸城堡大喵险」 - 额外对话/彩蛋",
@@ -14078,8 +14181,18 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "莫娜",
+      "「雪糕」",
+      "安柏",
+      "「兔叽」",
+      "雷泽",
+      "「团团灰」",
+      "菲谢尔",
+      "「阿呆」",
+      "奥兹"
+    ],
+    "cast_source": "speaker_lines"
   },
   "被镌刻的时光": {
     "title": "被镌刻的时光",
@@ -14348,8 +14461,46 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "内嘉",
+      "妮露",
+      "流浪者",
+      "莱依拉",
+      "赛诺",
+      "赛索斯",
+      "纳西妲",
+      "坎蒂丝",
+      "兰萨提",
+      "兰齐塔",
+      "娜比雅",
+      "艾维娜",
+      "莲塔",
+      "侯赛因",
+      "法莉哈",
+      "鲁克沙",
+      "莉拉",
+      "塔米娜",
+      "库什基",
+      "阿什克",
+      "尼卡",
+      "扎伊",
+      "多加",
+      "娜斯米儿",
+      "法里芭",
+      "费罗兹",
+      "雷萨",
+      "阿拉比",
+      "沙普尔",
+      "巴巴尔",
+      "艾登",
+      "卡里玛",
+      "西格",
+      "兰卡亚",
+      "兰维达",
+      "斯露莎",
+      "兰萨卡"
+    ],
+    "cast_source": "speaker_lines"
   },
   "「磬弦奏华夜」 - 额外对话/彩蛋": {
     "title": "「磬弦奏华夜」 - 额外对话/彩蛋",
@@ -14391,8 +14542,58 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "辛焱",
+      "云堇",
+      "白术",
+      "七七",
+      "瑶瑶",
+      "烟绯",
+      "萍姥姥",
+      "德沃沙克",
+      "温迪",
+      "枫原万叶",
+      "胡桃",
+      "行秋",
+      "香菱",
+      "重云",
+      "北斗",
+      "凝光",
+      "钟离",
+      "锅巴",
+      "魈",
+      "宏宇",
+      "快刀陈",
+      "莺儿",
+      "慕胜",
+      "李锤子",
+      "畅畅",
+      "琳琅",
+      "大坤",
+      "小安",
+      "思思",
+      "小昭",
+      "慧心",
+      "田铁嘴",
+      "一然",
+      "阿宽",
+      "永安",
+      "霖铃",
+      "甜甜",
+      "诏勤",
+      "绘星",
+      "完成纸映剧前",
+      "应公",
+      "完成纸映剧后",
+      "和声",
+      "庆兴",
+      "安德烈",
+      "弗拉德",
+      "娜蒂亚",
+      "伊凡诺维奇",
+      "嘉义"
+    ],
+    "cast_source": "speaker_lines"
   },
   "「风花的呼吸」 - 额外对话/彩蛋": {
     "title": "「风花的呼吸」 - 额外对话/彩蛋",
@@ -14446,8 +14647,53 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "米卡",
+      "赛诺",
+      "阿贝多",
+      "提纳里",
+      "柯莱",
+      "优菈",
+      "安柏",
+      "迪希雅",
+      "塞塔蕾",
+      "坎蒂丝",
+      "丽莎",
+      "温迪",
+      "砂糖",
+      "莫娜",
+      "可莉",
+      "劳伦斯",
+      "贝雅特丽奇",
+      "昆恩",
+      "芙萝拉",
+      "唐娜",
+      "舒茨",
+      "宁禄",
+      "巴顿",
+      "六指乔瑟",
+      "霍夫曼",
+      "玛格丽特",
+      "优律",
+      "葛罗丽",
+      "塞琉斯",
+      "艾伯特",
+      "玛拉",
+      "玛文",
+      "古德温",
+      "杜兰",
+      "艾伦",
+      "梅薇丝",
+      "布洛克",
+      "玛乔丽",
+      "萨义德",
+      "卜劳恩",
+      "莉兹",
+      "法斯宾",
+      "莺儿",
+      "蒂玛乌斯"
+    ],
+    "cast_source": "speaker_lines"
   },
   "「有香自西来·寻味北地」 - 额外对话/彩蛋": {
     "title": "「有香自西来·寻味北地」 - 额外对话/彩蛋",
@@ -14514,7 +14760,20 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": null,
-    "cast_source": null
+    "cast": [
+      "font-family",
+      "font-size",
+      "color",
+      "text-align",
+      "background",
+      "border-left",
+      "float",
+      "border",
+      "display",
+      "height",
+      "padding",
+      "min-width"
+    ],
+    "cast_source": "speaker_lines"
   }
 }

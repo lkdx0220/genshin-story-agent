@@ -1361,7 +1361,7 @@ def _load_cast_records() -> Dict[str, tuple]:
             raw = metadata.get("出场人物")
             cast = _clean_cast_parts(raw)
             if cast:
-                source = "metadata"
+                source = str(metadata.get("cast_source") or "metadata").strip() or "metadata"
             else:
                 cast = _cast_from_infobox_text(item.get("text") or "")
                 source = "infobox_text" if cast else ""
@@ -1380,6 +1380,7 @@ def apply_cast_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
         "with_cast": 0,
         "metadata": 0,
         "infobox_text": 0,
+        "speaker_lines": 0,
         "empty": 0,
     }
     for entry in graph.entries.values():
