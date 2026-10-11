@@ -1704,7 +1704,7 @@ def dedupe_graph_by_title(graph: WikiEntryGraph) -> Dict[str, int]:
     - task 重复：只合并明显桩条目（正文极短且另一条有正文）。
     正文都足够长且不同的同名 task 视为不同剧情，不强行合并。
     """
-    stats = {"guild_merged": 0, "activity_merged": 0, "task_stub_merged": 0}
+    stats = {"guild_merged": 0, "activity_merged": 0, "task_stub_merged": 0, "mihoyo_task_merged": 0}
     groups: Dict[str, List[WikiEntry]] = {}
     for entry in graph.entries.values():
         groups.setdefault(_norm_meta_key(entry.title), []).append(entry)
@@ -1738,16 +1738,26 @@ def dedupe_graph_by_title(graph: WikiEntryGraph) -> Dict[str, int]:
                     removed.add(act.entry_id)
                     stats["activity_merged"] += 1
 
-        # 3) task 同标题：只合并明显桩条目。
+        # 3) task 同标题：B 站条目优先；同标题的米游社 task 直接并入 B 站 task。
         if len(tasks) > 1:
-            canonical = max(tasks, key=lambda e: (e.source == "bwiki", bool(e.cast), len(e.story_text or "")))
-            for task in tasks:
-                if task.entry_id == canonical.entry_id:
-                    continue
-                if len(task.story_text or "") < 50 or (not task.cast and canonical.cast and len(task.story_text or "") < 200):
+            bwiki_tasks = [e for e in tasks if e.source == "bwiki"]
+            other_tasks = [e for e in tasks if e.source != "bwiki"]
+            if bwiki_tasks and other_tasks:
+                canonical = max(bwiki_tasks, key=lambda e: (bool(e.cast), len(e.story_text or "")))
+                for task in other_tasks:
                     _merge_aliases(canonical, task)
                     removed.add(task.entry_id)
-                    stats["task_stub_merged"] += 1
+                    stats["mihoyo_task_merged"] += 1
+                tasks = bwiki_tasks
+            if len(tasks) > 1:
+                canonical = max(tasks, key=lambda e: (e.source == "bwiki", bool(e.cast), len(e.story_text or "")))
+                for task in tasks:
+                    if task.entry_id == canonical.entry_id:
+                        continue
+                    if len(task.story_text or "") < 50 or (not task.cast and canonical.cast and len(task.story_text or "") < 200):
+                        _merge_aliases(canonical, task)
+                        removed.add(task.entry_id)
+                        stats["task_stub_merged"] += 1
 
     for eid in removed:
         graph.entries.pop(eid, None)
