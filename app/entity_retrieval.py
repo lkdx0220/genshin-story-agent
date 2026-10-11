@@ -277,6 +277,9 @@ def _entity_tasks(name: str) -> Tuple[str, Dict[str, dict]]:
             # T4：活动内读物/彩蛋等非剧情条目不进入实体检索候选集。
             if entry.get("entry_kind") == "lore_item":
                 continue
+            # P2：极短/占位条目没有可用剧情证据，跳过。
+            if entry.get("story_placeholder"):
+                continue
             slot = tasks.setdefault(sid, {"count": 0, "variants": set()})
             slot["count"] += int(m.get("count") or 0)
             slot["variants"].add(str((mention["entities"][eid] or {}).get("name") or ""))

@@ -120,6 +120,8 @@ class WikiEntry:
     cast_scope: str = ""
     # v5：任务类型标记（T4）：quest / lore_item / unknown
     entry_kind: str = ""
+    # v6：极短占位条目，实体检索应跳过
+    story_placeholder: bool = False
 
     def __post_init__(self):
         """观测枢 OCR 误字修正。
@@ -168,6 +170,7 @@ class WikiEntry:
             "cast_source": self.cast_source or None,
             "cast_scope": self.cast_scope or None,
             "entry_kind": self.entry_kind or None,
+            "story_placeholder": True if self.story_placeholder else None,
         }
 
     @classmethod
@@ -200,6 +203,7 @@ class WikiEntry:
             cast_source=str(data.get("cast_source") or ""),
             cast_scope=str(data.get("cast_scope") or ""),
             entry_kind=str(data.get("entry_kind") or ""),
+            story_placeholder=bool(data.get("story_placeholder") or False),
         )
 
 
@@ -1495,6 +1499,81 @@ def apply_entry_kind_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
     return stats
 
 
+def _load_story_placeholder_titles() -> set:
+    """本地标记的极短/占位条目（metadata.story_placeholder=True）。"""
+    titles = set()
+    content_dir = BASE_DIR / "content_data"
+    for path in sorted(content_dir.glob("quests_*.json")):
+        if "processed" in path.name or ".bak" in path.name or "before" in path.name:
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        items = data if isinstance(data, list) else list(data.values())
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            metadata = item.get("metadata") or {}
+            if not (metadata.get("story_placeholder") or item.get("story_placeholder")):
+                continue
+            title = str(item.get("title") or metadata.get("任务名称") or "").strip()
+            if title:
+                titles.add(title)
+                titles.add(_norm_meta_key(title))
+    return titles
+
+
+def apply_story_placeholder_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
+    """把本地 story_placeholder 标记同步到图（task / activity）。"""
+    titles = _load_story_placeholder_titles()
+    stats = {"matched": 0, "total": len(titles)}
+    for entry in graph.entries.values():
+        if entry.entry_type not in ("task", "activity"):
+            continue
+        matched = entry.title in titles or _norm_meta_key(entry.title) in titles
+        if not matched:
+            for alias in entry.aliases:
+                alias = str(alias or "").strip()
+                if alias and (alias in titles or _norm_meta_key(alias) in titles):
+                    matched = True
+                    break
+        entry.story_placeholder = bool(matched)
+        if matched:
+            stats["matched"] += 1
+    return stats
+
+
+def apply_entry_kind_coverage(graph: WikiEntryGraph) -> Dict[str, int]:
+    """给仍为空的 task / activity 条目补 entry_kind。
+
+    - 有 cast 或说话人行：quest；
+    - activity 无剧情证据：lore_item（活动说明/读物）；
+    - 其他 task：unknown（保留检索，避免误杀）。
+    """
+    stats = {"quest": 0, "lore_item": 0, "unknown": 0}
+    speaker_re = re.compile(r"(?:^|\n)\s*\*?\s*[\u4e00-\u9fff·]{2,10}\s*[：:]")
+    for entry in graph.entries.values():
+        if entry.entry_type not in ("task", "activity"):
+            continue
+        if entry.entry_kind:
+            continue
+        text = entry.story_text or entry.full_text or ""
+        if entry.story_placeholder:
+            entry.entry_kind = "unknown"
+            stats["unknown"] += 1
+        elif entry.cast or speaker_re.search(text):
+            entry.entry_kind = "quest"
+            stats["quest"] += 1
+        elif entry.entry_type == "activity":
+            entry.entry_kind = "lore_item"
+            stats["lore_item"] += 1
+        else:
+            entry.entry_kind = "unknown"
+            stats["unknown"] += 1
+    return stats
+
+
 def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
     """把 B 站 wiki 语料合并进图。
 
@@ -1739,6 +1818,8 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
     dedupe_stats = dedupe_graph_by_title(graph)
     cast_stats = apply_cast_to_graph(graph)
     entry_kind_stats = apply_entry_kind_to_graph(graph)
+    placeholder_stats = apply_story_placeholder_to_graph(graph)
+    entry_kind_coverage = apply_entry_kind_coverage(graph)
     graph.meta = {
         "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "entry_count": len(graph.entries),
@@ -1748,6 +1829,8 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
         "dedupe": dedupe_stats,
         "cast": cast_stats,
         "entry_kind": entry_kind_stats,
+        "entry_kind_coverage": entry_kind_coverage,
+        "story_placeholder": placeholder_stats,
         "dirty_links": [],
     }
     return graph
