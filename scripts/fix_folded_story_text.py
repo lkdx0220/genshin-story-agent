@@ -94,15 +94,18 @@ def extract_story_from_html(html: str) -> str:
 
 
 def fetch_page_html(pageid, title: str):
-    params = {"action": "parse", "prop": "text", "format": "json", "origin": "*"}
-    if pageid:
-        params["pageid"] = str(pageid)
-    else:
-        params["page"] = title
-    data = curl_json(BWIKI_API, params, headers=BWIKI_HEADERS)
-    if not data:
-        return None
-    return (data.get("parse", {}).get("text") or {}).get("*", "")
+    """优先 pageid；pageid 失效或返回空时退回标题查询。"""
+    for params in (
+        {"action": "parse", "prop": "text", "format": "json", "origin": "*", "pageid": str(pageid)} if pageid else None,
+        {"action": "parse", "prop": "text", "format": "json", "origin": "*", "page": title},
+    ):
+        if not params:
+            continue
+        data = curl_json(BWIKI_API, params, headers=BWIKI_HEADERS)
+        html = (data.get("parse", {}).get("text") or {}).get("*", "") if data else ""
+        if html:
+            return html
+    return ""
 
 
 def speaker_stats(text: str):
@@ -136,7 +139,7 @@ def main():
             title = str(item.get("title") or "")
             if args.title and title != args.title:
                 continue
-            if looks_broken(item.get("text") or ""):
+            if args.title == title or looks_broken(item.get("text") or ""):
                 targets.append((path, item))
     if args.limit > 0:
         targets = targets[:args.limit]
