@@ -1025,6 +1025,12 @@ MANUAL_ENTRY_ALIASES = {
     "叮铃哐啷大作战": ["「叮铃哐啷大作战」"],
     "清夏！乐园？大秘境！": ["「清夏！乐园？大秘境！」"],
 }
+# 米游社同标题多段、B站用（第一天/第二天…）区分的，按 entry_id 补别名。
+MANUAL_ENTRY_ID_ALIASES = {
+    "506061": ["隐行谛勘，秽金之罪（第一天）"],
+    "506065": ["隐行谛勘，秽金之罪（第二天）"],
+    "506063": ["隐行谛勘，秽金之罪（第三天）"],
+}
 _ACT_NAME_RE = re.compile(r"第[一二三四五六七八九十0-9]+(?:幕|回|章)|尾声|序奏|序章|间章|幕间")
 
 
@@ -1683,6 +1689,14 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
     # 手工别名补齐（占位条目已从 content_data 移除，但旧标题仍需可检索）。
     for entry in graph.entries.values():
         for alias in MANUAL_ENTRY_ALIASES.get(entry.title, []):
+            alias = str(alias or "").strip()
+            if alias and alias not in entry.aliases:
+                entry.aliases.append(alias)
+    for entry_id, aliases in MANUAL_ENTRY_ID_ALIASES.items():
+        entry = graph.get(entry_id)
+        if not entry:
+            continue
+        for alias in aliases:
             alias = str(alias or "").strip()
             if alias and alias not in entry.aliases:
                 entry.aliases.append(alias)
