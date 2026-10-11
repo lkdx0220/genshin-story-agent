@@ -1011,6 +1011,12 @@ _BWIKI_ALLOWED_TYPES = (
     "限时任务",
 )
 _BWIKI_EXCLUDE_TITLE_KEYWORDS = ("额外对话/彩蛋", "教程", "活动说明", "NPC对话")
+# 手工别名：本地重复/占位条目合并到主条目后，仍需保留旧标题可检索。
+MANUAL_ENTRY_ALIASES = {
+    "恒动械画·七圣之篇": ["恒动械画（页面不存在）"],
+    "叮铃哐啷大作战": ["「叮铃哐啷大作战」"],
+    "清夏！乐园？大秘境！": ["「清夏！乐园？大秘境！」"],
+}
 _ACT_NAME_RE = re.compile(r"第[一二三四五六七八九十0-9]+(?:幕|回|章)|尾声|序奏|序章|间章|幕间")
 
 
@@ -1136,6 +1142,7 @@ def _bwiki_row_from_item(item: Dict[str, Any], filename: str, processed_text: Di
         "text": text,
         "meta_text": _bwiki_meta_header(md),
         "file": filename,
+        "aliases": [str(x).strip() for x in (item.get("aliases") or []) if str(x).strip()],
     }
 
 
@@ -1531,6 +1538,10 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
                         alias = str(alias or "").strip()
                         if alias and alias not in entry.aliases:
                             entry.aliases.append(alias)
+                    for alias in row.get("aliases") or []:
+                        alias = str(alias or "").strip()
+                        if alias and alias not in entry.aliases:
+                            entry.aliases.append(alias)
                     absorbed_ids.add(entry.entry_id)
                     stats["merged"] += 1
                     continue
@@ -1541,6 +1552,10 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
             continue
         aliases = []
         for alias in (row["title"], task, f"{chapter} {act} {task}", f"{chapter} {task}", chapter, act):
+            alias = str(alias or "").strip()
+            if alias and alias not in aliases:
+                aliases.append(alias)
+        for alias in row.get("aliases") or []:
             alias = str(alias or "").strip()
             if alias and alias not in aliases:
                 aliases.append(alias)
@@ -1567,6 +1582,12 @@ def merge_bwiki_entries(graph: WikiEntryGraph) -> Dict[str, int]:
             )
         )
         stats["created"] += 1
+    # 手工别名补齐（占位条目已从 content_data 移除，但旧标题仍需可检索）。
+    for entry in graph.entries.values():
+        for alias in MANUAL_ENTRY_ALIASES.get(entry.title, []):
+            alias = str(alias or "").strip()
+            if alias and alias not in entry.aliases:
+                entry.aliases.append(alias)
     return stats
 
 
