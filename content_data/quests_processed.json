@@ -11566,8 +11566,7 @@
       "border",
       "display",
       "height",
-      "padding",
-      "min-width"
+      "padding"
     ],
     "cast_source": "speaker_lines"
   },
@@ -12928,8 +12927,7 @@
       "border",
       "display",
       "height",
-      "padding",
-      "min-width"
+      "padding"
     ],
     "cast_source": "speaker_lines"
   },
@@ -14776,8 +14774,7 @@
       "border",
       "display",
       "height",
-      "padding",
-      "min-width"
+      "padding"
     ],
     "cast_source": "speaker_lines"
   }

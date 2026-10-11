@@ -39,7 +39,8 @@ _BAD_SUBSTRINGS = (
     "童谣", "歌谣", "文章", "小说", "剧本", "广告", "纸条", "便签",
     "手册", "档案", "资料", "导游", "增益", "效果", "属性", "状态", "机制",
     "MediaWiki", "神像", "雕像", "过场动画", "动画", "CG", "幻影", "残影",
-    "影子", "回响",
+    "影子", "回响", "司法统计", "失物招领", "市民通告", "订阅", "公告板",
+    "统计", "通告", "招领", "须知", "规则", "说明", "菜单", "读心", "摆设",
 )
 _PROTAGONISTS = {"旅行者", "派蒙", "空", "荧", "哥哥", "妹妹"}
 _SPECIAL_ARCHON_NO_CAST = {"鸟瞰风物", "异常的权柄", "不期而遇", "被夺之泪"}
@@ -57,7 +58,7 @@ def is_extra(title: str, category: str) -> bool:
 
 def clean_speaker(name: str) -> str:
     name = str(name or "").strip().lstrip("*").strip()
-    name = re.sub(r"[（(](?:心声|画外音|内心独白|内心)[）)]$", "", name).strip()
+    name = re.sub(r"[（(](?:心声|画外音|内心独白|内心|气泡文字)[）)]$", "", name).strip()
     name = name.strip("、,，;；/ ")
     return name
 
@@ -69,6 +70,9 @@ def is_valid_speaker(name: str) -> bool:
         return False
     quoted = name.startswith(("「", "『", "【")) and name.endswith(("」", "』", "】"))
     if not quoted:
+        low = name.lower()
+        if any(token in low for token in ("file", "width", "div", "span", "null", "none")):
+            return False
         for bad in _BAD_SUBSTRINGS:
             if bad in name:
                 return False
