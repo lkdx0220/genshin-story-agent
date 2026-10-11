@@ -81,6 +81,9 @@ def is_valid_speaker(name: str) -> bool:
         return False
     if not re.search(r"[\u4e00-\u9fffA-Za-z]", name):
         return False
+    # 纯英文/数字/连字符（CSS 属性、HTML 属性、样式残留）不当作说话人
+    if re.fullmatch(r"[A-Za-z0-9_\-]+", name):
+        return False
     return True
 
 

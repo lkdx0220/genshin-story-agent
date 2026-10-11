@@ -11557,19 +11557,9 @@
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
     "cast": [
-      "font-family",
-      "font-size",
-      "color",
-      "text-align",
-      "background",
-      "border-left",
-      "float",
-      "border",
-      "display",
-      "height",
-      "padding"
+      "娜扎法琳"
     ],
-    "cast_source": "speaker_lines"
+    "cast_source": "metadata"
   },
   "合成台疑案": {
     "title": "合成台疑案",
@@ -12918,19 +12908,9 @@
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
     "cast": [
-      "font-family",
-      "font-size",
-      "color",
-      "text-align",
-      "background",
-      "border-left",
-      "float",
-      "border",
-      "display",
-      "height",
-      "padding"
+      "娜扎法琳"
     ],
-    "cast_source": "speaker_lines"
+    "cast_source": "metadata"
   },
   "命运的回声": {
     "title": "命运的回声",
