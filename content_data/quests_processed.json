@@ -10124,7 +10124,8 @@
       "北斗",
       "云堇",
       "琳琅",
-      "兹踞"
+      "兹踞",
+      "梅悠余"
     ],
     "cast_source": "metadata"
   },
@@ -14763,19 +14764,7 @@
     ],
     "category": "活动剧情",
     "source_file": "quests_活动剧情.json",
-    "cast": [
-      "font-family",
-      "font-size",
-      "color",
-      "text-align",
-      "background",
-      "border-left",
-      "float",
-      "border",
-      "display",
-      "height",
-      "padding"
-    ],
-    "cast_source": "speaker_lines"
+    "cast": null,
+    "cast_source": null
   }
 }
