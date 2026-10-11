@@ -1099,7 +1099,8 @@
       "act_name": "为了没有眼泪的明天",
       "entry_kind": "quest",
       "cast_absent": true,
-      "cast_source": "protagonist_only"
+      "cast_source": "protagonist_only",
+      "story_placeholder": true
     },
     "text": "[被污染的风龙泪滴甚至吸引了丘丘人，你不得不向丘丘人讨回泪滴。]"
   },

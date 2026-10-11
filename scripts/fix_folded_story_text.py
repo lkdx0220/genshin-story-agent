@@ -33,6 +33,79 @@ def looks_broken(text: str) -> bool:
     return "{{折叠" in text or "|折叠=是}}" in text or text.count("增益效果：") >= 3
 
 
+def _template_end(text: str, start: int) -> int:
+    depth = 0
+    i = start
+    while i < len(text) - 1:
+        if text.startswith("{{", i):
+            depth += 1
+            i += 2
+            continue
+        if text.startswith("}}", i):
+            depth -= 1
+            i += 2
+            if depth == 0:
+                return i
+            continue
+        i += 1
+    return -1
+
+
+def _split_template_params(body: str):
+    params = []
+    depth = 0
+    current = []
+    i = 0
+    while i < len(body):
+        if body.startswith("{{", i):
+            depth += 1
+            current.append("{{")
+            i += 2
+            continue
+        if body.startswith("}}", i):
+            depth -= 1
+            current.append("}}")
+            i += 2
+            continue
+        ch = body[i]
+        if ch == "|" and depth == 0:
+            params.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+        i += 1
+    params.append("".join(current))
+    return params
+
+
+def expand_local_folds(text: str) -> str:
+    """本地兜底：递归提取 {{折叠|...|内容=...}} 的 内容=，清理折叠模板残留。"""
+    out = []
+    i = 0
+    while i < len(text):
+        idx = text.find("{{折叠", i)
+        if idx < 0:
+            out.append(text[i:])
+            break
+        out.append(text[i:idx])
+        end = _template_end(text, idx)
+        if end < 0:
+            out.append(text[idx:])
+            break
+        body = text[idx + 2:end - 2]
+        content = ""
+        for param in _split_template_params(body):
+            param = param.strip()
+            if param.startswith("内容="):
+                content = param[len("内容="):]
+                break
+        out.append(expand_local_folds(content))
+        i = end
+    result = "".join(out)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip()
+
+
 def extract_story_from_html(html: str) -> str:
     soup = BeautifulSoup(html or "", "lxml")
     for tag in soup(["script", "style"]):
@@ -45,26 +118,31 @@ def extract_story_from_html(html: str) -> str:
         for tag in soup.select(selector):
             tag.decompose()
 
-    heading = soup.find(lambda t: t.name == "h2" and "任务剧情" in t.get_text())
-    if heading is None:
+    story_keywords = ("任务剧情", "活动剧情", "剧情对话", "彩蛋对话", "角色对话", "额外对话", "彩蛋", "NPC对话")
+    headings = [
+        h for h in soup.find_all("h2")
+        if any(k in h.get_text() for k in story_keywords)
+    ]
+    if not headings:
         return ""
 
     parts = []
-    for sib in heading.next_siblings:
-        if getattr(sib, "name", None) == "h2":
-            break
-        if getattr(sib, "name", None) == "h3":
-            title = sib.get_text(" ", strip=True)
-            if title:
-                parts.append("===" + title + "===")
-        elif isinstance(sib, Tag):
-            txt = sib.get_text("\n", strip=True)
-            if txt:
-                parts.append(txt)
-        elif isinstance(sib, NavigableString):
-            txt = str(sib).strip()
-            if txt:
-                parts.append(txt)
+    for heading in headings:
+        for sib in heading.next_siblings:
+            if getattr(sib, "name", None) == "h2":
+                break
+            if getattr(sib, "name", None) == "h3":
+                title = sib.get_text(" ", strip=True)
+                if title:
+                    parts.append("===" + title + "===")
+            elif isinstance(sib, Tag):
+                txt = sib.get_text("\n", strip=True)
+                if txt:
+                    parts.append(txt)
+            elif isinstance(sib, NavigableString):
+                txt = str(sib).strip()
+                if txt:
+                    parts.append(txt)
 
     text = "\n".join(parts)
     for marker in ("NewPP limit report", "Saved in parser cache"):
@@ -155,6 +233,11 @@ def main():
         old_text = str(item.get("text") or "")
         old_lines, old_unique, _ = speaker_stats(old_text)
         new_lines, new_unique, new_names = speaker_stats(new_text)
+        if not new_text or len(new_text) < 200 or not new_lines:
+            fallback = expand_local_folds(old_text)
+            fb_lines, fb_unique, fb_names = speaker_stats(fallback)
+            if len(fallback) >= 200 and fb_lines:
+                new_text, new_lines, new_unique, new_names = fallback, fb_lines, fb_unique, fb_names
         if not new_text or len(new_text) < 200 or not new_lines:
             stats["skipped"] += 1
             if len(samples) < 10:
