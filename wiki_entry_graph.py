@@ -1405,7 +1405,7 @@ def _load_cast_records() -> Dict[str, tuple]:
     return records
 
 
-_ACT_TASK_RE = re.compile(r"第[一二三四五六七八九十百0-9]+[回幕章].*?[「『](.+?)[」』]")
+_ACT_TASK_RE = re.compile(r"第[一二三四五六七八九十百0-9]+[回幕章].*?[「『](.+)[」』]\s*$")
 
 
 def _extract_act_task_name(title: str) -> str:
@@ -1450,18 +1450,52 @@ def apply_cast_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
         pair = records.get(entry.title) or records.get(_norm_meta_key(entry.title))
         if not pair and act_task:
             pair = records.get(act_task) or records.get(_norm_meta_key(act_task))
+        if not pair and act_task:
+            # 同一幕在本地可能拆成「·其一 / ·其二」多个记录：合并这些具体分段 cast。
+            norm_act = _norm_meta_key(act_task)
+            matched_pairs = []
+            for key, candidate in records.items():
+                if not candidate:
+                    continue
+                norm_key = _norm_meta_key(key)
+                if key.startswith(act_task) or (norm_act and norm_key.startswith(norm_act)):
+                    if candidate not in matched_pairs:
+                        matched_pairs.append(candidate)
+            if matched_pairs:
+                merged_cast: List[str] = []
+                sources = set()
+                for candidate_cast, candidate_source in matched_pairs:
+                    for name in candidate_cast:
+                        if name not in merged_cast:
+                            merged_cast.append(name)
+                    sources.add(candidate_source)
+                if sources == {"metadata"}:
+                    pair = (merged_cast, "metadata")
+                elif len(sources) == 1:
+                    pair = (merged_cast, sources.pop())
+                else:
+                    pair = (merged_cast, "speaker_lines")
         inherited = False
         if not pair:
             for alias in entry.aliases:
                 alias = str(alias or "").strip()
                 if not alias:
                     continue
+                if act_task and act_task not in alias and _norm_meta_key(act_task) not in _norm_meta_key(alias):
+                    # 单幕条目先跳过父活动标题，优先找本幕具体标题。
+                    continue
                 pair = records.get(alias) or records.get(_norm_meta_key(alias))
                 if pair:
-                    if act_task:
-                        # 单幕条目没有本幕字段时，只能回退到活动整页 cast：
-                        # 必须标 activity_inherited，不能标成 metadata。
-                        inherited = True
+                    break
+        if not pair and act_task:
+            # 本幕字段确实没有时，才回退活动整页 cast，并明确标 activity_inherited。
+            for alias in entry.aliases:
+                alias = str(alias or "").strip()
+                if not alias:
+                    continue
+                pair = records.get(alias) or records.get(_norm_meta_key(alias))
+                if pair:
+                    inherited = True
                     break
         cast: List[str] = []
         source = ""
