@@ -310,6 +310,50 @@ def _type_label(raw_type: str, source_file: str) -> str:
 # ====== 建库主流程 ======
 
 
+# 任务来源文件的固定优先级（2026-10-12 ID 碰撞修复引入）：
+# 常驻内容在前、限时活动在后；同一 (title, chunk_index) 首个来源拿裸 ID（canonical），
+# 后续来源追加 @source_key 后缀。顺序必须是常量——依赖 os.listdir 顺序会让 canonical
+# 归属随文件系统漂移，rekey/重建的 ID 不可复现。
+QUEST_SOURCE_PRIORITY = [
+    "quests_魔神任务.json",
+    "quests_主线.json",
+    "quests_传说任务.json",
+    "quests_世界任务.json",
+    "quests_部族纪闻.json",
+    "quests_伴月纪闻.json",
+    "quests_委托任务.json",
+    "quests_其他任务.json",
+    "quests_隐藏任务.json",
+    "quests_地图事件.json",
+    "quests_彩蛋剧情.json",
+    "quests_游逸旅闻.json",
+    "quests_活动剧情.json",
+]
+
+
+def _quest_source_files() -> List[str]:
+    """确定性来源文件顺序：QUEST_SOURCE_PRIORITY 优先，未知文件名字典序排在已知之后。"""
+    all_files = [
+        name
+        for name in os.listdir(CONTENT_DIR)
+        if name.startswith("quests_") and name.endswith(".json") and name != "quests_processed.json"
+    ]
+    priority = set(QUEST_SOURCE_PRIORITY)
+    known = [name for name in QUEST_SOURCE_PRIORITY if name in all_files]
+    unknown = sorted(name for name in all_files if name not in priority)
+    return known + unknown
+
+
+def quest_source_key(filename: str) -> str:
+    """来源短名：quests_传说任务.json -> 传说任务。用作碰撞后缀 @source_key。"""
+    name = filename
+    if name.startswith("quests_"):
+        name = name[len("quests_"):]
+    if name.endswith(".json"):
+        name = name[: -len(".json")]
+    return name
+
+
 def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
     """索引所有任务到 kb_quests_vec（仅向量语义轨；不再构建已废弃的 BM25 向量集合）。"""
     print("[建库] 索引任务...")
@@ -318,13 +362,36 @@ def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
     ids_vec, docs_vec, metas_vec = [], [], []
     total_vec = 0
 
-    for filename in os.listdir(CONTENT_DIR):
-        if not filename.startswith("quests_") or not filename.endswith(".json"):
-            continue
-        if filename == "quests_processed.json":
-            continue
+    # chunk ID 唯一化（2026-10-12 ID 碰撞修复）：
+    # - 同一 (title, chunk_index) 首个来源（按 QUEST_SOURCE_PRIORITY）保持裸 ID；
+    # - 后续**其他来源**追加 @{source_key}（如 quest:T:chunk:0@活动剧情）；
+    # - 同一来源内再撞（同文件同名任务，或该来源已有后缀）追加 #2/#3，
+    #   兜底格式保持在 retrieval 的 _QUEST_CHUNK_RE 可解析范围内。
+    used_chunk_ids: set = set()
+    canonical_source: Dict[str, str] = {}  # 裸 ID -> 拿到裸 ID 的 source_key
+    suffix_ordinal: Dict[str, int] = {}  # "{base}@{source_key}" -> 已分配最大编号
 
+    def _unique_quest_chunk_id(title: str, chunk_index: int, source_key: str) -> str:
+        base = f"quest:{title}:chunk:{chunk_index}"
+        if base not in used_chunk_ids:
+            used_chunk_ids.add(base)
+            canonical_source[base] = source_key
+            return base
+        key = f"{base}@{source_key}"
+        # 裸 ID 已被同来源占用（同文件同名）：从 #2 起；被其他来源占用：首次拿 @source
+        start = 2 if canonical_source.get(base) == source_key else 1
+        ordinal = max(suffix_ordinal.get(key, 0) + 1, start)
+        candidate = key if ordinal == 1 else f"{key}#{ordinal}"
+        while candidate in used_chunk_ids:  # 防御：理论上不会触发
+            ordinal += 1
+            candidate = f"{key}#{ordinal}"
+        suffix_ordinal[key] = ordinal
+        used_chunk_ids.add(candidate)
+        return candidate
+
+    for filename in _quest_source_files():
         quests = _load_json(filename)
+        source_key = quest_source_key(filename)
         for q in quests:
             title = q.get("title", "")
             if not title:
@@ -356,6 +423,7 @@ def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
             def _base_meta(chunk_idx, total, preview, source_tag):
                 return {
                     "source_file": source_file,
+                    "source_key": source_key,
                     "title": title,
                     "parent": parent,
                     "entry_type": entry_type,
@@ -382,7 +450,7 @@ def index_quests(store: KBVectorStore, parent_map: Dict[str, str]):
             for i, chunk in enumerate(vec_chunks):
                 if not chunk.strip():
                     continue
-                chunk_id = f"quest:{title}:chunk:{i}"
+                chunk_id = _unique_quest_chunk_id(title, i, source_key)
                 ids_vec.append(chunk_id)
                 docs_vec.append(quest_prefix + chunk)
                 metas_vec.append(_base_meta(i, len(vec_chunks), chunk[:200], "quest_vec_chunk"))

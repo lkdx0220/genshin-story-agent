@@ -981,7 +981,9 @@ def _keyword_search_docs(query: str, top_k: int = 15) -> list:
 # 原实现只展示两路排在最前的那一个 chunk，而答案要的关键句常常落在没有挤进 top-k 的兄弟 chunk 里
 # （H3：金标句在「请饮下祝胜之酒」chunk:19、「意识之舟所至之处」chunk:5，两个都没进 top-k）。
 # 任务内按与查询的向量相似度挑代表 chunk 可以把这个损失补回来：这两个任务的代表 chunk 正是金标 chunk。
-_QUEST_CHUNK_RE = re.compile(r"^quest:(.+):chunk:(\d+)$")
+# 末尾可选 @source_key（2026-10-12 ID 碰撞修复：quest:{title}:chunk:{i}@活动剧情，
+# 同文件再撞时为 @活动剧情#2）：group(1) 恒为 title，两来源仍聚合到同一任务 key。
+_QUEST_CHUNK_RE = re.compile(r"^quest:(.+):chunk:(\d+)(?:@(.+))?$")
 _DISPLAY_MAX_CHARS = 1400  # 单条正文展示上限（关键词路与向量路统一）
 _QUEST_SHOW_MAX_PIECES = 2  # 单个任务最多展示几条正文（关键词片段 + 代表 chunk）
 _QUEST_SHOW_MAX_CHARS = 2800  # 单个任务正文展示字数上限
