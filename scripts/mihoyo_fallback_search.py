@@ -49,8 +49,8 @@ def norm_title(s: str) -> str:
 def parse_page(content_id):
     """词条解析（0.2.0 迁移）：取数经 wiki_source；metadata 仍走项目业务解析。
 
-    对话提取显式 order="occurrence"（迁移过渡期口径，见任务书 §四：
-    与项目现状逐行一致；未来切 tree 需按顺序 diff 报告评估）。
+    对话提取永久显式 order="occurrence"（2026-10-12 全量 orphan 审计裁决：
+    tree 会系统性丢失编辑侧未挂树的内容；tree 仅作 wiki_source 显式 opt-in）。
     """
     entry_env = get_client().entry(content_id)
     if not entry_env["found"]:
