@@ -501,3 +501,93 @@ def task_cast(task_title: str) -> EntityDocsResult:
                                   cast_size=len(cast)))
     result = EntityDocsResult("cast_of_task", display, rows, len(rows), 0, 1 if hit else 0, 1 if rows else 0)
     return result
+
+# ====== presence（地区/时段存在性）======
+# 与 participated/cast_of_task 的区别：后者判"是否参与该任务剧情"，本节判"文本中是否出现该角色"，
+# 用于避免"未参与活动剧情 => 没到过该地区"的越界推理（宪法 P4）。
+# 注意：直接扫全量条目文本，不依赖提及索引 —— 实测新角色（瓦蕾莎等）在索引中为 0 但正文存在。
+_PRESENCE_FORM_BY_TYPE = {
+    "activity": "活动条目（含彩蛋/尾声文本）",
+    "housing": "摆设/家园说明",
+    "item": "物品说明",
+    "map_text": "地图文本",
+    "quest": "任务正文",
+    "task": "任务条目",
+    "lore": "世界观条目",
+    "book": "书籍",
+}
+
+
+@lru_cache(maxsize=1)
+def _presence_entries() -> tuple:
+    """加载词条图全量条目（含非 task 类型）。"""
+    path = _BASE_DIR / "kb_vectors" / "wiki_entry_graph.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ()
+    return tuple(data.get("entries") or ())
+
+
+@lru_cache(maxsize=256)
+def presence_hits(entity: str, region: str = "", version: str = "", limit: int = 12) -> tuple:
+    """查角色在某地区/时段是否有存在性实证（任意条目类型）。
+
+    返回：((title, entry_type, evidence_form, snippet, filters_text), ...)
+    """
+    try:
+        base, variants = normalize_entity(entity or "")
+    except Exception:
+        base, variants = (entity or ""), []
+    keys = [k for k in ([base] + list(variants or [])) if k and len(str(k)) >= 2]
+    if not keys:
+        return ()
+    out = []
+    for e in _presence_entries():
+        title = str(e.get("title") or "")
+        text = str(e.get("story_text") or "")
+        blob = f"{title}\n{text}"
+        if not blob.strip():
+            continue
+        hit = next((k for k in keys if str(k) in blob), "")
+        if not hit:
+            continue
+        try:
+            flt = _filters_of(e) or {}
+        except Exception:
+            flt = {}
+        flt_txt = " ".join(str(v) for v in flt.values()) if isinstance(flt, dict) else str(flt)
+        if region and region not in f"{blob}\n{flt_txt}":
+            continue
+        if version and version not in f"{blob}\n{flt_txt}":
+            continue
+        et = str(e.get("entry_type") or "?")
+        idx = text.find(str(hit))
+        snippet = text[max(0, idx - 60): idx + 100].replace("\n", " ").strip() if idx >= 0 else ""
+        out.append((title, et, _PRESENCE_FORM_BY_TYPE.get(et, et), snippet, flt_txt))
+        if len(out) >= limit:
+            break
+    return tuple(out)
+
+
+def format_presence(entity: str, region: str = "", version: str = "") -> str:
+    """渲染 presence 查询结果（存在性证据区 + 覆盖度 + 维度分离声明）。"""
+    rows = presence_hits(entity, region, version)
+    scope = "、".join([x for x in (region, version) if x]) or "不限"
+    total = len(_presence_entries())
+    head = f"===== 存在性证据「{entity}」（范围：{scope}）====="
+    if not rows:
+        return (f"{head}\n\n本次未检出该角色在对应范围的存在性证据。\n"
+                f"覆盖度：已检索全部 {total} 个条目（含任务/活动/摆设/物品/地图文本等）；"
+                f"未收录不等于游戏内不存在，此处只能判为“无法判定”。")
+    lines = [head, "", f"【存在性证据｜{len(rows)} 条（仅证明文本中出现，不等于参与该剧情）】"]
+    for i, (title, et, form, snippet, _flt) in enumerate(rows, 1):
+        lines.append(f"{i}. [{et}] {title}（{form}）")
+        if snippet:
+            lines.append(f"   片段：{snippet}")
+    lines.append("")
+    lines.append(f"覆盖度：已检索全部 {total} 个条目，命中 {len(rows)} 条。"
+                 "说明：存在性证据与“是否参与该任务/该幕”是两个维度 —— "
+                 "未进入出场人物表不等于未出现在故事发生地区。")
+    return "\n".join(lines)
+
