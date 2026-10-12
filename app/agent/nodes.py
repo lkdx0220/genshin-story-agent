@@ -4430,6 +4430,46 @@ _NOT_FOUND_ANSWER_SNIPPETS = (
 )
 
 
+# ====== 名单类结论的确定性直出（防模型删减/改写）======
+_LIST_TOOL_HEADER = "实体查询「"
+_CAST_ROSTER_RE = re.compile(r"出场人物表（\d+\s*人）：(.+)")
+_LIST_ITEM_RE = re.compile(r"^\s*\d+\.\s*\[[^\]]+\]\s*([^（(]+)")
+
+
+def _deterministic_list_block(messages, answer: str) -> str:
+    """交集（两人共同出场）与任务→角色名单：工具返回的结论用代码直出。
+
+    只在模型**漏项**时注入（避免重复展示）：
+    - 任务→角色：校验权威名单里的**每个角色名**是否都出现在回答里；
+    - 交集：校验每条命中的**任务标题**是否都出现在回答里。
+    任一缺失 -> 直接拼接工具结论区，模型不再有删减机会（实测漏过《人前人后》的菲尔戈黛特）。
+    """
+    for msg in reversed(list(messages or [])):
+        if type(msg).__name__ != "ToolMessage":
+            continue
+        text = str(getattr(msg, "content", "") or "")
+        if _LIST_TOOL_HEADER not in text:
+            continue
+        if not ("共同出场" in text or "某任务有哪些出场角色" in text):
+            continue
+        head = text.strip().splitlines()[0].strip()
+        part = text.split("【结论区", 1)[1] if "【结论区" in text else text
+        strong = part.split("【线索区", 1)[0].split("覆盖度：", 1)[0].strip()
+        block = f"{head}\n\n{strong}"
+        roster = _CAST_ROSTER_RE.search(strong)
+        if roster:
+            names = [n.strip() for n in roster.group(1).split("、") if n.strip()]
+            missing = [n for n in names if n not in (answer or "")]
+        else:
+            titles = [m.group(1).strip() for m in _LIST_ITEM_RE.finditer(strong)]
+            missing = [t for t in titles if t and t not in (answer or "")]
+        if missing:
+            print(f"  -> [名单直出] 模型漏项 {missing[:4]}（共 {len(missing)}），改用工具结论原文")
+            return block + "\n"
+        return ""
+    return ""
+
+
 def _looks_like_not_found_answer(content: str) -> bool:
     """判断 LLM 输出是否为“未收录”类短路答复（只对短文判定）。"""
     stripped = (content or "").strip()
@@ -5284,6 +5324,9 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             "run_id": state.get("run_id"),
         },
     )
+    list_block = _deterministic_list_block(answer_messages, content)
+    if list_block:
+        content = list_block + content
     return {
         "messages": answer_messages,
         "final_response": content,
