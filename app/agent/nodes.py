@@ -4465,6 +4465,42 @@ def _list_block_from_text(text: str, answer: str) -> str:
         return block + "\n"
     return ""
 
+# ====== 名单类问题的确定性预取（不依赖模型是否调用 entity_query）======
+# 诊断结论（2026-10-12）：模型并不稳定地调用 entity_query(cast_of_task)，
+# 因此"渲染已存在的工具结果"这条路不可靠 —— 改为**代码直接查库并渲染**。
+_ROSTER_QUESTION_RE = re.compile(r"(有哪些角色|都有谁|有谁出场|谁出场|谁登场|哪些人出场|出场人物|登场人物)")
+
+
+def _match_task_title(query: str) -> str:
+    """从问题里找出任务标题（用任务标题注册表做最长匹配，避免子串误命中）。"""
+    try:
+        from app.retrieval import TITLE_REGISTRY
+    except Exception:
+        return ""
+    q = query or ""
+    hits = [t for t in TITLE_REGISTRY if t and t in q]
+    return max(hits, key=len) if hits else ""
+
+
+def _deterministic_roster_answer(query: str) -> str:
+    """名单类问题（某任务有哪些角色出场）：代码直接查权威 cast 并渲染，不调 LLM。"""
+    if not _ROSTER_QUESTION_RE.search(query or ""):
+        return ""
+    title = _match_task_title(query)
+    if not title:
+        return ""
+    try:
+        from app.tools.entity import entity_query as _eq
+        text = _eq("", relation="cast_of_task", target=title)
+    except Exception as exc:
+        print(f"  -> [名单预取] 失败: {type(exc).__name__}")
+        return ""
+    if "【结论区" not in text or "无强证据命中" in text:
+        return ""
+    print(f"  -> [名单预取] 代码直查「{title}」权威 cast，跳过 LLM")
+    return text.rstrip() + "\n\n（以上名单由知识库结构化数据直接给出。）"
+
+
 def _looks_like_not_found_answer(content: str) -> bool:
     """判断 LLM 输出是否为“未收录”类短路答复（只对短文判定）。"""
     stripped = (content or "").strip()
@@ -5131,14 +5167,9 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 防止模型在“作者未提及”之外联想稻妻/雷神/白狐等不存在的信息。
     direct_answer = _get_direct_metadata_answer(messages, original_query)
     if not direct_answer:
-        # 名单类（交集 / 任务→角色）：结构化结论用代码直出，杜绝模型删减
-        # （实测模型把《人前人后》权威表 8 人总结成 7 人，漏掉菲尔戈黛特）。
-        _tool_text = "\n".join(str(getattr(m, "content", "") or "")
-                              for m in messages if type(m).__name__ == "ToolMessage")
-        _roster_block = _list_block_from_text(_tool_text, "")
-        if _roster_block:
-            print("  -> [代码短路] 名单直出（交集/任务→角色），跳过 LLM")
-            direct_answer = _roster_block + "\n（以上名单由知识库结构化数据直接给出。）"
+        # 名单类问题：**代码直接查库渲染**（诊断结论：模型不稳定调用 entity_query，
+        # 因此不能依赖"已有工具结果"这条路 —— 见宪法 P5 与 spec FR-001/FR-002）。
+        direct_answer = _deterministic_roster_answer(original_query)
     if direct_answer:
         print("  -> [代码短路] 元数据直答路径，跳过 LLM")
         return {"final_response": direct_answer, "messages": messages}
