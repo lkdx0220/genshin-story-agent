@@ -987,20 +987,21 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     # ---- 名单类问题：代码直查权威 cast，跳过规划与回答 LLM（宪法 P5 确定性直出）----
     # 形状与上面的 P16 前置拦截一致（messages 必须为空，answer_agent 的 existing_final 才会早退）。
-    _roster_answer = _deterministic_roster_answer(original_query)
-    if _roster_answer:
-        print("  -> [名单预取] 跳过规划与回答 LLM，直接返回结构化名单")
+    _relation_answer = (_deterministic_roster_answer(original_query)
+                        or _deterministic_cooccur_answer(original_query))
+    if _relation_answer:
+        print("  -> [关系预取] 跳过规划与回答 LLM，直接返回结构化结论")
         trace_emit(
             "answer_end",
             {
                 "response_mode": "found",
-                "final_response": _roster_answer,
+                "final_response": _relation_answer,
                 "short_circuit": True,
-                "answer_source": "roster_direct",
+                "answer_source": "relation_direct",
                 "run_id": state.get("run_id"),
             },
         )
-        return {"final_response": _roster_answer, "messages": []}
+        return {"final_response": _relation_answer, "messages": []}
 
     # ---- 前置拦截：P16 超短/无意义输入 ----
     cleaned = re.sub(r"[^\u4e00-\u9fff\w]", "", original_query)
@@ -4516,6 +4517,52 @@ def _deterministic_roster_answer(query: str) -> str:
         return ""
     print(f"  -> [名单预取] 代码直查「{title}」权威 cast，跳过 LLM")
     return text.rstrip() + "\n\n（以上名单由知识库结构化数据直接给出。）"
+
+
+# ====== 交集（共同出场）的确定性预取 ======
+_COOCCUR_QUESTION_RE = re.compile(r"(一起出现|共同出场|共同剧情|都在场|一起出场|同场出现|同场)")
+
+
+def _extract_entity_names(query: str, limit: int = 2) -> list:
+    """从问题里提取实体名：复用意图路由的实体注册表（最长匹配 + 包含去重）。"""
+    try:
+        from intent_router import _get_entity_registry
+        reg = _get_entity_registry()
+    except Exception:
+        return []
+    # 实测 _get_entity_registry() 返回 tuple：(实体注册表, 短名索引, 去括号索引) —— 取其中的实体注册表 dict
+    registry = next((x for x in (reg if isinstance(reg, tuple) else (reg,)) if isinstance(x, dict)), {})
+    q = query or ""
+    hits = [str(name) for name in registry if name and str(name) in q]
+    hits.sort(key=len, reverse=True)
+    chosen: list = []
+    for name in hits:
+        if any(name in c for c in chosen):
+            continue
+        chosen.append(name)
+        if len(chosen) >= limit:
+            break
+    return chosen
+
+
+def _deterministic_cooccur_answer(query: str) -> str:
+    """交集类问题：代码直算两人共同出场（双方都须有强证据），不调 LLM。"""
+    if not _COOCCUR_QUESTION_RE.search(query or ""):
+        return ""
+    names = _extract_entity_names(query, 2)
+    if len(names) < 2:
+        return ""
+    a, b = names[0], names[1]
+    try:
+        from app.tools.entity import entity_query as _eq
+        text = _eq(a, relation="co_occur", target=b)
+    except Exception as exc:
+        print(f"  -> [交集预取] 失败: {type(exc).__name__}")
+        return ""
+    if "【结论区" not in text:
+        return ""
+    print(f"  -> [交集预取] 代码直算「{a} ∩ {b}」，跳过 LLM")
+    return text.rstrip() + "\n\n（以上交集由知识库结构化数据直接给出。）"
 
 
 def _looks_like_not_found_answer(content: str) -> bool:
