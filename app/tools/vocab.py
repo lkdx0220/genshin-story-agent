@@ -59,3 +59,7 @@ TASK_TYPES = get_args(TaskType)
 # 证据强度：回答"是出场还是只是被提到"
 EntityEvidenceLevel = Literal["强·有台词", "中·有动作", "弱·仅文字提及"]
 EVIDENCE_LEVELS = get_args(EntityEvidenceLevel)
+
+# 实体查询的关系类型（第 ③ 步工具入参）
+EntityRelation = Literal["participated", "co_occur"]
+ENTITY_RELATIONS = get_args(EntityRelation)
