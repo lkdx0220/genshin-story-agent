@@ -989,7 +989,8 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 形状与上面的 P16 前置拦截一致（messages 必须为空，answer_agent 的 existing_final 才会早退）。
     _relation_answer = (_deterministic_roster_answer(original_query)
                         or _deterministic_cooccur_answer(original_query)
-                        or _deterministic_presence_answer(original_query))
+                        or _deterministic_presence_answer(original_query)
+                        or _deterministic_coverage_answer(original_query))
     if _relation_answer:
         print("  -> [关系预取] 跳过规划与回答 LLM，直接返回结构化结论")
         trace_emit(
@@ -4602,6 +4603,28 @@ def _deterministic_presence_answer(query: str) -> str:
         return ""
     print(f"  -> [存在性预取] 代码直查「{names[0]}」{('@' + region) if region else ''}，跳过 LLM")
     return text.rstrip() + "\n\n（存在性证据由知识库结构化数据直接给出；它不等于剧情参与。）"
+
+
+# ====== 覆盖度的确定性预取 ======
+_COVERAGE_QUESTION_RE = re.compile(r"(覆盖度|覆盖率|收录率|收录比例|多少比例|覆盖情况)")
+_COVERAGE_CATEGORIES = ("彩蛋剧情", "活动剧情", "传说任务", "魔神任务", "世界任务", "主线",
+                        "委托任务", "地图事件", "隐藏任务", "其他任务", "游逸旅闻",
+                        "伴月纪闻", "部族纪闻")
+
+
+def _deterministic_coverage_answer(query: str) -> str:
+    """分类覆盖度：代码直出（双口径分类必须并列），不调 LLM。"""
+    if not _COVERAGE_QUESTION_RE.search(query or ""):
+        return ""
+    cat = next((c for c in _COVERAGE_CATEGORIES if c in (query or "")), "")
+    try:
+        from app.entity_retrieval import format_coverage
+        text = format_coverage(cat)
+    except Exception as exc:
+        print(f"  -> [覆盖度预取] 失败: {type(exc).__name__}")
+        return ""
+    print(f"  -> [覆盖度预取] 代码直出「{cat or '全部'}」，跳过 LLM")
+    return text.rstrip() + "\n\n（覆盖度数据由知识库统计产物直接给出。）"
 
 
 def _looks_like_not_found_answer(content: str) -> bool:

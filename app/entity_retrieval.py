@@ -625,3 +625,60 @@ def format_presence(entity: str, region: str = "", version: str = "") -> str:
                  "未进入出场人物表不等于未出现在故事发生地区。")
     return "\n".join(lines)
 
+# ====== 分类覆盖度（覆盖度声明口径）======
+_COVERAGE_PATH = _BASE_DIR / "kb_vectors" / "cast_coverage.json"
+
+
+@lru_cache(maxsize=1)
+def _coverage_data() -> dict:
+    try:
+        return json.loads(_COVERAGE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _rate_txt(d) -> str:
+    try:
+        return f"{int(d.get('non_empty'))}/{int(d.get('total'))} = {float(d.get('rate')):.1%}"
+    except Exception:
+        return ""
+
+
+def format_coverage(category: str = "") -> str:
+    """渲染分类覆盖度。双口径分类（如彩蛋剧情）必须并列展示（宪法 P4 覆盖度契约）。"""
+    d = _coverage_data()
+    cats = d.get("categories") or {}
+    if category:
+        picked = {category: cats[category]} if category in cats else {}
+    else:
+        picked = cats
+    if not picked:
+        names = "、".join(list(cats.keys())[:20]) or "（无数据）"
+        return (f"===== 覆盖度「{category or '全部'}」=====\n\n"
+                f"未找到该分类。可用分类：{names}\n"
+                f"数据生成时间：{d.get('generated_at') or '未知'}")
+    lines = [f"===== 覆盖度「{category or '全部分类'}」=====", "",
+             f"数据生成时间：{d.get('generated_at') or '未知'}"]
+    for name, v in picked.items():
+        lines.append("")
+        lines.append(f"【{name}】")
+        if not isinstance(v, dict):
+            lines.append(f"  {v}")
+            continue
+        raw = v.get("raw") if isinstance(v.get("raw"), dict) else (v if "total" in v else None)
+        nar = v.get("narrative_only") or v.get("narrative")
+        if isinstance(raw, dict):
+            lines.append(f"  原始口径：{_rate_txt(raw)}")
+        if isinstance(nar, dict):
+            lines.append(f"  有剧情/语音口径：{_rate_txt(nar)}"
+                         "（原始口径上限受页面性质限制，两个口径必须并列展示）")
+        for k, sub in v.items():
+            if k in ("raw", "narrative_only", "narrative"):
+                continue
+            if isinstance(sub, dict) and "rate" in sub:
+                lines.append(f"  {k}：{_rate_txt(sub)}")
+    lines.append("")
+    lines.append("口径：只有 cast_source=metadata 计入权威覆盖分子；"
+                 "speaker_lines / activity_inherited 为非权威。")
+    return "\n".join(lines)
+
