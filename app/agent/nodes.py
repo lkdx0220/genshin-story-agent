@@ -5106,7 +5106,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         f"你的'熔断检查'必须如实填写以上信息。如果'工具调用次数'为0，不得写'已加载全文'或'连续N次未找到'。"
     )
 
-    system_content = execution_facts + "\n" + AGENT_SYSTEM_PROMPT_ANSWER
+    system_content = execution_facts + "\n" + AGENT_SYSTEM_PROMPT_ANSWER + _ANSWER_RELATION_CONSTRAINT
 
     # 概念本质题范围硬规则：只回答概念本身，不展开组织/阵营/教团的成立史。
     # 这是通用范围控制，不针对任何具体题目；由既有的概念本质判定函数触发。
@@ -5288,3 +5288,16 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         "messages": answer_messages,
         "final_response": content,
     }
+
+
+# ====== 关系类问题的回答硬约束（第 ③ 步 3b）======
+# 动机：实测在"角色 ↔ 剧情"关系题上，若不走 entity_query 而只靠正文检索，
+# 模型会凭自身记忆补剧情（如凭空写出一段"往生堂赛诗结缘"）。此处收紧为：
+# 关系题必须走工具、只依据工具返回作答、无证据时如实说未收录。
+_ANSWER_RELATION_CONSTRAINT = """
+【关系类问题硬约束】当用户问的是"某人参与过/出现在哪些剧情""谁和谁一起出现过/有没有共同剧情/是否都在场"这类关系问题时：
+1. 必须调用 entity_query（单人以 participated，两人以 co_occur + target）；
+2. 只依据它的返回内容作答：结论区（强证据）可陈述；线索区（中·有动作 / 弱·仅文字提及）不得当作出场结论；
+3. 返回里没有的内容一律不得补充——不得凭自身知识补写剧情、场景、对话或理由；
+4. 若返回带覆盖度声明，必须如实说明知识库的收录范围；没有命中就直说"知识库未收录"，不要用常识推测。
+"""

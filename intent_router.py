@@ -47,6 +47,7 @@ TOOL_GROUPS = {
         "list_characters_by_rarity",
         "count_character_lines",
         "list_all_quest_series",
+        "entity_query",  # 实体/关系检索（角色 ↔ 剧情参与关系）
     ],
     "C1": [
         "query_weapon",
@@ -72,6 +73,7 @@ TOOL_GROUPS = {
         "wiki_graph_search",
         "wiki_graph_expand",
         "wiki_graph_get",
+        "entity_query",  # 实体/关系检索（两人共同出场 / 参与过哪些任务）
     ],
     "E": ["load_book_content", "get_book_metadata", "list_all_books"],
     "F": ["find_first_mention"],
