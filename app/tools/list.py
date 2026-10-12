@@ -484,12 +484,12 @@ def count_character_lines(character_name: str, quest_name: str = "") -> str:
                 continue
             total_lines = 0
             for alias in aliases:
-                lines = re.findall(rf"^\*{re.escape(alias)}[：:(]", text, re.MULTILINE)
+                lines = re.findall(rf"^\*\s*{re.escape(alias)}\s*[：:(]", text, re.MULTILINE)
                 total_lines += len(lines)
             if total_lines > 0:
                 sample_lines = []
                 for alias in aliases:
-                    found = re.findall(rf"^\*{re.escape(alias)}[：:(].+", text, re.MULTILINE)
+                    found = re.findall(rf"^\*\s*{re.escape(alias)}\s*[：:(].+", text, re.MULTILINE)
                     sample_lines.extend(found[:3])
                 results.append((title, q.get("category", ""), total_lines, sample_lines[:3]))
     if not results:
