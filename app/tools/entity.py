@@ -12,7 +12,9 @@
 """
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
+
+from langchain_core.tools import tool
 
 from app.entity_retrieval import (
     LEVEL_ACTION,
@@ -25,7 +27,14 @@ from app.entity_retrieval import (
     entity_docs,
     entity_intersect,
 )
-from app.tools.vocab import ENTITY_RELATIONS, EVIDENCE_LEVELS, TASK_TYPES
+from app.tools.vocab import (
+    ENTITY_RELATIONS,
+    EVIDENCE_LEVELS,
+    TASK_TYPES,
+    EntityEvidenceLevel,
+    EntityRelation,
+    TaskType,
+)
 
 _STRONG_FLOOR = LEVEL_ORDER[LEVEL_LINE]  # 强 = 3（出场人物表 / 有台词）；中=2；弱=1
 
@@ -108,3 +117,19 @@ ENTITY_QUERY_DESCRIPTION = (
     "证据分级：【强】= 出场人物表或正文台词，可作结论；【中/弱】= 动作线索或仅被提及，不可当出场。"
     "只能回答知识库已收录的内容，回答否定结论时必须带上覆盖度声明。"
 )
+
+
+@tool("entity_query")
+def entity_query_tool(entity: str, relation: EntityRelation = "participated", target: str = "",
+                      task_type: Optional[TaskType] = None,
+                      min_level: Optional[EntityEvidenceLevel] = None, top_k: int = 8) -> str:
+    """查询人物与剧情的参与关系（本地知识库，非联网）。
+
+    - relation=participated：某角色参与/出现在哪些任务（默认）
+    - relation=co_occur：两个人有哪些共同出场的剧情（必须提供 target）
+
+    证据分级：【强·出场人物表】或【强·有台词】可作结论；【中·有动作】【弱·仅文字提及】只作线索，
+    不可当作出场。只能回答知识库已收录的内容；给出否定结论时必须带上返回文本里的覆盖度声明。
+    """
+    return entity_query(entity, relation=relation, target=target, task_type=task_type or "",
+                        min_level=min_level or "", top_k=top_k)

@@ -44,6 +44,7 @@ from app.tools.search import (
     search_all,
     search_world,  # search_world 为碰壁后补充工具，初始不暴露
 )
+from app.tools.entity import entity_query_tool
 from app.tools.content import (
     load_book_content,
     load_quest_content,
@@ -58,6 +59,7 @@ from app.retrieval import hybrid_search
 
 # ====== 工具列表（顺序决定 LLM 看到的工具顺序）======
 tools = [
+    entity_query_tool,  # 实体/关系检索（第 35 个工具）
     query_character,
     query_voice_relation,
     query_region,
