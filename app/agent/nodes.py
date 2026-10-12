@@ -985,6 +985,23 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     alias_notes = state.get("alias_notes", "")
     intent_labels = state.get("intent_labels", [])
 
+    # ---- 名单类问题：代码直查权威 cast，跳过规划与回答 LLM（宪法 P5 确定性直出）----
+    # 形状与上面的 P16 前置拦截一致（messages 必须为空，answer_agent 的 existing_final 才会早退）。
+    _roster_answer = _deterministic_roster_answer(original_query)
+    if _roster_answer:
+        print("  -> [名单预取] 跳过规划与回答 LLM，直接返回结构化名单")
+        trace_emit(
+            "answer_end",
+            {
+                "response_mode": "found",
+                "final_response": _roster_answer,
+                "short_circuit": True,
+                "answer_source": "roster_direct",
+                "run_id": state.get("run_id"),
+            },
+        )
+        return {"final_response": _roster_answer, "messages": []}
+
     # ---- 前置拦截：P16 超短/无意义输入 ----
     cleaned = re.sub(r"[^\u4e00-\u9fff\w]", "", original_query)
     if len(cleaned) < 3:
