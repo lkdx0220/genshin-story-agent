@@ -131,11 +131,26 @@
   `cast_absent`、`protagonist_only` 明确无权威 cast；
 - 名称查询先经 `entity_alias_map.variant_to_canonical` 归一，再走索引。
 
-### 遗留项（挂账，归口数据侧）
+### 遗留项（已闭环 2026-10-12）
 
-1. **`cast_source` 出现复合值**：复查发现 1 条为 `metadata+speaker_lines`（其余取值：metadata 1566 / speaker_lines 602 /
-   activity_inherited 15 / 空 12493）。下游目前只认 `== "metadata"`，该条会被当作非权威 —— 建议数据侧归一为单一取值，
-   再由下游按需扩展判定（走 change 提案，不在下游擅自放宽）。
-2. **彩蛋剧情原始口径上限**：24 条中 13 条为无剧情内容页面，原始口径上限 14/24 = 58.3%，低于任务书 70% 目标；
-   已按"有剧情/语音"口径达成 78.6%，后续覆盖度展示须双口径并列。
-3. **10 个冲突别名未归一**（火神、水神、瓦学妹等），已显式记录在 `skipped_conflict_variants`；如需归一，需数据侧给出依据。
+数据侧提交 `0d3f3af` 后，下游独立复查确认三项遗留全部关闭：
+
+1. **`cast_source` 复合值**：全量分布已归一为单一取值（`metadata` 1567 / `speaker_lines` 602 /
+   `activity_inherited` 15 / 空 12493），**复合值 0 条** ✓；重建脚本已加取值白名单与告警路径。
+   下游的防御性兼容判定（见下）保留，用于今后再出现未知形态时不误降级。
+2. **彩蛋剧情覆盖度双口径**：已写入 `kb_vectors/cast_coverage.json`（`categories` 下 `raw` 与
+   `narrative_only` 两个口径）✓；无剧情内容页面清单可复核。
+3. **冲突别名结论**：10 个冲突别名已在 `entity_alias_map.json` 的 `conflict_notes` 逐个给出结论
+   （`action` / `candidates` / `reason`），如「哥哥 → 不归一：可指男主角空、也可泛指旅行」✓。
+   下游对未归一的别名按普通字符串匹配处理（可能多命中，属可接受行为）。
+
+### Requirement（归档自 change 005）：来源分级的复合值判定
+
+`cast_source` 的权威判定 SHALL 支持复合值：按 `+` 拆成成分后做**精确匹配**，含 `metadata` 成分即视为权威；
+`speaker_lines` / `activity_inherited` / `cast_absent` / `protagonist_only` 仍为非权威。
+判定 MUST NOT 放宽为子串匹配。
+
+#### Scenario: 复合值不降级
+
+- **WHEN** 某条目 `cast_source` 为复合值且含 `metadata` 成分
+- **THEN** 其出场人物表按权威处理（证据等级「强」），不得静默降级为「弱」。
