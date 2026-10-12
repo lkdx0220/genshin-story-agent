@@ -120,6 +120,17 @@ def _alias_variant_to_canonical() -> Dict[str, str]:
     return {str(k): str(v) for k, v in mapping.items() if k and v}
 
 
+def _is_authoritative_source(value: object) -> bool:
+    """cast_source 是否含权威成分（页面信息框字段）。
+
+    支持复合值（实测存在 1 条 "metadata+speaker_lines"）：按 "+" 拆成成分做**精确匹配**，
+    只要含 metadata 即视为权威；只有 speaker_lines / activity_inherited / cast_absent /
+    protagonist_only 时不视为权威。判定不得放宽为子串匹配（避免 xmetadata 之类误判）。
+    """
+    parts = {p.strip() for p in str(value or "").split("+")}
+    return "metadata" in parts
+
+
 def _graph_cast_is_authoritative(entry: dict) -> bool:
     """只有 cast_source == "metadata"（页面信息框字段）才当权威表。
 
@@ -127,7 +138,7 @@ def _graph_cast_is_authoritative(entry: dict) -> bool:
     误判为台词的个案（如「往生堂三日无主 第二回」把行秋算进出场，而 wiki 出场人物表里没有他），
     故这类不采信为权威，回退到本模块基于净化正文的分级（台词/动作/提及）。
     """
-    return str(entry.get("cast_source")) == "metadata"
+    return _is_authoritative_source(entry.get("cast_source"))
 
 
 def _task_type_of(entry: dict) -> str:
@@ -509,7 +520,7 @@ def task_cast(task_title: str) -> EntityDocsResult:
     if hit is not None:
         cast = graph_cast_map().get(display) or frozenset()
         source = str(hit.get("cast_source") or "")
-        level = LEVEL_CAST if source == "metadata" else LEVEL_WEAK
+        level = LEVEL_CAST if _is_authoritative_source(source) else LEVEL_WEAK
         if cast:
             # 单行输出：任务→角色 的答案是"名单"，逐人成行会得到 N 条重复记录（无名字，信息量零）
             rows.append(EntityHit(title=display, task_type=_task_type_of(hit) or "?", count=len(cast),
