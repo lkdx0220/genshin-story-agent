@@ -192,6 +192,7 @@ L3 全景连锁不依赖额外向量库，而是依赖两张本地索引：
 | 索引 | 路径 | 作用 |
 |---|---|---|
 | 观测枢词条链接图 | `kb_vectors/wiki_entry_graph.json` | 保存每个词条的正文、剧情文本、类型、地区、别名，以及它通过 `data-entry-id` 链接到的其它词条 |
+| 实体别名映射 | `kb_vectors/entity_alias_map.json` | canonical → variants（错字/异体/简称/社区别名），供 `normalize_entity` 归一查询 |
 | 实体提及索引 | `kb_vectors/wiki_entity_mention_index.json` | Aho-Corasick 反向索引，记录“谁在哪些词条的剧情文本里被提到” |
 
 L3 触发后，代码会先加载任务全文和地图文本，再用实体提及索引反向找出相关实体档案，最后沿词条链接图做一跳扩展，拼成 `[全景全文读取]` 证据包，交给 qwen3.8-max 分段生成。
@@ -236,9 +237,17 @@ python wiki_entry_graph.py --search 阿克西妮娅
 python wiki_entry_graph.py --expand 509591
 ```
 
-### 4. 构建实体提及索引
+### 4. 构建实体别名映射 + 实体提及索引
 
-依赖上一步的 `wiki_entry_graph.json`：
+实体别名映射（canonical → variants，供下游 `normalize_entity` 读取）：
+
+```bash
+python scripts/build_entity_alias_map.py
+```
+
+产物：`kb_vectors/entity_alias_map.json`。
+
+实体提及索引依赖上一步的 `wiki_entry_graph.json` 与别名映射：
 
 ```bash
 python scripts/build_entity_mention_index.py
@@ -247,7 +256,7 @@ python scripts/build_entity_mention_index.py
 python scripts/build_entity_mention_index.py --graph <graph.json> --out <index.json> --min-count 1
 ```
 
-产物：`kb_vectors/wiki_entity_mention_index.json`。
+产物：`kb_vectors/wiki_entity_mention_index.json`（v3：图内实体 + 角色别名 canonical 实体）。
 
 ### 5. 增量维护
 
@@ -259,6 +268,7 @@ python scripts/update_wiki_graph.py --check
 python scripts/update_wiki_graph.py --apply
 
 # 注意：--apply 只重建链接图，实体提及索引需要再手动重建一次
+python scripts/build_entity_alias_map.py
 python scripts/build_entity_mention_index.py
 ```
 

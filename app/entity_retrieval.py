@@ -26,6 +26,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 _BASE_DIR = Path(__file__).resolve().parents[1]
 GRAPH_PATH = _BASE_DIR / "kb_vectors" / "wiki_entry_graph.json"
 MENTION_PATH = _BASE_DIR / "kb_vectors" / "wiki_entity_mention_index.json"
+ALIAS_MAP_PATH = _BASE_DIR / "kb_vectors" / "entity_alias_map.json"
 # 原始任务数据：metadata.出场人物 是**结构化**的权威出场人物表（注意：部分分类抓成了空值，
 # 例如活动剧情 569/624 为空——那是抓取侧待修的问题，见实体检索量化报告）
 QUEST_DIR = _BASE_DIR / "content_data"
@@ -104,6 +105,21 @@ def _base_name(name: str) -> str:
     return cleaned.split("·")[0].strip() if cleaned else cleaned
 
 
+@lru_cache(maxsize=1)
+def _alias_variant_to_canonical() -> Dict[str, str]:
+    """别名/变体 → 规范名映射（来自 kb_vectors/entity_alias_map.json）。
+
+    缺口补全任务 3：下游 normalize_entity 直接读取该映射，
+    使「瓦雷莎」等变体查询能命中 canonical 实体记录。
+    """
+    try:
+        data = json.loads(ALIAS_MAP_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    mapping = data.get("variant_to_canonical") or {}
+    return {str(k): str(v) for k, v in mapping.items() if k and v}
+
+
 def _graph_cast_is_authoritative(entry: dict) -> bool:
     """只有 cast_source == "metadata"（页面信息框字段）才当权威表。
 
@@ -130,6 +146,7 @@ def normalize_entity(name: str) -> Tuple[str, List[str]]:
             continue
         bucket[_base_name(str(item.get("name") or ""))].append(eid)
     query = _base_name(name)
+    query = _alias_variant_to_canonical().get(query, query)
     if query in bucket:
         return query, bucket[query]
     loose = [(k, v) for k, v in bucket.items() if query and query in k]

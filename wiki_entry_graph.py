@@ -1676,6 +1676,33 @@ def apply_cast_absent_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
     return stats
 
 
+def apply_gap_marker_fallback(graph: WikiEntryGraph) -> Dict[str, int]:
+    """给所有无 cast 的 task / activity 条目补显式缺口标注。
+
+    缺口补全任务 2 要求：无权威 cast 的条目必须显式标注
+    cast_absent / story_placeholder / lore_item / activity_inherited，
+    不得留空键（否则下游会把空键误读成「角色不在场」）。
+
+    - 已有 story_placeholder / entry_kind=lore_item / activity_inherited 的条目保留；
+    - 其余无 cast 的 task / activity 统一标 cast_absent=True。
+    """
+    stats = {"cast_absent_fallback": 0, "already_marked": 0}
+    for entry in graph.entries.values():
+        if entry.entry_type not in ("task", "activity"):
+            continue
+        if entry.cast:
+            continue
+        if entry.story_placeholder or entry.entry_kind == "lore_item":
+            stats["already_marked"] += 1
+            continue
+        if entry.cast_source == "activity_inherited":
+            stats["already_marked"] += 1
+            continue
+        entry.cast_absent = True
+        stats["cast_absent_fallback"] += 1
+    return stats
+
+
 def apply_entry_kind_coverage(graph: WikiEntryGraph) -> Dict[str, int]:
     """给仍为空的 task / activity 条目补 entry_kind。
 
@@ -1971,6 +1998,7 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
     placeholder_stats = apply_story_placeholder_to_graph(graph)
     cast_absent_stats = apply_cast_absent_to_graph(graph)
     entry_kind_coverage = apply_entry_kind_coverage(graph)
+    gap_marker_stats = apply_gap_marker_fallback(graph)
     graph.meta = {
         "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "entry_count": len(graph.entries),
@@ -1983,6 +2011,7 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
         "entry_kind_coverage": entry_kind_coverage,
         "story_placeholder": placeholder_stats,
         "cast_absent": cast_absent_stats,
+        "gap_marker_fallback": gap_marker_stats,
         "dirty_links": [],
     }
     return graph
