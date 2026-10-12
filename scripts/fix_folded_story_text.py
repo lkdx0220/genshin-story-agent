@@ -19,176 +19,54 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR))
 sys.path.insert(0, str(BASE_DIR / "scripts"))
 
-from daily_wiki_update import BWIKI_API, BWIKI_HEADERS, curl_json  # noqa: E402
-from bs4 import BeautifulSoup, NavigableString, Tag  # noqa: E402
+from _wiki_source_bootstrap import ensure_wiki_source  # noqa: E402
+
+ensure_wiki_source()
+from wiki_source import WikiSource  # noqa: E402
+from wiki_source.folding import (  # noqa: E402,F401
+    expand_local_folds,  # re-export：本地折叠递归展开（深度护栏 24 层）
+    speaker_stats,  # re-export
+)
 
 CONTENT_DIR = BASE_DIR / "content_data"
 REPORT_PATH = BASE_DIR / "reports" / "cast_fix_folded_text_report.json"
 BACKUP_SUFFIX = ".bak-before-fold-fix-20261011"
 
 
+_wiki_source: WikiSource | None = None
+
+
+def _get_wiki_source() -> WikiSource:
+    global _wiki_source
+    if _wiki_source is None:
+        _wiki_source = WikiSource()
+    return _wiki_source
+
+
 def looks_broken(text: str) -> bool:
-    if not text:
-        return False
-    return "{{折叠" in text or "|折叠=是}}" in text or text.count("增益效果：") >= 3
-
-
-def _template_end(text: str, start: int) -> int:
-    depth = 0
-    i = start
-    while i < len(text) - 1:
-        if text.startswith("{{", i):
-            depth += 1
-            i += 2
-            continue
-        if text.startswith("}}", i):
-            depth -= 1
-            i += 2
-            if depth == 0:
-                return i
-            continue
-        i += 1
-    return -1
-
-
-def _split_template_params(body: str):
-    params = []
-    depth = 0
-    current = []
-    i = 0
-    while i < len(body):
-        if body.startswith("{{", i):
-            depth += 1
-            current.append("{{")
-            i += 2
-            continue
-        if body.startswith("}}", i):
-            depth -= 1
-            current.append("}}")
-            i += 2
-            continue
-        ch = body[i]
-        if ch == "|" and depth == 0:
-            params.append("".join(current))
-            current = []
-        else:
-            current.append(ch)
-        i += 1
-    params.append("".join(current))
-    return params
-
-
-def expand_local_folds(text: str) -> str:
-    """本地兜底：递归提取 {{折叠|...|内容=...}} 的 内容=，清理折叠模板残留。"""
-    out = []
-    i = 0
-    while i < len(text):
-        idx = text.find("{{折叠", i)
-        if idx < 0:
-            out.append(text[i:])
-            break
-        out.append(text[i:idx])
-        end = _template_end(text, idx)
-        if end < 0:
-            out.append(text[idx:])
-            break
-        body = text[idx + 2:end - 2]
-        content = ""
-        for param in _split_template_params(body):
-            param = param.strip()
-            if param.startswith("内容="):
-                content = param[len("内容="):]
-                break
-        out.append(expand_local_folds(content))
-        i = end
-    result = "".join(out)
-    result = re.sub(r"\n{3,}", "\n\n", result)
-    return result.strip()
-
-
-def extract_story_from_html(html: str) -> str:
-    soup = BeautifulSoup(html or "", "lxml")
-    for tag in soup(["script", "style"]):
-        tag.decompose()
-    for selector in (
-        ".mw-editsection", ".toc", "table.infobox", ".navbox",
-        ".mw-collapsible-toggle", ".mw-collapsible-toggle-placeholder",
-        ".printfooter", ".mw-jump-link",
-    ):
-        for tag in soup.select(selector):
-            tag.decompose()
-
-    story_keywords = ("任务剧情", "活动剧情", "剧情对话", "彩蛋对话", "角色对话", "额外对话", "彩蛋", "NPC对话")
-    headings = [
-        h for h in soup.find_all("h2")
-        if any(k in h.get_text() for k in story_keywords)
-    ]
-    if not headings:
-        return ""
-
-    parts = []
-    for heading in headings:
-        for sib in heading.next_siblings:
-            if getattr(sib, "name", None) == "h2":
-                break
-            if getattr(sib, "name", None) == "h3":
-                title = sib.get_text(" ", strip=True)
-                if title:
-                    parts.append("===" + title + "===")
-            elif isinstance(sib, Tag):
-                txt = sib.get_text("\n", strip=True)
-                if txt:
-                    parts.append(txt)
-            elif isinstance(sib, NavigableString):
-                txt = str(sib).strip()
-                if txt:
-                    parts.append(txt)
-
-    text = "\n".join(parts)
-    for marker in ("NewPP limit report", "Saved in parser cache"):
-        idx = text.find(marker)
-        if idx >= 0:
-            text = text[:idx]
-    text = re.sub(r"\[ ?编辑 ?\]", "", text)
-    lines = []
-    seen_blank = False
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or line in ("折叠", "展开", "[折叠]", "[展开]"):
-            if not seen_blank:
-                lines.append("")
-                seen_blank = True
-            continue
-        if "MediaWiki:" in line:
-            continue
-        seen_blank = False
-        # 说话人行重新加 *，与原有 quest text 格式一致
-        if re.match(r"^[^\n：:]{1,20}[：:]", line):
-            line = "*" + line
-        lines.append(line)
-    text = "\n".join(lines).strip()
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text
+    """折叠残留检测：wiki_source 通用判定 + 本脚本特有的"增益效果重复"损坏启发式（业务保留）。"""
+    return _folding_looks_broken(text) or (
+        bool(text) and str(text).count("增益效果：") >= 3
+    )
 
 
 def fetch_page_html(pageid, title: str):
-    """优先 pageid；pageid 失效或返回空时退回标题查询。"""
-    for params in (
-        {"action": "parse", "prop": "text", "format": "json", "origin": "*", "pageid": str(pageid)} if pageid else None,
-        {"action": "parse", "prop": "text", "format": "json", "origin": "*", "page": title},
-    ):
-        if not params:
-            continue
-        data = curl_json(BWIKI_API, params, headers=BWIKI_HEADERS)
-        html = (data.get("parse", {}).get("text") or {}).get("*", "") if data else ""
-        if html:
-            return html
-    return ""
+    """渲染后 HTML（pageid 失效/为空自动按 title 回退，wiki_source 内置）。"""
+    env = _get_wiki_source().bwiki.page(
+        title=title or "", pageid=pageid or None, mode="text"
+    )
+    return env["html"]
 
 
-def speaker_stats(text: str):
-    names = re.findall(r"(?:^|\n)\s*\*?\s*([^\n：:]{1,20}?)\s*[：:]", text or "")
-    return len(names), len(set(names)), names
+def extract_story_from_html(html: str) -> str:
+    """剧情段落提取。兼容旧签名（返回 str）；bs4 缺失时抛
+    wiki_source.bwiki.CapabilityError（含安装指引），不再让整脚本 import 崩。"""
+    from wiki_source.bwiki import extract_story_from_html as _ws_extract
+
+    return _ws_extract(html)[0]
+
+
+from wiki_source.folding import looks_broken as _folding_looks_broken  # noqa: E402
 
 
 def main():

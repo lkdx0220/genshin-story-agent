@@ -7,10 +7,12 @@
 - 页面确实没有该字段时写 metadata.cast_absent = true，并删除空的出场人物键；
 - 幂等：重复运行结果一致；
 - 写前备份 quests_*.json 为 *.bak-before-cast-fix-20261010。
+
+数据源（0.2.0 迁移）：wikitext 获取与出场人物字段解析经 genshin-wiki-source，
+本脚本不再直接 curl B站；pageid（可能是米游社 content_id）失败自动按 title 回退。
 """
 import argparse
 import json
-import re
 import sys
 import time
 from pathlib import Path
@@ -19,68 +21,31 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR))
 sys.path.insert(0, str(BASE_DIR / "scripts"))
 
-from daily_wiki_update import BWIKI_API, BWIKI_HEADERS, curl_json  # noqa: E402
+from _wiki_source_bootstrap import ensure_wiki_source  # noqa: E402
 from wiki_entry_graph import _clean_cast_parts  # noqa: E402
+
+ensure_wiki_source()
+from wiki_source import WikiSource  # noqa: E402
+from wiki_source.bwiki import clean_cast_value, extract_cast_field  # noqa: E402,F401
 
 DEFAULT_INPUT = Path("C:/Users/24701/Desktop/原神剧情/_cast_需重爬清单.json")
 CONTENT_DIR = BASE_DIR / "content_data"
 BACKUP_SUFFIX = ".bak-before-cast-fix-20261010"
 
-_FIELD_LINE_RE = re.compile(r"^\|\s*出场人物\s*=\s*(.*)$")
+_wiki_source: WikiSource | None = None
 
 
-def clean_cast_value(value: str) -> str:
-    """去掉注释、HTML、wiki 链接，把换行/分隔符统一成顿号。"""
-    value = re.sub(r"<!--.*?-->", "", value or "", flags=re.DOTALL)
-    value = value.replace("<br>", "、").replace("<br/>", "、").replace("<br />", "、")
-    value = re.sub(r"\[\[([^\]|]+)\|([^\]]+)\]\]", r"\2", value)
-    value = re.sub(r"\[\[([^\]]+)\]\]", r"\1", value)
-    value = value.replace("\r", "").replace("\n", "、")
-    value = re.sub(r"[ \t\u3000]+", " ", value)
-    value = re.sub(r"[、,，;；/]+", "、", value)
-    value = value.strip().strip("、").strip()
-    return value
-
-
-def extract_cast_field(wikitext: str) -> str:
-    """从 {{任务}} 模板里提取 |出场人物=...，支持跨行续写。"""
-    lines = (wikitext or "").splitlines()
-    for index, line in enumerate(lines):
-        match = _FIELD_LINE_RE.match(line)
-        if not match:
-            continue
-        parts = [match.group(1).strip()]
-        cursor = index + 1
-        while cursor < len(lines):
-            nxt = lines[cursor]
-            if nxt.startswith("|") or nxt.startswith("}}") or nxt.startswith("=="):
-                break
-            if nxt.strip():
-                parts.append(nxt.strip())
-            cursor += 1
-        value = clean_cast_value("、".join(part for part in parts if part))
-        return value
-    return ""
+def _get_wiki_source() -> WikiSource:
+    global _wiki_source
+    if _wiki_source is None:
+        _wiki_source = WikiSource()
+    return _wiki_source
 
 
 def fetch_wikitext(pageid, title: str):
-    params = {
-        "action": "parse",
-        "prop": "wikitext",
-        "format": "json",
-        "origin": "*",
-    }
-    if pageid:
-        params["pageid"] = str(pageid)
-    else:
-        params["page"] = title
-    data = curl_json(BWIKI_API, params, headers=BWIKI_HEADERS)
-    if not data:
-        return None
-    parse_data = data.get("parse") or {}
-    if not parse_data:
-        return None
-    return (parse_data.get("wikitext") or {}).get("*", "")
+    """wikitext 获取（wiki_source 内置 pageid→title 回退）。兼容旧签名。"""
+    env = _get_wiki_source().bwiki.page(title=title or "", pageid=pageid or None, mode="wikitext")
+    return env["raw"] or None
 
 
 def find_records(items, pageid, title, category):

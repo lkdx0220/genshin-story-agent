@@ -18,13 +18,25 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR))
 sys.path.insert(0, str(BASE_DIR / "wiki_data_tools"))
 
-import _fetch_mihoyo_channel as mh  # noqa: E402
-import _parse_mihoyo_tasks as mt  # noqa: E402
+from _wiki_source_bootstrap import ensure_wiki_source  # noqa: E402
+import _parse_mihoyo_tasks as mt  # noqa: E402  # 业务元数据解析（extract_metadata 等），不在迁移范围
+
+ensure_wiki_source()
+from wiki_source import WikiSource  # noqa: E402
+from wiki_source.mihoyo import extract_dialogue  # noqa: E402
 
 REPORT_PATH = BASE_DIR / "reports" / "mihoyo_fallback_search.json"
-CARD_CACHE = BASE_DIR / "reports" / "mihoyo_card_index.json"
 TASK_CHANNEL = 43
 ACTIVITY_CHANNEL = 105
+
+_client: WikiSource | None = None
+
+
+def get_client() -> WikiSource:
+    global _client
+    if _client is None:
+        _client = WikiSource()
+    return _client
 
 
 def norm_title(s: str) -> str:
@@ -34,95 +46,17 @@ def norm_title(s: str) -> str:
     return s
 
 
-def load_card_index(force=False):
-    if CARD_CACHE.exists() and not force:
-        return json.loads(CARD_CACHE.read_text(encoding="utf-8"))
-    cards = []
-    for ch in (TASK_CHANNEL, ACTIVITY_CHANNEL):
-        for card in mh.fetch_channel_list(ch):
-            title = str(card.get("title") or "")
-            cid = card.get("content_id")
-            if title and cid:
-                cards.append({"title": title, "content_id": cid, "channel": ch})
-    CARD_CACHE.parent.mkdir(parents=True, exist_ok=True)
-    CARD_CACHE.write_text(json.dumps(cards, ensure_ascii=False, indent=2), encoding="utf-8")
-    return cards
-
-
-def find_matches(cards, title: str):
-    q = norm_title(title)
-    if not q:
-        return []
-    exact = [c for c in cards if norm_title(c["title"]) == q]
-    contains = [c for c in cards if q and (q in norm_title(c["title"]) or norm_title(c["title"]) in q)]
-    merged = []
-    seen = set()
-    for c in exact + contains:
-        key = (c["title"], c["content_id"])
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(c)
-    # 任务频道 43 优先，活动频道 105 次之
-    merged.sort(key=lambda c: 0 if c.get("channel") == TASK_CHANNEL else 1)
-    return merged[:12]
-
-
-def _collect_dialogue(obj, out):
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if key == "dialogue" and isinstance(value, str):
-                text = mt.plain(value)
-                if text:
-                    out.append(text)
-            else:
-                _collect_dialogue(value, out)
-    elif isinstance(obj, list):
-        for value in obj:
-            _collect_dialogue(value, out)
-
-
-def extract_dialogue_text(page):
-    """只提取剧情对话模块的 dialogue 内容，不混入任务概述/奖励/活动说明。"""
-    lines = []
-    for module in page.get("modules") or []:
-        if not isinstance(module, dict):
-            continue
-        name = str(module.get("name") or "").strip()
-        comps = module.get("components") or []
-        is_dialogue_module = name == "剧情对话" or any(
-            str((c or {}).get("component_id") or "") == "interactive_dialogue"
-            for c in comps if isinstance(c, dict)
-        )
-        if not is_dialogue_module:
-            continue
-        for comp in comps:
-            if not isinstance(comp, dict):
-                continue
-            data = comp.get("data")
-            if isinstance(data, str):
-                try:
-                    data = json.loads(data)
-                except Exception:
-                    continue
-            _collect_dialogue(data, lines)
-    # 去重、保序
-    out = []
-    seen = set()
-    for line in lines:
-        line = line.strip()
-        if not line or line in seen:
-            continue
-        seen.add(line)
-        out.append(line)
-    return "\n".join(out)
-
-
 def parse_page(content_id):
-    page = mh.fetch_entry_page(content_id)
-    if not page:
+    """词条解析（0.2.0 迁移）：取数经 wiki_source；metadata 仍走项目业务解析。
+
+    对话提取显式 order="occurrence"（迁移过渡期口径，见任务书 §四：
+    与项目现状逐行一致；未来切 tree 需按顺序 diff 报告评估）。
+    """
+    entry_env = get_client().entry(content_id)
+    if not entry_env["found"]:
         return None
-    dialogue_text = extract_dialogue_text(page)
+    page = entry_env["page"] or {}
+    dialogue_text = extract_dialogue(page, order="occurrence")["dialogue"]
     groups = mt.group_modules_from_page(page)
     best = None
     for group in groups:
@@ -186,16 +120,22 @@ def main():
     parser = argparse.ArgumentParser(description="米游社 Wiki 补搜")
     parser.add_argument("--input", default=str(BASE_DIR / "reports" / "activity_cast_rules_recheck.json"))
     parser.add_argument("--delay", type=float, default=0.3)
-    parser.add_argument("--force-index", action="store_true")
+    parser.add_argument(
+        "--force-index",
+        action="store_true",
+        help="兼容保留：卡片索引现由 wiki_source 客户端内存缓存，此参数无效果",
+    )
     args = parser.parse_args()
 
-    cards = load_card_index(args.force_index)
     targets = collect_targets(Path(args.input))
-    print(f"card index {len(cards)}; targets {len(targets)}")
+    print(f"targets {len(targets)}")
     records = []
     for index, target in enumerate(targets, 1):
         title = target["title"]
-        matches = find_matches(cards, title)
+        find_env = get_client().find(title)
+        if find_env.get("ambiguous"):
+            print(f"  [ambiguous] {title}: exact={len(find_env['exact_matches'])} 候选，按序尝试")
+        matches = find_env["candidates"]
         chosen = None
         chosen_parsed = None
         for match in matches:
