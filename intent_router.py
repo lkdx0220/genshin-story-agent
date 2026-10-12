@@ -101,6 +101,13 @@ LABEL_CN = {
 # 只要用户明确问任务/章节/子任务元数据，就必须暴露 D 组工具。
 # 触发后若 LLM 只给了 B 等标签，这里强制补 D，避免 F1 这类
 # “胡桃的传说任务叫什么名字”被路由成纯角色查询而拿不到 query_quest。
+# 任务→角色硬规则：问“某任务有哪些角色/谁出场”时，关系答案必须来自结构性 cast，
+# 而不是正文检索（实测走 hybrid_search 会漏 cast 成员，如《人前人后》漏菲尔戈黛特）。
+# 该问法正好落在 D 组（entity_query 已挂 B/D），这里做确定性兜底强制补 D。
+_TASK_CAST_HARD_RULE = re.compile(
+    r"(有哪些角色|都有谁|有谁出场|谁出场|谁登场|谁参与了|出场人物|登场人物|角色有哪些|哪些人出场)"
+)
+
 _TASK_METADATA_HARD_RULE = re.compile(
     r"(传说任务|魔神任务|世界任务|活动剧情|之章|子任务|包含几幕|有几幕|第.幕|任务叫什么|任务名字|任务名称)"
 )
@@ -718,6 +725,9 @@ def route_intent(
     # 任务/剧情元数据硬规则：只要用户明确问任务/章节/子任务，强制补 D。
     # 放在 LLM 之后做确定性兜底，避免路由模型单点偏差导致漏掉任务类工具。
     if "ALL" not in labels and _TASK_METADATA_HARD_RULE.search(user_query):
+        if "D" not in labels:
+            labels = labels + ["D"]
+    if "ALL" not in labels and _TASK_CAST_HARD_RULE.search(user_query):
         if "D" not in labels:
             labels = labels + ["D"]
 
