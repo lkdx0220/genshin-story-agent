@@ -28,6 +28,62 @@ from typing import Dict, List, Set, Tuple
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = BASE_DIR / "kb_vectors" / "entity_alias_map.json"
 
+# 冲突别名结论（2026-10-12 遗留项 3）：
+# build_alias_map 对多角色共用的别名不强行归一；这里给逐条结论，
+# 下游读到 conflict_notes 后按“普通字符串匹配”处理。
+CONFLICT_NOTES = {
+    "哥哥": {
+        "action": "不归一",
+        "candidates": ["旅行者", "空"],
+        "reason": "可指男主角空，也可泛指旅行者；无上下文不能区分",
+    },
+    "妹妹": {
+        "action": "不归一",
+        "candidates": ["旅行者", "琳妮特", "荧"],
+        "reason": "可指女主角荧/通用旅行者，也可能指琳妮特（称呼语境）",
+    },
+    "尼大王": {
+        "action": "不归一",
+        "candidates": ["尼伯龙根", "尼可"],
+        "reason": "两位不同角色的社区简称，不能归一",
+    },
+    "旅行者": {
+        "action": "不归一",
+        "candidates": ["旅行者", "空", "荧"],
+        "reason": "空/荧均可指旅行者；通用查询应直接使用 canonical 旅行者，不通过别名映射改写性别形态",
+    },
+    "正义之神": {
+        "action": "不归一",
+        "candidates": ["芙卡洛斯", "芙宁娜"],
+        "reason": "前任水神与现任水神身份分离",
+    },
+    "水之神": {
+        "action": "不归一",
+        "candidates": ["芙卡洛斯", "芙宁娜"],
+        "reason": "前任水神与现任水神身份分离",
+    },
+    "水神": {
+        "action": "不归一",
+        "candidates": ["芙卡洛斯", "芙宁娜", "行秋"],
+        "reason": "同时是水神称呼与行秋的社区昵称，多角色共用",
+    },
+    "火神": {
+        "action": "不归一",
+        "candidates": ["玛薇卡", "班尼特"],
+        "reason": "玛薇卡是火神；班尼特为社区梗称，语境依赖",
+    },
+    "瓦学妹": {
+        "action": "不归一",
+        "candidates": ["瓦蕾莎", "若娜瓦"],
+        "reason": "两位角色共用社区称呼，语境依赖",
+    },
+    "草木之神": {
+        "action": "不归一",
+        "candidates": ["大慈树王", "纳西妲"],
+        "reason": "草神身份在不同剧情阶段/角色间转移，不能单一归一",
+    },
+}
+
 
 def _clean(name: str) -> str:
     return str(name or "").strip().replace("「", "").replace("」", "").strip()
@@ -95,18 +151,34 @@ def build_payload() -> dict:
         if variant in variant_to_canonical:
             del variant_to_canonical[variant]
 
+    conflict_notes = {}
+    for variant in sorted(conflicts):
+        note = CONFLICT_NOTES.get(variant)
+        if not note:
+            note = {
+                "action": "不归一",
+                "candidates": sorted(conflicts[variant]),
+                "reason": "多角色共用，缺少足够上下文归一",
+            }
+        conflict_notes[variant] = {
+            **note,
+            "source": "character_aliases.py:CHARACTER_ALIASES + 人工核对",
+        }
+
     return {
         "version": 1,
         "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "source": "character_aliases.py:CHARACTER_ALIASES + content_data/character_voices.json",
         "canonical_to_variants": canonical_to_variants,
         "variant_to_canonical": variant_to_canonical,
+        "conflict_notes": conflict_notes,
         "records": records,
         "stats": {
             "canonical_groups": len(canonical_to_variants),
             "variant_count": sum(len(v) for v in canonical_to_variants.values()),
             "variant_to_canonical": len(variant_to_canonical),
             "skipped_conflict_variants": sorted(conflicts),
+            "conflict_notes": len(conflict_notes),
         },
     }
 

@@ -41,6 +41,20 @@ WIKI_RAW_DIR = BASE_DIR / "content_data" / "wiki_raw"
 
 SCHEMA_VERSION = 4
 
+# cast_source 取值白名单（2026-10-12 遗留项 1）：
+# metadata / speaker_lines / activity_inherited / cast_absent / protagonist_only / 空
+# infobox_text 为历史遗留取值，保留兼容；出现白名单外的新形态必须告警，不得静默写入。
+CAST_SOURCE_WHITELIST = {
+    "metadata",
+    "speaker_lines",
+    "activity_inherited",
+    "cast_absent",
+    "protagonist_only",
+    "infobox_text",
+    "",
+}
+_CAST_SOURCE_WARNINGS: List[str] = []
+
 # 观测枢转录误字 → 正确写法（人工核对：B站同页为正确写法）
 _TEXT_FIXES = {
     "八奇现瘴病隐": "八奇现瘴疠隐",  # 春曦画桃符 第一回
@@ -1372,6 +1386,30 @@ def _cast_from_infobox_text(text: str) -> List[str]:
     return []
 
 
+def normalize_cast_source(source: str, title: str = "") -> str:
+    """白名单归一 cast_source；复合值按成分降级/升级，新形态告警。
+
+    - 白名单内：原样返回（空值统一为 metadata）；
+    - `metadata+...`：只要含 metadata 成分，归一为 metadata（权威页面字段）；
+    - 其他未知形态：告警并归一为 metadata，避免下游静默降级。
+    """
+    value = str(source or "").strip()
+    if not value:
+        return "metadata"
+    if value in CAST_SOURCE_WHITELIST:
+        return value
+    if "+" in value:
+        parts = [part.strip() for part in value.split("+") if part.strip()]
+        if "metadata" in parts:
+            _CAST_SOURCE_WARNINGS.append(f"{title}: 复合 cast_source={value} -> metadata")
+            return "metadata"
+        if "speaker_lines" in parts:
+            _CAST_SOURCE_WARNINGS.append(f"{title}: 复合 cast_source={value} -> speaker_lines")
+            return "speaker_lines"
+    _CAST_SOURCE_WARNINGS.append(f"{title}: 未知 cast_source={value} -> metadata")
+    return "metadata"
+
+
 def _load_cast_records() -> Dict[str, tuple]:
     """title / 归一化 title -> (cast_list, cast_source)。"""
     records: Dict[str, tuple] = {}
@@ -1401,9 +1439,7 @@ def _load_cast_records() -> Dict[str, tuple]:
                         merged.append(name)
                 cast = merged
             if cast:
-                source = str(metadata.get("cast_source") or "metadata").strip() or "metadata"
-                if extra and source == "metadata":
-                    source = "metadata+speaker_lines"
+                source = normalize_cast_source(metadata.get("cast_source"), title)
             else:
                 cast = _cast_from_infobox_text(item.get("text") or "")
                 source = "infobox_text" if cast else ""
@@ -1436,7 +1472,12 @@ def apply_cast_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
     - activity：活动主页的 event-level cast（cast_scope=activity）；
     - 单幕条目优先匹配具体任务名，避免整活动 cast 误当本幕权威。
     """
+    _CAST_SOURCE_WARNINGS.clear()
     records = _load_cast_records()
+    source_warnings = list(_CAST_SOURCE_WARNINGS)
+    if source_warnings:
+        for warning in source_warnings:
+            print(f"[cast_source][告警] {warning}")
     stats = {
         "task_total": 0,
         "activity_total": 0,
@@ -1448,6 +1489,7 @@ def apply_cast_to_graph(graph: WikiEntryGraph) -> Dict[str, int]:
         "metadata+speaker_lines": 0,
         "activity_inherited": 0,
         "empty": 0,
+        "source_warnings": source_warnings,
     }
     for entry in graph.entries.values():
         if entry.entry_type not in ("task", "activity"):
@@ -1700,6 +1742,32 @@ def apply_gap_marker_fallback(graph: WikiEntryGraph) -> Dict[str, int]:
             continue
         entry.cast_absent = True
         stats["cast_absent_fallback"] += 1
+    return stats
+
+
+def validate_cast_source_whitelist(graph: WikiEntryGraph) -> Dict[str, Any]:
+    """扫描 task/activity 的 cast_source，白名单外形态告警并归一。
+
+    - 返回 {"checked": N, "invalid": [...], "normalized": M}；
+    - 新形态不会静默写入：打印告警并归一为合法值。
+    """
+    stats: Dict[str, Any] = {"checked": 0, "invalid": [], "normalized": 0}
+    for entry in graph.entries.values():
+        if entry.entry_type not in ("task", "activity"):
+            continue
+        if not entry.cast:
+            continue
+        source = str(entry.cast_source or "")
+        stats["checked"] += 1
+        if source in CAST_SOURCE_WHITELIST:
+            continue
+        normalized = normalize_cast_source(source, entry.title)
+        stats["invalid"].append(
+            {"entry_id": entry.entry_id, "title": entry.title, "cast_source": source}
+        )
+        entry.cast_source = normalized
+        stats["normalized"] += 1
+        print(f"[cast_source][告警] {entry.title}: {source} -> {normalized}")
     return stats
 
 
@@ -1999,6 +2067,7 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
     cast_absent_stats = apply_cast_absent_to_graph(graph)
     entry_kind_coverage = apply_entry_kind_coverage(graph)
     gap_marker_stats = apply_gap_marker_fallback(graph)
+    cast_source_validation = validate_cast_source_whitelist(graph)
     graph.meta = {
         "built_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "entry_count": len(graph.entries),
@@ -2012,6 +2081,7 @@ def build_full_graph(wiki_raw_dir: Path = WIKI_RAW_DIR) -> WikiEntryGraph:
         "story_placeholder": placeholder_stats,
         "cast_absent": cast_absent_stats,
         "gap_marker_fallback": gap_marker_stats,
+        "cast_source_validation": cast_source_validation,
         "dirty_links": [],
     }
     return graph
