@@ -4436,39 +4436,34 @@ _CAST_ROSTER_RE = re.compile(r"出场人物表（\d+\s*人）：(.+)")
 _LIST_ITEM_RE = re.compile(r"^\s*\d+\.\s*\[[^\]]+\]\s*([^（(]+)")
 
 
-def _deterministic_list_block(messages, answer: str) -> str:
-    """交集（两人共同出场）与任务→角色名单：工具返回的结论用代码直出。
+def _list_block_from_text(text: str, answer: str) -> str:
+    """从工具返回汇总文本（execution_facts）里取名单类结论块；仅在模型漏项时返回非空。
 
-    只在模型**漏项**时注入（避免重复展示）：
-    - 任务→角色：校验权威名单里的**每个角色名**是否都出现在回答里；
-    - 交集：校验每条命中的**任务标题**是否都出现在回答里。
-    任一缺失 -> 直接拼接工具结论区，模型不再有删减机会（实测漏过《人前人后》的菲尔戈黛特）。
+    为什么用 execution_facts 而不是 messages：本项目把工具输出汇总进 execution_facts
+    （回答提示词 = execution_facts + 系统提示），而 messages 里未必带得全 ——
+    2026-10-12 实测扫 messages 时短路不触发（耗时 65s、名单仍缺人）。
+    - 任务→角色：校验权威名单里**每个角色名**是否都出现在回答里
+    - 交集：校验每条命中的**任务标题**是否都出现在回答里
     """
-    for msg in reversed(list(messages or [])):
-        if type(msg).__name__ != "ToolMessage":
-            continue
-        text = str(getattr(msg, "content", "") or "")
-        if _LIST_TOOL_HEADER not in text:
-            continue
-        if not ("共同出场" in text or "某任务有哪些出场角色" in text):
-            continue
-        head = text.strip().splitlines()[0].strip()
-        part = text.split("【结论区", 1)[1] if "【结论区" in text else text
-        strong = part.split("【线索区", 1)[0].split("覆盖度：", 1)[0].strip()
-        block = f"{head}\n\n{strong}"
-        roster = _CAST_ROSTER_RE.search(strong)
-        if roster:
-            names = [n.strip() for n in roster.group(1).split("、") if n.strip()]
-            missing = [n for n in names if n not in (answer or "")]
-        else:
-            titles = [m.group(1).strip() for m in _LIST_ITEM_RE.finditer(strong)]
-            missing = [t for t in titles if t and t not in (answer or "")]
-        if missing:
-            print(f"  -> [名单直出] 模型漏项 {missing[:4]}（共 {len(missing)}），改用工具结论原文")
-            return block + "\n"
+    if _LIST_TOOL_HEADER not in (text or ""):
         return ""
+    if not ("共同出场" in text or "某任务有哪些出场角色" in text):
+        return ""
+    head = text.strip().splitlines()[0].strip()
+    part = text.split("【结论区", 1)[1] if "【结论区" in text else text
+    strong = part.split("【线索区", 1)[0].split("覆盖度：", 1)[0].strip()
+    block = f"{head}\n\n{strong}"
+    roster = _CAST_ROSTER_RE.search(strong)
+    if roster:
+        names = [n.strip() for n in roster.group(1).split("、") if n.strip()]
+        missing = [n for n in names if n not in (answer or "")]
+    else:
+        titles = [x.group(1).strip() for x in _LIST_ITEM_RE.finditer(strong)]
+        missing = [t for t in titles if t and t not in (answer or "")]
+    if missing:
+        print(f"  -> [名单直出] 模型漏项 {missing[:4]}（共 {len(missing)}），改用工具结论原文")
+        return block + "\n"
     return ""
-
 
 def _looks_like_not_found_answer(content: str) -> bool:
     """判断 LLM 输出是否为“未收录”类短路答复（只对短文判定）。"""
@@ -4951,11 +4946,6 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 名单类短路：本轮工具已给出交集 / 任务→角色名单时，直接以结构化结论作答，不调用 LLM。
     # 理由：① 名单是结构化数据，不该交给模型誊写（实测删掉过《人前人后》的菲尔戈黛特）；
     #       ② 省一次大模型调用，回答更快。
-    _list_block = _deterministic_list_block(messages, "")
-    if _list_block:
-        print("  -> [名单短路] 直接返回工具结论区块（跳过 LLM）")
-        return {"messages": messages,
-                "final_response": _list_block + "\n（以上名单由知识库结构化数据直接给出。）"}
     execution_plan = state.get("execution_plan", "")
     original_query = state.get("user_query", "")
     alias_notes = state.get("alias_notes", "")
@@ -5140,6 +5130,15 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 如果本轮只调用了结构化元数据工具，直接复述工具结果，不经过回答 LLM，
     # 防止模型在“作者未提及”之外联想稻妻/雷神/白狐等不存在的信息。
     direct_answer = _get_direct_metadata_answer(messages, original_query)
+    if not direct_answer:
+        # 名单类（交集 / 任务→角色）：结构化结论用代码直出，杜绝模型删减
+        # （实测模型把《人前人后》权威表 8 人总结成 7 人，漏掉菲尔戈黛特）。
+        _tool_text = "\n".join(str(getattr(m, "content", "") or "")
+                              for m in messages if type(m).__name__ == "ToolMessage")
+        _roster_block = _list_block_from_text(_tool_text, "")
+        if _roster_block:
+            print("  -> [代码短路] 名单直出（交集/任务→角色），跳过 LLM")
+            direct_answer = _roster_block + "\n（以上名单由知识库结构化数据直接给出。）"
     if direct_answer:
         print("  -> [代码短路] 元数据直答路径，跳过 LLM")
         return {"final_response": direct_answer, "messages": messages}
@@ -5332,7 +5331,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             "run_id": state.get("run_id"),
         },
     )
-    list_block = _deterministic_list_block(answer_messages, content)
+    list_block = _list_block_from_text(execution_facts, content)
     if list_block:
         content = list_block + content
     return {

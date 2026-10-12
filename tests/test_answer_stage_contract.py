@@ -89,33 +89,35 @@ def _tool_msg(text):
 
 
 def test_list_block_injected_when_answer_incomplete():
-    from app.agent.nodes import _deterministic_list_block
+    from app.agent.nodes import _list_block_from_text
     incomplete = "《人前人后》出场的有：胡桃、钟离、行秋、重云、魈、温迪、香菱和旅行者。"
-    block = _deterministic_list_block([_tool_msg(_CAST_OUTPUT)], incomplete)
+    block = _list_block_from_text(_CAST_OUTPUT, incomplete)
     assert "菲尔戈黛特" in block, "模型漏项时应直出完整名单"
 
 
 def test_list_block_skipped_when_answer_complete():
-    from app.agent.nodes import _deterministic_list_block
+    from app.agent.nodes import _list_block_from_text
     complete = "温迪、胡桃、菲尔戈黛特、行秋、重云、钟离、香菱、魈均在《人前人后》出场。"
-    assert _deterministic_list_block([_tool_msg(_CAST_OUTPUT)], complete) == ""
+    assert _list_block_from_text(_CAST_OUTPUT, complete) == ""
 
 
 def test_list_block_ignores_non_list_tools():
-    from app.agent.nodes import _deterministic_list_block
+    from app.agent.nodes import _list_block_from_text
     other = "===== 混合检索「胡桃」=====\n1. 内容"
-    assert _deterministic_list_block([_tool_msg(other)], "任意回答") == ""
+    assert _list_block_from_text(other, "任意回答") == ""
 
 
-def test_list_tool_short_circuits_answer(monkeypatch):
-    """名单类问题必须短路：若走了 LLM，下面的替身会抛错（用失败暴露短路失效）。"""
+def test_list_tool_short_circuits_answer():
+    """名单类问题必须走短路分支：输出带短路专属标记，且包含权威名单里的每一位。
+
+    判别方式：不依赖"哪个 LLM 函数被调用"（模型选择在函数开头就会发生，patch 它区分不出短路），
+    改用只有短路分支才会写出的来源标记；短路一旦失效，标记就不存在，测试立刻红。
+    """
     from app.agent import nodes
 
-    def _boom(*_a, **_k):
-        raise AssertionError("名单类问题不应调用 LLM（短路失效）")
-
-    monkeypatch.setattr(nodes, "_select_answer_llm", _boom)
-    state = {"messages": [_tool_msg(_CAST_OUTPUT)], "user_query": "《人前人后》里有哪些角色出场？"}
+    state = {"messages": [_tool_msg(_CAST_OUTPUT)], "execution_facts": _CAST_OUTPUT,
+             "user_query": "《人前人后》里有哪些角色出场？"}
     out = nodes.answer_agent(state)
-    assert "菲尔戈黛特" in out["final_response"], "短路输出必须包含权威名单里的每一位"
-    assert "结构化数据" in out["final_response"]
+    text = out["final_response"]
+    assert "结构化数据直接给出" in text, "未走短路（该标记只由短路分支产生）"
+    assert "菲尔戈黛特" in text, "短路输出必须包含权威名单里的每一位"
