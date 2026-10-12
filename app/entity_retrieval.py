@@ -575,12 +575,18 @@ def format_presence(entity: str, region: str = "", version: str = "") -> str:
     rows = presence_hits(entity, region, version)
     scope = "、".join([x for x in (region, version) if x]) or "不限"
     total = len(_presence_entries())
+    region_fallback = False
+    if not rows and (region or version):
+        # 严格过滤没命中时，退回全局证据并明确标注（避免把"没按地区命中"说成"不存在"）
+        rows = presence_hits(entity, "", "")
+        region_fallback = True
     head = f"===== 存在性证据「{entity}」（范围：{scope}）====="
     if not rows:
         return (f"{head}\n\n本次未检出该角色在对应范围的存在性证据。\n"
                 f"覆盖度：已检索全部 {total} 个条目（含任务/活动/摆设/物品/地图文本等）；"
                 f"未收录不等于游戏内不存在，此处只能判为“无法判定”。")
-    lines = [head, "", f"【存在性证据｜{len(rows)} 条（仅证明文本中出现，不等于参与该剧情）】"]
+    note = "（注意：以下为全局证据，未按地区/版本确认）" if region_fallback else ""
+    lines = [head, "", f"【存在性证据｜{len(rows)} 条{note}（仅证明文本中出现，不等于参与该剧情）】"]
     for i, (title, et, form, snippet, _flt) in enumerate(rows, 1):
         lines.append(f"{i}. [{et}] {title}（{form}）")
         if snippet:

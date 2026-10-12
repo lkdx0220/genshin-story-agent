@@ -49,7 +49,7 @@ def _validate(entity: str, relation: str, target: str, task_type: str, min_level
         pass  # 任务→角色：只需要 target（任务名），不需要 entity
     elif not str(entity or "").strip():
         raise ValueError("entity 不能为空")
-    if relation not in ENTITY_RELATIONS and relation != "cast_of_task":
+    if relation not in ENTITY_RELATIONS and relation not in ("cast_of_task", "presence"):
         raise ValueError(f"relation 只能是 {list(ENTITY_RELATIONS)}，收到 {relation!r}")
     if relation in ("co_occur", "cast_of_task") and not str(target or "").strip():
         raise ValueError("relation=co_occur/cast_of_task 时必须提供 target（第二个人物名 / 任务名）")
@@ -100,6 +100,9 @@ def entity_query(entity: str, relation: str = "participated", target: str = "",
     返回：已渲染文本（结论区 / 线索区 / 覆盖度声明）。
     """
     _validate(entity, relation, target, task_type, min_level)
+    if relation == "presence":
+        from app.entity_retrieval import format_presence
+        return format_presence(entity, region=str(target or ""))
     ttype = task_type or None
     min_level_arg = min_level or None
     if int(top_k) <= 0:

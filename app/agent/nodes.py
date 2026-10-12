@@ -988,7 +988,8 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # ---- 名单类问题：代码直查权威 cast，跳过规划与回答 LLM（宪法 P5 确定性直出）----
     # 形状与上面的 P16 前置拦截一致（messages 必须为空，answer_agent 的 existing_final 才会早退）。
     _relation_answer = (_deterministic_roster_answer(original_query)
-                        or _deterministic_cooccur_answer(original_query))
+                        or _deterministic_cooccur_answer(original_query)
+                        or _deterministic_presence_answer(original_query))
     if _relation_answer:
         print("  -> [关系预取] 跳过规划与回答 LLM，直接返回结构化结论")
         trace_emit(
@@ -4534,7 +4535,9 @@ def _extract_entity_names(query: str, limit: int = 2) -> list:
     registry = next((x for x in (reg if isinstance(reg, tuple) else (reg,)) if isinstance(x, dict)), {})
     q = query or ""
     hits = [str(name) for name in registry if name and str(name) in q]
-    hits.sort(key=len, reverse=True)
+    # 按「出现位置」优先，长度只作同位置次级排序 —— 实测按长度会选到更长的无关实体
+    # （"瓦蕾莎在…去过璃月吗" 会误取同长度的「海灯节」）
+    hits.sort(key=lambda nm: (q.find(nm), -len(nm)))
     chosen: list = []
     for name in hits:
         if any(name in c for c in chosen):
@@ -4563,6 +4566,42 @@ def _deterministic_cooccur_answer(query: str) -> str:
         return ""
     print(f"  -> [交集预取] 代码直算「{a} ∩ {b}」，跳过 LLM")
     return text.rstrip() + "\n\n（以上交集由知识库结构化数据直接给出。）"
+
+
+# ====== 存在性（地区/时段）的确定性预取 ======
+_PRESENCE_QUESTION_RE = re.compile(
+    r"(去过|到过|来过|到访|来访|有没有去|是否去|是否到|是否来|去没去|到没到)")
+_REGION_NAMES = ("璃月", "蒙德", "稻妻", "须弥", "枫丹", "纳塔", "至冬",
+                 "坎瑞亚", "天空岛", "渊下宫", "层岩巨渊")
+
+
+def _deterministic_presence_answer(query: str) -> str:
+    """地区/时段存在性：代码直查全量条目，输出存在性证据（不判剧情参与），不调 LLM。"""
+    if not _PRESENCE_QUESTION_RE.search(query or ""):
+        return ""
+    names = _extract_entity_names(query, 1)
+    # 问句首部的 2~6 个汉字（其后紧跟 在/去/到/来/有）：既覆盖未进注册表的新角色，
+    # 也能把注册表里的短名补全（实测注册表只有「瓦蕾」，而问句里是「瓦蕾莎」）
+    m = re.match(r"\s*([\u4e00-\u9fff·]{2,6}?)(?:在|去|到|来|有)", query or "")
+    if m:
+        head = m.group(1)
+        if not names:
+            names = [head]
+        elif head and len(head) > len(names[0]) and names[0] in head:
+            names = [head]
+    if not names:
+        return ""
+    region = next((r for r in _REGION_NAMES if r in (query or "")), "")
+    try:
+        from app.entity_retrieval import format_presence
+        text = format_presence(names[0], region=region)
+    except Exception as exc:
+        print(f"  -> [存在性预取] 失败: {type(exc).__name__}")
+        return ""
+    if "存在性证据" not in text and "无法判定" not in text:
+        return ""
+    print(f"  -> [存在性预取] 代码直查「{names[0]}」{('@' + region) if region else ''}，跳过 LLM")
+    return text.rstrip() + "\n\n（存在性证据由知识库结构化数据直接给出；它不等于剧情参与。）"
 
 
 def _looks_like_not_found_answer(content: str) -> bool:
