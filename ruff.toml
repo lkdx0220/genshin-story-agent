@@ -4,6 +4,7 @@
 target-version = "py313"
 line-length = 120
 
+extend-exclude = [".specify", ".claude"]  # Spec Kit 脚手架：模板与命令说明，非项目代码
 [lint]
 select = ["F", "B"]
 
