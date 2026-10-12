@@ -104,6 +104,16 @@ def _base_name(name: str) -> str:
     return cleaned.split("·")[0].strip() if cleaned else cleaned
 
 
+def _graph_cast_is_authoritative(entry: dict) -> bool:
+    """只有 cast_source == "metadata"（页面信息框字段）才当权威表。
+
+    cast_source == "speaker_lines" 是知识库侧由正文台词推定的 cast：实测存在把"被转述提及"
+    误判为台词的个案（如「往生堂三日无主 第二回」把行秋算进出场，而 wiki 出场人物表里没有他），
+    故这类不采信为权威，回退到本模块基于净化正文的分级（台词/动作/提及）。
+    """
+    return str(entry.get("cast_source")) == "metadata"
+
+
 def _task_type_of(entry: dict) -> str:
     for f in entry.get("filters") or []:
         if f.startswith("任务类型/"):
@@ -157,6 +167,26 @@ def _clean_cast_value(value: str) -> set:
             continue
         names.add(name)
     return names
+
+
+@lru_cache(maxsize=1)
+def graph_cast_map() -> Dict[str, frozenset]:
+    """title → cast，来源：词条图的**结构化 cast 字段**（知识库侧重建后的一手数据）。
+
+    优先于 metadata_cast_map / parse_cast：知识库侧已把出场人物表落成 cast + cast_source
+    （metadata=页面信息框字段，speaker_lines=由正文台词推定），本模块直接消费，不再自己抠文本。
+    """
+    by_id, _ = _graph_and_index()
+    out: Dict[str, frozenset] = {}
+    for entry in by_id.values():
+        cast = entry.get("cast")
+        if not isinstance(cast, list) or not cast:
+            continue
+        title = str(entry.get("title") or "")
+        names = frozenset(str(x).strip() for x in cast if str(x).strip())
+        if title and names:
+            out[title] = names
+    return out
 
 
 @lru_cache(maxsize=1)
@@ -361,7 +391,11 @@ def _collect_rows(name: str, task_type: Optional[str]) -> Tuple[str, List[Entity
         names = [base] + [v for v in info["variants"] if v]
         title = str(entry.get("title") or "")
         # 权威表优先取结构化元数据（更可靠），其次才是从页面信息框文本解析
-        cast = metadata_cast_map().get(title) or parse_cast(str(entry.get("full_text") or ""))
+        if entry.get("story_placeholder") is True or str(entry.get("entry_kind")) == "lore_item":
+            continue  # 占位页/非剧情条目：不参与关系判定
+        graph_cast = graph_cast_map().get(title)
+        authoritative = graph_cast if _graph_cast_is_authoritative(entry) else None
+        cast = authoritative or metadata_cast_map().get(title) or parse_cast(str(entry.get("full_text") or ""))
         if cast:
             cast_tasks += 1
         level, evidence, count, cast_size = grade_body(entry, names, cast)
