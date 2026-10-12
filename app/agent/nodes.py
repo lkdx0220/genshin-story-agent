@@ -4948,6 +4948,14 @@ def _citation_retry_once(answer_messages, answer_llm, contexts, unverified, unve
 def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     """回答阶段：基于规划阶段的【执行报告】和工具返回结果，生成最终回答。不调用任何工具。"""
     messages = list(state.get("messages", []))
+    # 名单类短路：本轮工具已给出交集 / 任务→角色名单时，直接以结构化结论作答，不调用 LLM。
+    # 理由：① 名单是结构化数据，不该交给模型誊写（实测删掉过《人前人后》的菲尔戈黛特）；
+    #       ② 省一次大模型调用，回答更快。
+    _list_block = _deterministic_list_block(messages, "")
+    if _list_block:
+        print("  -> [名单短路] 直接返回工具结论区块（跳过 LLM）")
+        return {"messages": messages,
+                "final_response": _list_block + "\n（以上名单由知识库结构化数据直接给出。）"}
     execution_plan = state.get("execution_plan", "")
     original_query = state.get("user_query", "")
     alias_notes = state.get("alias_notes", "")

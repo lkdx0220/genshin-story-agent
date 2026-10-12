@@ -105,3 +105,17 @@ def test_list_block_ignores_non_list_tools():
     from app.agent.nodes import _deterministic_list_block
     other = "===== 混合检索「胡桃」=====\n1. 内容"
     assert _deterministic_list_block([_tool_msg(other)], "任意回答") == ""
+
+
+def test_list_tool_short_circuits_answer(monkeypatch):
+    """名单类问题必须短路：若走了 LLM，下面的替身会抛错（用失败暴露短路失效）。"""
+    from app.agent import nodes
+
+    def _boom(*_a, **_k):
+        raise AssertionError("名单类问题不应调用 LLM（短路失效）")
+
+    monkeypatch.setattr(nodes, "_select_answer_llm", _boom)
+    state = {"messages": [_tool_msg(_CAST_OUTPUT)], "user_query": "《人前人后》里有哪些角色出场？"}
+    out = nodes.answer_agent(state)
+    assert "菲尔戈黛特" in out["final_response"], "短路输出必须包含权威名单里的每一位"
+    assert "结构化数据" in out["final_response"]
