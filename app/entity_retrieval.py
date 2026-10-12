@@ -461,3 +461,41 @@ def format_entity_docs(result: EntityDocsResult) -> str:
         lines.append(f"   证据：{hit.evidence[:170]}")
     lines.append(result.coverage_note)
     return "\n".join(lines)
+
+
+def _filters_of(entry: dict) -> dict:
+    """把 filters（任务类型/任务区域/版本号）解析成字典。"""
+    out = {}
+    for f in entry.get("filters") or []:
+        if "/" in f:
+            k, v = f.split("/", 1)
+            out.setdefault(k, v)
+    return out
+
+
+def task_cast(task_title: str) -> EntityDocsResult:
+    """任务 → 角色：返回该任务的出场人物（权威表优先），供正向查询使用。"""
+    by_id, _ = _graph_and_index()
+    hit = None
+    for entry in by_id.values():
+        if entry.get("entry_type") != "task":
+            continue
+        if str(entry.get("title") or "") == task_title:
+            hit = entry
+            break
+    if hit is None:
+        loose = [e for e in by_id.values()
+                 if e.get("entry_type") == "task" and task_title and task_title in str(e.get("title") or "")]
+        hit = loose[0] if loose else None
+    display = str(hit.get("title") or task_title) if hit else task_title
+    rows = []
+    if hit is not None:
+        cast = graph_cast_map().get(display) or frozenset()
+        source = str(hit.get("cast_source") or "")
+        level = LEVEL_CAST if source == "metadata" else LEVEL_WEAK
+        for name in sorted(cast):
+            rows.append(EntityHit(title=display, task_type=_task_type_of(hit) or "?", count=0,
+                                  level=level, evidence=f"出场人物表（{len(cast)} 人）：{'、'.join(sorted(cast)[:20])}",
+                                  cast_size=len(cast)))
+    result = EntityDocsResult("cast_of_task", display, rows, len(rows), 0, 1 if hit else 0, 1 if rows else 0)
+    return result

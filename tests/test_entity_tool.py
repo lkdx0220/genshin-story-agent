@@ -79,3 +79,15 @@ def test_task_type_filter(tool):
 def test_description_exists(tool):
     assert "出场人物表" in tool.ENTITY_QUERY_DESCRIPTION
     assert "覆盖度" in tool.ENTITY_QUERY_DESCRIPTION
+
+
+def test_cast_of_task(tool):
+    """任务 → 角色（正跳）：给任务名返回该任务出场人物。"""
+    out = tool.entity_query("", relation="cast_of_task", target="人前人后")
+    assert "人前人后" in out
+    assert "胡桃" in out
+
+
+def test_cast_of_task_requires_target(tool):
+    with pytest.raises(ValueError):
+        tool.entity_query("", relation="cast_of_task")

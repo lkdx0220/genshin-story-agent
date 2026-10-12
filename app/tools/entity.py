@@ -18,6 +18,7 @@ from langchain_core.tools import tool
 
 from app.entity_retrieval import (
     LEVEL_ACTION,
+    task_cast,
     LEVEL_CAST,
     LEVEL_LINE,
     LEVEL_ORDER,
@@ -41,17 +42,20 @@ _STRONG_FLOOR = LEVEL_ORDER[LEVEL_LINE]  # 强 = 3（出场人物表 / 有台词
 _RELATION_LABELS = {
     "participated": "参与/出现在哪些剧情",
     "co_occur": "两人共同出场",
+    "cast_of_task": "某任务有哪些出场角色",
 }
 
 
 def _validate(entity: str, relation: str, target: str, task_type: str, min_level: str) -> None:
     """参数校验：非法取值直接报错（不静默降级，便于 3b 的工具调用被模型纠正）。"""
-    if not str(entity or "").strip():
+    if relation == "cast_of_task":
+        pass  # 任务→角色：只需要 target（任务名），不需要 entity
+    elif not str(entity or "").strip():
         raise ValueError("entity 不能为空")
-    if relation not in ENTITY_RELATIONS:
+    if relation not in ENTITY_RELATIONS and relation != "cast_of_task":
         raise ValueError(f"relation 只能是 {list(ENTITY_RELATIONS)}，收到 {relation!r}")
-    if relation == "co_occur" and not str(target or "").strip():
-        raise ValueError("relation=co_occur 时必须提供 target（第二个人物名）")
+    if relation in ("co_occur", "cast_of_task") and not str(target or "").strip():
+        raise ValueError("relation=co_occur/cast_of_task 时必须提供 target（第二个人物名 / 任务名）")
     if task_type and task_type not in TASK_TYPES:
         raise ValueError(f"task_type 取值非法：{task_type!r}")
     if min_level and min_level not in EVIDENCE_LEVELS:
@@ -103,7 +107,9 @@ def entity_query(entity: str, relation: str = "participated", target: str = "",
     min_level_arg = min_level or None
     if int(top_k) <= 0:
         raise ValueError("top_k 必须为正整数")
-    if relation == "co_occur":
+    if relation == "cast_of_task":
+        result = task_cast(target)
+    elif relation == "co_occur":
         result = entity_intersect(entity, target, task_type=ttype, top_k=int(top_k))
     else:
         result = entity_docs(entity, task_type=ttype, min_level=min_level_arg, top_k=int(top_k))

@@ -475,7 +475,13 @@ def count_character_lines(character_name: str, quest_name: str = "") -> str:
                 continue
             if quest_name and quest_name not in title:
                 continue
-            text = q.get("text") or ""
+            # 正文净化：剔除任务概述/前情提要/词条元数据（写的是上一章剧情，不能算本任务台词）
+            from app.entity_retrieval import graph_cast_map, story_body
+            text = story_body({"full_text": q.get("text") or ""})
+            # 权威 cast 过滤：有出场人物表且表中无该角色 → 该任务的台词不计
+            cast = graph_cast_map().get(title)
+            if cast and not any(a in cast for a in aliases):
+                continue
             total_lines = 0
             for alias in aliases:
                 lines = re.findall(rf"^\*{re.escape(alias)}[：:(]", text, re.MULTILINE)
