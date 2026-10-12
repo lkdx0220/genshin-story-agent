@@ -5162,7 +5162,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         system_content += alias_notes
 
     # 构建回答阶段的上下文：系统提示 + 执行报告 + 所有工具返回 + 用户原始问题
-        answer_messages: List[BaseMessage] = [SystemMessage(content=system_content)]
+    answer_messages: List[BaseMessage] = [SystemMessage(content=system_content)]
 
     # 注入规划阶段的执行报告作为上下文
     if execution_plan:

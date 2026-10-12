@@ -493,9 +493,11 @@ def task_cast(task_title: str) -> EntityDocsResult:
         cast = graph_cast_map().get(display) or frozenset()
         source = str(hit.get("cast_source") or "")
         level = LEVEL_CAST if source == "metadata" else LEVEL_WEAK
-        for name in sorted(cast):
-            rows.append(EntityHit(title=display, task_type=_task_type_of(hit) or "?", count=0,
-                                  level=level, evidence=f"出场人物表（{len(cast)} 人）：{'、'.join(sorted(cast)[:20])}",
+        if cast:
+            # 单行输出：任务→角色 的答案是"名单"，逐人成行会得到 N 条重复记录（无名字，信息量零）
+            rows.append(EntityHit(title=display, task_type=_task_type_of(hit) or "?", count=len(cast),
+                                  level=level,
+                                  evidence=f"出场人物表（{len(cast)} 人）：{'、'.join(sorted(cast))}",
                                   cast_size=len(cast)))
     result = EntityDocsResult("cast_of_task", display, rows, len(rows), 0, 1 if hit else 0, 1 if rows else 0)
     return result

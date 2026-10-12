@@ -12,17 +12,14 @@
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Optional
 
 from langchain_core.tools import tool
 
 from app.entity_retrieval import (
-    LEVEL_ACTION,
     task_cast,
-    LEVEL_CAST,
     LEVEL_LINE,
     LEVEL_ORDER,
-    LEVEL_WEAK,
     EntityDocsResult,
     EntityHit,
     entity_docs,
