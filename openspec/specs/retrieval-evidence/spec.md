@@ -4,9 +4,13 @@
 
 ## Purpose
 
+> **实现锚点约定**：每条 Requirement MUST 写明实现锚点（`文件::符号`），供 `cq spec-rebuild` 做符号级对账；锚点必须指向真实存在的符号。
+
 检索与证据层负责从知识库（词条图、任务库、实体提及索引、向量库）中检索剧情事实，并以分级证据输出；关系类结论（出场名单、共同任务）以确定性方式交付。
 
 ### Requirement: 名单类问题确定性直出
+
+实现锚点：`app/agent/nodes.py::_deterministic_roster_answer`、`plan_agent`；`app/entity_retrieval.py::task_cast`；`app/tools/entity.py::entity_query`
 
 系统 SHALL 在规划阶段（调用任何 LLM 之前）对"某任务有哪些角色出场"类问法做确定性预取：从问题中匹配任务标题（任务标题注册表最长匹配），直接调用 `entity_query(relation="cast_of_task")` 查权威出场人物表，渲染后作为 `final_response` 直接返回，并追加来源标记「以上名单由知识库结构化数据直接给出」。
 
@@ -27,6 +31,8 @@
 
 ### Requirement: 关系查询的证据分级
 
+实现锚点：`app/entity_retrieval.py::grade_body`、`entity_docs`、`format_entity_docs`
+
 `entity_query` SHALL 对每条命中标注证据等级：强（出场人物表或净化正文台词）、中（有动作）、弱（仅文字提及）。只有强证据可以进入【结论区】；中/弱只能进入【线索区】并标注「不可当作出场结论」。
 
 #### Scenario: 弱证据隔离
@@ -35,6 +41,8 @@
 - **THEN** 该命中出现在线索区，不出现在结论区。
 
 ### Requirement: 来源分级
+
+实现锚点：`app/entity_retrieval.py::_graph_cast_is_authoritative`、`_is_authoritative_source`、`graph_cast_map`、`metadata_cast_map`
 
 关系查询 SHALL 区分 `cast_source`：`metadata`（页面信息框字段，权威）、`speaker_lines`（正文台词推定，非权威）、`activity_inherited`（系列活动继承，非权威）。只有 `metadata` 来源可以独立支撑否定性结论。
 
@@ -45,6 +53,8 @@
 
 ### Requirement: 净化正文优先
 
+实现锚点：`app/entity_retrieval.py::story_body`、`_META_LINE_RE`
+
 一切台词计数与证据摘录 SHALL 取自 `story_body()` 处理后的正文（剔除任务概述、前情提要、词条元数据）。正文净化后提及数为 0 且不在权威 cast 中的条目 SHALL 被丢弃。
 
 #### Scenario: 前情提要不计为证据
@@ -54,6 +64,8 @@
 
 ### Requirement: 否定与不确定的覆盖度声明
 
+实现锚点：`app/entity_retrieval.py::format_entity_docs`、`format_presence`、`format_coverage`
+
 任何"未找到/未收录"结论 MUST 附带覆盖度声明：比对的任务条目总数、其中带权威出场人物表的条数；并 MUST 声明"未收录不等于游戏内不存在"。
 
 #### Scenario: 否定附带覆盖度
@@ -62,6 +74,8 @@
 - **THEN** 回答包含覆盖度声明且不含无依据的存在性推断。
 
 ### Requirement: 交集（共同出场）确定性直出
+
+实现锚点：`app/agent/nodes.py::_deterministic_cooccur_answer`、`_extract_entity_names`；`app/entity_retrieval.py::entity_intersect`
 
 系统 SHALL 在规划阶段（调用任何 LLM 之前）对交集类问法做确定性预取：命中问法（一起出现 / 共同出场 / 共同剧情 / 都在场 / 一起出场 / 同场出现 / 同场）后，从问题中提取前两个实体名（实体注册表最长匹配 + 包含去重），代码直接调用 `entity_query(relation="co_occur", target=另一人)` 计算交集并渲染，作为 `final_response` 返回，并追加来源标记「以上交集由知识库结构化数据直接给出」。交集 MUST 只包含双方都有强证据（出场人物表或正文台词）的任务。
 
@@ -82,6 +96,8 @@
 
 ### Requirement: 地区/时段存在性（presence）查询
 
+实现锚点：`app/entity_retrieval.py::presence_hits`、`format_presence`、`_presence_entries`
+
 系统 SHALL 提供"角色在某地区/时段是否存在文本证据"的查询，与"是否参与某任务剧情"严格分离：候选范围覆盖全部条目类型（task / activity / housing / item / map_text / lore / book），直接在全量条目文本上匹配（不依赖提及索引），每条标注证据形态，支持地区与版本过滤，并附覆盖度声明与"未收录不等于不存在"的提示。地区/版本严格过滤无命中时，SHALL 回退为全局证据并明确标注「未按地区确认」。
 
 #### Scenario: 彩蛋/留影证明到过该地区
@@ -96,6 +112,8 @@
 
 ### Requirement: presence 接入聊天链路
 
+实现锚点：`app/agent/nodes.py::_deterministic_presence_answer`
+
 系统 SHALL 让存在性查询从聊天入口可直触：`entity_query` 支持 `relation="presence"`（`target` 传地区名）；`plan_agent` 在调用任何 LLM 之前做存在性预取（问法：去过/到过/来过/到访/来访/有没有去/是否去/是否到/是否来/去没去/到没到），提取实体名与地区名后代码直出。实体名提取 SHALL 按出现位置优先，并在注册表只有短名时用问句首部汉字补全（实测：注册表只有「瓦蕾」，问句里是「瓦蕾莎」）。预取顺序 SHALL 为「名单 → 交集 → 存在性」。
 
 #### Scenario: 线上端到端
@@ -109,6 +127,8 @@
 - **THEN** 分别走各自路径（名单 / 交集 / 正常规划与回答）。
 
 ### Requirement: 覆盖度查询与双口径展示
+
+实现锚点：`app/entity_retrieval.py::format_coverage`、`_coverage_data`；`app/agent/nodes.py::_deterministic_coverage_answer`
 
 系统 SHALL 提供分类覆盖度的确定性查询（数据源 `kb_vectors/cast_coverage.json`）：分类同时存在 `raw` 与 `narrative_only` 时 MUST 并列展示并标注"原始口径上限受页面性质限制"；只有 `cast_source=metadata` 计入权威覆盖分子；未知分类 MUST 如实列出可用分类、MUST NOT 编造数字；输出 MUST 附数据生成时间。
 
@@ -164,6 +184,8 @@
    下游对未归一的别名按普通字符串匹配处理（可能多命中，属可接受行为）。
 
 ### Requirement（归档自 change 005）：来源分级的复合值判定
+
+实现锚点：`app/entity_retrieval.py::_is_authoritative_source`
 
 `cast_source` 的权威判定 SHALL 支持复合值：按 `+` 拆成成分后做**精确匹配**，含 `metadata` 成分即视为权威；
 `speaker_lines` / `activity_inherited` / `cast_absent` / `protagonist_only` 仍为非权威。
