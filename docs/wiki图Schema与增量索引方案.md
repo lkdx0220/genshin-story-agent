@@ -61,11 +61,11 @@ class WikiEntry:
     links: List[WikiLink]
 
     # v2 新增
-    source_channel: int = 0          # 来源 channel_id，0=手工补抓
-    fetched_at: str = ""             # 详情抓取时间
-    content_hash: str = ""           # page JSON 的 sha1，变更检测用
-    status: str = "ok"               # ok / new / updated / stale / dirty / error
-    updated_at: str = ""             # 最近一次写图时间
+    source_channel: int = 0  # 来源 channel_id，0=手工补抓
+    fetched_at: str = ""  # 详情抓取时间
+    content_hash: str = ""  # page JSON 的 sha1，变更检测用
+    status: str = "ok"  # ok / new / updated / stale / dirty / error
+    updated_at: str = ""  # 最近一次写图时间
 ```
 
 ### 3.2 WikiLink 增加字段（可选，向后兼容）
@@ -76,7 +76,7 @@ class WikiLink:
     target_id: str
     target_name: str
     context: str = ""
-    link_type: str = ""              # 从锚点/filters 推断：task/map_text/item/character/...
+    link_type: str = ""  # 从锚点/filters 推断：task/map_text/item/character/...
 ```
 
 - `link_type` 先不强制填，给“出边类型过滤”留位置；

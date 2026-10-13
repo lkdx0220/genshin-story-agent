@@ -29,7 +29,7 @@
 
 - **Release 页面**：https://github.com/lkdx0220/genshin-story-agent/releases/tag/kb-2026.09.10
 - **tag**：`kb-2026.09.10`
-- **对应 commit**：`9d5bfd5`
+- **对应 commit**：`c1de444`
 
 三个资产分别对应不同部分：
 
