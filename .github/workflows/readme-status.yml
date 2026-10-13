@@ -1,0 +1,33 @@
+# README 现状区块一致性（文档治理 · change 008）
+# - push/PR：当 README 或生成器/应用代码变化时校验（不一致即红）
+# - 每周定时巡检：数据侧更新后若 README 未刷新，也能被发现
+# - 与 spec-drift gate 并列；仍为"可见不阻断"（未设 branch protection）
+name: readme-status
+
+on:
+  push:
+    paths:
+      - "README.md"
+      - "scripts/gen_readme_status.py"
+      - "app/**"
+      - ".github/workflows/readme-status.yml"
+  pull_request:
+    paths:
+      - "README.md"
+      - "scripts/gen_readme_status.py"
+  schedule:
+    - cron: "0 1 * * 1"   # 每周一 01:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  readme-status:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Check README status block
+        run: python scripts/gen_readme_status.py --check
