@@ -73,3 +73,13 @@ audits/
 .coverage
 htmlcov/
 .coverage.*
+
+# ---- 临时/中间产物防呆（2026-10-13 审计后新增；只拦新增，不动已跟踪文件）----
+_tmp_*
+_deepsec_*
+_preprocess_log.txt
+*.before_fold
+_pytestwork/
+_uvcache/
+_cqtmp/
+_spec_tmp/
