@@ -89,3 +89,8 @@ _spec_tmp/
 .claude/
 openspec/changes/
 .specdrift.toml
+
+# ---- 本地工作流与开发工具产物（P9；2026-10-13 二次扫描补漏）----
+openspec/project.md
+.github/workflows/specdrift-gate.yml
+.cq/
