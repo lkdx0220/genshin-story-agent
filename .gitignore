@@ -94,3 +94,6 @@ openspec/changes/
 openspec/project.md
 .github/workflows/specdrift-gate.yml
 .cq/
+
+# ---- 构建中间物（P9：app/ 不引用，可重生成；2026-10-13 出库）----
+content_data/source_scope/
