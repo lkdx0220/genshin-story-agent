@@ -154,6 +154,10 @@ def build_block() -> str:
 
 
 def main() -> int:
+    # 真源缺失（公开仓不含 kb_vectors）时优雅跳过：README 现状区块只在本机/有数据的环境校验
+    if not (PROJ / "kb_vectors" / "wiki_entry_graph.json").exists():
+        print("kb_vectors 未就绪（公开仓不含向量/图产物）→ 跳过 README 现状区块校验")
+        return 0
     readme = PROJ / "README.md"
     text = readme.read_text(encoding="utf-8")
     block = build_block()

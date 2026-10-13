@@ -21,6 +21,8 @@
 | 最新 KB Release | kb-2026.09.10（发布资产是快照，非当前工作区状态） |
 <!-- /GENERATED:STATUS -->
 
+> 系统架构与能力现状总览（含四条确定性关系能力）：[`docs/项目架构总览-20261012.md`](docs/项目架构总览-20261012.md)
+
 ## 预构建知识库 Release
 
 如果你不想自己逐条抓取 Wiki、重建向量库，可以直接使用已经打包好的知识库快照：
@@ -501,19 +503,3 @@ Golden Test 评测体系位于父目录 `golden_test/` 下，含 25 道标准化
 ## License
 
 MIT
-
----
-
-## 规格驱动开发与防漂移（2026-10-12 新增）
-
-- **规格体系**：宪法（`.specify/memory/constitution.md`，P1–P7 产品不变量 + E1–E8 工程纪律）
-  + 现状规格（`openspec/specs/`，11 条 Requirement，每条带**实现锚点**）
-  + 变更提案与归档（`openspec/changes/`，已归档 001–007）。
-- **工作流**：先建提案 → 实施 → 端到端验证 → 归档并回写现状规格。
-- **防漂移闸门**：`cq spec-gate --mode=hard`（本地 + CI `.github/workflows/specdrift-gate.yml`，
-  仅 `app/**`、`prompts/**` 触发，先只报警不阻断）；豁免走 `cq waiver --ttl`；
-  例行对账 `cq spec-rebuild --from code --draft`。
-- **四条确定性关系能力**（代码直出、零 LLM 调用）：名单 2.2s、交集 1.7s、presence 6.1s、覆盖度 1.5s。
-
-详见 `docs/项目架构总览-20261012.md`。
-

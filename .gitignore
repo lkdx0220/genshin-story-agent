@@ -83,3 +83,9 @@ _pytestwork/
 _uvcache/
 _cqtmp/
 _spec_tmp/
+
+# ---- 工作流产物（P9 + 方案 B：公开仓只留 openspec/specs 现状规格）----
+.specify/
+.claude/
+openspec/changes/
+.specdrift.toml
