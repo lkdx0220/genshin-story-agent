@@ -19,6 +19,7 @@ END = "<!-- /GENERATED:STATUS -->"
 
 
 def _count_tools() -> tuple[int, int]:
+    # 返回 (注册总数, 隐藏数)；隐藏数解析不到时为 0，调用方据此避免输出假数字
     """工具总数与初始暴露数。
 
     主路径：AST 解析 app/tools/__init__.py 中名为 tools 的集合（本项目实际注册方式）；
@@ -51,7 +52,7 @@ def _count_tools() -> tuple[int, int]:
         for f in sorted((PROJ / "app" / "tools").glob("*.py")):
             total += len(re.findall(r"@tool\(", f.read_text(encoding="utf-8")))
     hidden = _count_hidden()
-    return total, max(total - hidden, 0)
+    return total, hidden
 
 
 def _count_hidden() -> int:
@@ -126,13 +127,14 @@ def _rate(d: dict) -> str:
 
 
 def build_block() -> str:
-    total, exposed = _count_tools()
+    total, hidden = _count_tools()
     kb = _kb_stats()
     cats = kb.get("cast") or {}
     act = (cats.get("活动剧情") or {})
     egg = (cats.get("彩蛋剧情") or {})
     rows = [
-        ("已注册工具", f"{total} / 初始暴露 {exposed}" if exposed else f"{total}（初始暴露数见 app/tools/__init__.py）"),
+        ("已注册工具",
+         f"{total} / 初始暴露 {total - hidden}" if hidden else f"{total}（初始暴露数见 app/tools/__init__.py）"),
         ("词条条目", f"{kb.get('entries', '—'):,}" if isinstance(kb.get("entries"), int) else "—"),
         ("提及索引实体（有提及）/ 提及对",
          f"{kb.get('entities', '—'):,} / {kb.get('mentions', '—'):,}"
