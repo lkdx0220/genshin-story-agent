@@ -434,6 +434,61 @@ lint SHALL 由规则文件的封闭 operation 驱动，不得使用 `eval/exec`�
 
 ---
 
+### Requirement: 玩家选择绑定
+
+实现锚点：`wiki/__schema__/entities/char_traveler.json`、`wiki/__schema__/entity.schema.json`、`ingest.py::schema_check`、`app/canonical.py::CanonicalIndex`
+
+系统 SHALL 将「空 / 荧」建模为请求级玩家选择，而非身份阶段。选择目录以实体 profile 为单一权威；页面若保留 `player_choice_options`，只能是可校验投影。
+
+#### Scenario: 明确选择
+
+- **WHEN** 请求明确指定 `player_choice=aether` 或 `lumine`
+- **THEN** 共同事实与对应分支事实适用，另一分支事实 excluded。
+
+#### Scenario: 裸名称不绑定
+
+- **WHEN** 查询只出现「空」「荧」「哥哥」「妹妹」等称谓，而没有明确选择表达
+- **THEN** 不自动判定玩家选择；只识别查询对象或返回条件候选。
+
+#### Scenario: 未指定选择
+
+- **WHEN** 查询未提供 `player_choice` 或为 null
+- **THEN** 返回共同事实与分支条件候选，并保留选择缺口；不得默认选一个，也不得合并两边事实。
+
+### Requirement: 玩家选择范围与证据
+
+实现锚点：`ingest.py::schema_check`、`lint/wiki-lint-rules.yaml`
+
+相关记录 SHALL 支持 `player_choice_scope`；`[]` 表示显式共同事实；缺失 scope 的旅行者旧记录 SHALL 视为未分类迁移缺口，不得默认共同。
+
+选择范围 SHALL 由可追溯的来源分支标记、明确条件语句或受验证的分支元数据支持；原文只出现名字不足以证明分支。
+
+#### Scenario: 缺 scope 不隐式共同
+
+- **WHEN** 旅行者记录缺少 `player_choice_scope`
+- **THEN** 报告未分类缺口；不得在两种选择下同时当作共同事实输出。
+
+#### Scenario: 非法选择
+
+- **WHEN** choice_id 未在目录中，或类型错误，或非选择实体被传入选择参数
+- **THEN** 入口校验失败或明确说明不适用；不得降级为未指定。
+
+### Requirement: 玩家选择运行时一致性
+
+实现锚点：`app/canonical.py::CanonicalIndex._player_choice_applies`、`app/tools/canonical.py::canonical_query_tool`
+
+选择适用性 SHALL 与版本、剧情位置、身份阶段按合取判定，并在普通 Fact、身份摘要、属性投影、冲突候选、observed_at 与 field_assertions 中保持一致。
+
+#### Scenario: 先分组后截断
+
+- **WHEN** 共同事实命中且 top_k 截断存在条件事实
+- **THEN** 选择缺口与冲突诊断 MUST 保留，不因 top_k 或文本去重被隐藏。
+
+#### Scenario: 分支值不合成共同冲突
+
+- **WHEN** 两个分支在同一语义键下值不同
+- **THEN** 未指定选择时按分支条件分组报告；只有共同事实与某一分支在同一重叠作用域内互斥时，才构成该分支冲突。
+
 ## 已知缺口汇总（Wave1 前必须处理）
 
 1. `schema_check` 已移除 Wanderer 硬编码并支持实体 profile；`ingest()`/CLI 已支持 `--character`、`--prompt`、`expected_entity_id` 绑定与 profile 驱动入口。非 Wanderer 角色仍需各自的 prompt/profile 与端到端内容测试。
@@ -445,4 +500,5 @@ lint SHALL 由规则文件的封闭 operation 驱动，不得使用 `eval/exec`�
 7. canonical 页与 Wave0 过程文件仍为本地-only；公开仓发布策略未定。
 8. 增量更新与级联脏标记未实现。
 9. B2 属性记录正在实现：首版 key 仅 element/weapon/nation；form_label/vision 与复杂主体边界归后续批次。
+10. B3 玩家选择绑定正在补齐规格：请求级 choice、分支来源证明、缺 scope 迁移与 L8 契约。
 9. `CanonicalIndex.search/answer` 已支持 snapshot，但自由文本工具 `canonical_query` 尚未由调用方传入 snapshot；项目级覆盖率阈值 80% 未达到（当前 15.9%）。
