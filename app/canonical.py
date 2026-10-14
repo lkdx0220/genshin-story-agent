@@ -387,6 +387,7 @@ class CanonicalPage:
                         player_choice_scope=list(scope),
                     )
             for name in allowed_names:
+                observed = list(name.get("observed_at") or identity.get("observed_at") or [])
                 self._add_fact(
                     self.facts,
                     "name",
@@ -394,6 +395,7 @@ class CanonicalPage:
                     name,
                     evidence=name.get("evidence") or [],
                     identity_ids=[identity.get("identity_version_id")],
+                    observed_at=observed,
                 )
 
     def _build_event_facts(self):
@@ -785,7 +787,7 @@ class CanonicalIndex:
                     continue
                 if not (fact.player_choice_scope or fact.player_choice_missing or fact.config_error):
                     continue
-                if not fact.player_choice_missing and snapshot.get("player_choice"):
+                if not fact.player_choice_missing and not fact.config_error and snapshot.get("player_choice"):
                     continue
                 identity_id = snapshot.get("identity_version_id")
                 if identity_id and fact.identity_version_ids and identity_id not in fact.identity_version_ids:

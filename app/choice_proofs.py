@@ -132,6 +132,34 @@ def _proof_signature(proofs: List[Dict[str, Any]]):
     )
 
 
+def _validate_proof_entry(
+    proof: Dict[str, Any], sources: Dict[str, Any], paragraphs: Dict[str, Any], seen: set
+) -> None:
+    proof_id = proof.get("proof_id")
+    if not isinstance(proof_id, str) or not PROOF_ID_RE.fullmatch(proof_id) or proof_id in seen:
+        raise ChoiceProofError("bad proof_id")
+    seen.add(proof_id)
+    scope = proof.get("scope")
+    if scope not in ([], ["aether"], ["lumine"]):
+        raise ChoiceProofError("bad proof scope")
+    source_id = str(proof.get("source_id") or "")
+    source = sources.get(source_id)
+    if source is None or source.get("snapshot_sha256") != proof.get("source_sha256"):
+        raise ChoiceProofError("proof source hash mismatch")
+    anchor = paragraphs.get(str(proof.get("anchor_span_id") or ""))
+    if anchor is None or anchor.get("source_id") != proof.get("source_id"):
+        raise ChoiceProofError("proof anchor span unresolved")
+    if _sha_text(anchor.get("quote") or "") != proof.get("anchor_quote_sha256"):
+        raise ChoiceProofError("proof anchor quote hash mismatch")
+    covered = proof.get("covered_span_ids")
+    if not isinstance(covered, list) or not covered or len(set(covered)) != len(covered):
+        raise ChoiceProofError("proof covered_span_ids invalid")
+    for span_id in covered:
+        span = paragraphs.get(span_id)
+        if span is None or span.get("source_id") != proof.get("source_id"):
+            raise ChoiceProofError("proof covered span unresolved: " + str(span_id))
+
+
 def _validate_proof_structure(proofs: List[Dict[str, Any]], bundle: Dict[str, Any]) -> None:
     sources = _sources_by_id(bundle)
     paragraphs = _paragraphs(bundle)
@@ -139,40 +167,39 @@ def _validate_proof_structure(proofs: List[Dict[str, Any]], bundle: Dict[str, An
     for proof in proofs:
         if not isinstance(proof, dict):
             raise ChoiceProofError("choice proof must be an object")
-        proof_id = proof.get("proof_id")
-        if not isinstance(proof_id, str) or not PROOF_ID_RE.fullmatch(proof_id) or proof_id in seen:
-            raise ChoiceProofError("bad proof_id")
-        seen.add(proof_id)
-        scope = proof.get("scope")
+        _validate_proof_entry(proof, sources, paragraphs, seen)
+    if any(proof.get("rule_id") != "fixture-choice-marker-v1" for proof in proofs):
+        raise ChoiceProofError("unsupported choice proof rule")
+
+
+def validate_choice_bindings(data: Dict[str, Any], proofs: List[Dict[str, Any]]) -> None:
+    proofs_by_id = {item["proof_id"]: item for item in proofs}
+    for obj in _descendants(data):
+        if "player_choice_scope" not in obj:
+            continue
+        scope = obj.get("player_choice_scope")
         if scope not in ([], ["aether"], ["lumine"]):
-            raise ChoiceProofError("bad proof scope")
-        source_id = str(proof.get("source_id") or "")
-        source = sources.get(source_id)
-        if source is None or source.get("snapshot_sha256") != proof.get("source_sha256"):
-            raise ChoiceProofError("proof source hash mismatch")
-        anchor = paragraphs.get(str(proof.get("anchor_span_id") or ""))
-        if anchor is None or anchor.get("source_id") != proof.get("source_id"):
-            raise ChoiceProofError("proof anchor span unresolved")
-        if _sha_text(anchor.get("quote") or "") != proof.get("anchor_quote_sha256"):
-            raise ChoiceProofError("proof anchor quote hash mismatch")
-        covered = proof.get("covered_span_ids")
-        if not isinstance(covered, list) or not covered or len(set(covered)) != len(covered):
-            raise ChoiceProofError("proof covered_span_ids invalid")
-        for span_id in covered:
-            span = paragraphs.get(span_id)
-            if span is None or span.get("source_id") != proof.get("source_id"):
-                raise ChoiceProofError("proof covered span unresolved: " + str(span_id))
-        if proof.get("rule_id") != "fixture-choice-marker-v1":
-            raise ChoiceProofError("unsupported choice proof rule in production/fixture: " + str(proof.get("rule_id")))
+            raise ChoiceProofError("invalid player_choice_scope")
+        refs = obj.get("player_choice_proof_refs")
+        if not isinstance(refs, list) or len(set(refs)) != len(refs):
+            raise ChoiceProofError("player_choice_proof_refs required")
+        selected = [proofs_by_id.get(ref) for ref in refs]
+        if any(item is None for item in selected):
+            raise ChoiceProofError("player_choice_proof_refs references unknown proof")
+        if scope:
+            _validate_scoped_record(obj, refs, selected)
+        else:
+            _validate_common_record(obj, selected)
+    _validate_conflict_refs(data, proofs_by_id)
 
 
-def _validate_scoped_record(obj, scope, refs, selected, proofs_by_id):
+def _validate_scoped_record(obj, refs, selected):
     if not refs:
         raise ChoiceProofError("scoped record needs proof refs")
     branch = obj.get("player_choice_branch")
     if not isinstance(branch, dict) or branch.get("kind") != "source_metadata":
         raise ChoiceProofError("scoped record needs source_metadata branch")
-    matching_scope = [item for item in selected if item.get("scope") == scope]
+    matching_scope = [item for item in selected if item.get("scope") == obj.get("player_choice_scope")]
     if not matching_scope:
         raise ChoiceProofError("branch scope not covered by proof")
     if not any(item.get("anchor_span_id") == branch.get("source_span_id") for item in matching_scope):
@@ -198,29 +225,9 @@ def _validate_common_record(obj, selected):
         raise ChoiceProofError("common evidence not covered by common proof")
 
 
-def validate_choice_bindings(data: Dict[str, Any], proofs: List[Dict[str, Any]]) -> None:
-    proofs_by_id = {item["proof_id"]: item for item in proofs}
-    for obj in _descendants(data):
-        if "player_choice_scope" not in obj:
-            continue
-        scope = obj.get("player_choice_scope")
-        if scope not in ([], ["aether"], ["lumine"]):
-            raise ChoiceProofError("invalid player_choice_scope")
-        refs = obj.get("player_choice_proof_refs")
-        if not isinstance(refs, list) or len(set(refs)) != len(refs):
-            raise ChoiceProofError("player_choice_proof_refs required")
-        selected = [proofs_by_id.get(ref) for ref in refs]
-        if any(item is None for item in selected):
-            raise ChoiceProofError("player_choice_proof_refs references unknown proof")
-        if scope:
-            _validate_scoped_record(obj, scope, refs, selected, proofs_by_id)
-        else:
-            _validate_common_record(obj, selected)
-    _validate_conflict_refs(data, proofs_by_id)
-
-
 def _validate_conflict_refs(data: Dict[str, Any], proofs_by_id: Dict[str, Any]) -> None:
-    for conflict in data.get("conflicts") or []:
+    conflicts = data.get("conflicts") or ([data] if data.get("conflict_id") else [])
+    for conflict in conflicts:
         parent_refs = set(conflict.get("player_choice_proof_refs") or [])
         child_refs = set()
         for alternative in conflict.get("alternatives") or []:
