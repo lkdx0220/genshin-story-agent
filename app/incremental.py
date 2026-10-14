@@ -347,6 +347,51 @@ def fingerprint_inputs(inputs: Dict[str, Any], inputs_path: Optional[Path] = Non
     return observed
 
 
+def _baseline_input_errors(inputs: Any) -> List[str]:
+    if not isinstance(inputs, dict) or not isinstance(inputs.get("common"), dict):
+        return ["state_inputs_incomplete"]
+    entries = inputs.get("inputs")
+    if not isinstance(entries, dict):
+        return ["state_inputs_incomplete"]
+    for entry in entries.values():
+        if not isinstance(entry, dict):
+            return ["state_inputs_incomplete"]
+        if not isinstance(entry.get("pages"), dict):
+            return ["state_pages_incomplete"]
+        for page in entry["pages"].values():
+            if not isinstance(page, dict) or "output" not in page or "response" not in page:
+                return ["state_pages_incomplete"]
+        if entry.get("validation_errors"):
+            return ["state_validation_failed"]
+    return []
+
+
+def _baseline_graph_errors(graph: Any) -> List[str]:
+    if not isinstance(graph, dict) or graph.get("format_version") != 1 or graph.get("protocol") != PROTOCOL_VERSION:
+        return ["state_graph_invalid"]
+    if not isinstance(graph.get("nodes"), list) or not isinstance(graph.get("edges"), list):
+        return ["state_graph_incomplete"]
+    for node in graph["nodes"]:
+        if not isinstance(node, dict) or not isinstance(node.get("key"), (list, tuple)):
+            return ["state_graph_incomplete"]
+    for edge in graph["edges"]:
+        if not isinstance(edge, dict) or not isinstance(edge.get("consumer"), (list, tuple)):
+            return ["state_graph_incomplete"]
+        if not isinstance(edge.get("dependency"), (list, tuple)):
+            return ["state_graph_incomplete"]
+    return []
+
+
+def _managed_page_keys(inputs: Any) -> set:
+    if not isinstance(inputs, dict) or not isinstance(inputs.get("inputs"), dict):
+        return set()
+    keys = set()
+    for entry in inputs["inputs"].values():
+        if isinstance(entry, dict) and isinstance(entry.get("pages"), dict):
+            keys.update(entry["pages"].keys())
+    return keys
+
+
 def _baseline_errors(data: Dict[str, Any]) -> List[str]:
     if data.get("format_version") != 1:
         return ["state_version_unsupported"]
@@ -356,17 +401,22 @@ def _baseline_errors(data: Dict[str, Any]) -> List[str]:
         return ["state_generation_missing"]
     if data.get("protocol") != PROTOCOL_VERSION:
         return ["state_protocol_mismatch"]
-    inputs = data.get("inputs")
-    if not isinstance(inputs, dict) or "common" not in inputs or "inputs" not in inputs:
-        return ["state_inputs_incomplete"]
-    graph = data.get("graph")
-    if not isinstance(graph, dict) or graph.get("format_version") != 1 or graph.get("protocol") != PROTOCOL_VERSION:
-        return ["state_graph_invalid"]
-    if not isinstance(graph.get("nodes"), list) or not isinstance(graph.get("edges"), list):
-        return ["state_graph_incomplete"]
-    for entry in inputs.get("inputs", {}).values():
-        if isinstance(entry, dict) and entry.get("validation_errors"):
-            return ["state_validation_failed"]
+    input_errors = _baseline_input_errors(data.get("inputs"))
+    if input_errors:
+        return input_errors
+    graph_errors = _baseline_graph_errors(data.get("graph"))
+    if graph_errors:
+        return graph_errors
+    managed = _managed_page_keys(data.get("inputs"))
+    covered = {
+        node["key"][1]
+        for node in data["graph"]["nodes"]
+        if isinstance(node.get("key"), (list, tuple)) and len(node["key"]) == 2 and node["key"][0] == "page"
+    }
+    if managed - covered:
+        return ["state_old_graph_missing_pages"]
+    if data["graph"].get("generation") not in (None, data["generation"]):
+        return ["state_graph_generation_mismatch"]
     return []
 
 
@@ -400,7 +450,9 @@ def make_baseline(
         "project": "b4-incremental:" + str(registry_hash)[:16],
         "protocol": PROTOCOL_VERSION,
         "inputs": observed,
-        "graph": graph or {"format_version": 1, "protocol": PROTOCOL_VERSION, "nodes": [], "edges": []},
+        "graph": dict(graph, generation=generation)
+        if graph
+        else {"format_version": 1, "protocol": PROTOCOL_VERSION, "nodes": [], "edges": []},
     }
 
 
@@ -936,7 +988,11 @@ def mark_dirty(
             for page_key in event.get("page_keys") or managed.get(event.get("bundle_key"), []):
                 add_page(page_key, kind)
                 page_node = ("page", page_key)
-                seeded = {page_node} | _forward_dependencies(page_node, adjacency)
+                seeded = {page_node} | {
+                    node
+                    for node in _forward_dependencies(page_node, adjacency)
+                    if not (node and node[0] in ("bundle", "source"))
+                }
                 for node in seeded:
                     queue.append((node, kind, 0))
         elif kind in ("profile_changed", "prompt_changed"):

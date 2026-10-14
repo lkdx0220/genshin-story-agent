@@ -112,8 +112,20 @@ def _setup_project(tmp_path, monkeypatch):
 def _write_baseline(root: Path, observed) -> Path:
     state = root / "reports/incremental/state.json"
     state.parent.mkdir(parents=True, exist_ok=True)
+    nodes = [
+        {"key": ["page", page_key], "type": "page"}
+        for entry in (observed.get("inputs") or {}).values()
+        for page_key in (entry.get("pages") or {})
+    ]
+    graph = {
+        "format_version": 1,
+        "protocol": incremental.PROTOCOL_VERSION,
+        "generation": "g1",
+        "nodes": nodes,
+        "edges": [],
+    }
     state.write_text(
-        json.dumps(incremental.make_baseline(observed, generation="g1"), ensure_ascii=False),
+        json.dumps(incremental.make_baseline(observed, generation="g1", graph=graph), ensure_ascii=False),
         encoding="utf-8",
     )
     return state
