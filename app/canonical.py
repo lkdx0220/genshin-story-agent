@@ -155,6 +155,7 @@ class Fact:
     player_choice_scope: List[str] = field(default_factory=list)
     player_choice_missing: bool = False
     config_error: bool = False
+    record_id: Optional[str] = None
 
 
 REQUIRED_CHOICE_PROFILE_IDS = {"char:traveler"}
@@ -292,10 +293,21 @@ class CanonicalPage:
             return
         raw_evidence = evidence if evidence is not None else _collect_evidence(obj)
         span_ids = self._span_ids(raw_evidence)
-        record_keys = ("event_id", "relation_id", "memory_record_id", "state_id", "attribute_id", "name_id")
+        record_keys = (
+            "event_id",
+            "relation_id",
+            "memory_record_id",
+            "state_id",
+            "attribute_id",
+            "name_id",
+            "conflict_id",
+            "alternative_id",
+        )
         player_choice_missing = bool(
             self.has_player_choice and any(key in obj for key in record_keys) and "player_choice_scope" not in obj
         )
+        record_id = next((str(obj.get(key)) for key in record_keys if obj.get(key)), None)
+        observed_at = list(observed_at if observed_at is not None else obj.get("observed_at") or [])
         version_obj = dict(version or obj.get("version") or {})
         version_id = self._fact_version_id(version_obj)
         facts.append(
@@ -313,10 +325,11 @@ class CanonicalPage:
                 attribute_id=attribute_id,
                 attribute_key=attribute_key,
                 attribute_value=attribute_value,
-                observed_at=list(observed_at or []),
+                observed_at=observed_at,
                 player_choice_scope=list(player_choice_scope or obj.get("player_choice_scope") or []),
                 player_choice_missing=player_choice_missing,
                 config_error=self.player_choice_error is not None,
+                record_id=record_id,
             )
         )
 
@@ -334,33 +347,30 @@ class CanonicalPage:
                 if scope:
                     scoped.setdefault(scope, []).append(name)
             if not scoped and (not missing_names or not self.has_player_choice):
-                names = [str(n.get("value") or "") for n in allowed_names]
                 self._add_fact(
                     self.facts,
                     "identity",
-                    f"{label}（名称：{'、'.join(n for n in names if n)}）",
+                    label,
                     identity,
                     evidence=identity.get("evidence") or [],
                     identity_ids=[identity.get("identity_version_id")],
                 )
             else:
                 if common_names:
-                    names = [str(n.get("value") or "") for n in common_names]
                     self._add_fact(
                         self.facts,
                         "identity",
-                        f"{label}（共同名称：{'、'.join(n for n in names if n)}）",
+                        label + "（共同）",
                         identity,
                         evidence=identity.get("evidence") or [],
                         identity_ids=[identity.get("identity_version_id")],
                         player_choice_scope=[],
                     )
-                for scope, group in scoped.items():
-                    names = [str(n.get("value") or "") for n in common_names + group]
+                for scope in scoped:
                     self._add_fact(
                         self.facts,
                         "identity",
-                        f"{label}（{'/'.join(scope)} 名称：{'、'.join(n for n in names if n)}）",
+                        label + f"（{'/'.join(scope)}）",
                         identity,
                         evidence=identity.get("evidence") or [],
                         identity_ids=[identity.get("identity_version_id")],
@@ -414,6 +424,14 @@ class CanonicalPage:
                     state,
                 )
 
+    @staticmethod
+    def _explicit_choice_scope(*objects):
+        for obj in objects:
+            if isinstance(obj, dict) and "player_choice_scope" in obj:
+                scope = obj.get("player_choice_scope")
+                return list(scope) if isinstance(scope, list) else []
+        return []
+
     def _build_conflict_facts(self):
         for conflict in self.data.get("conflicts") or []:
             if conflict.get("status") == "rejected":
@@ -427,16 +445,12 @@ class CanonicalPage:
                 status=conflict.get("status") or "open",
                 conflict_id=conflict.get("conflict_id"),
                 target_ref=conflict.get("target_ref"),
-                player_choice_scope=conflict.get("player_choice_scope") or [],
+                player_choice_scope=self._explicit_choice_scope(conflict),
             )
             for alternative in conflict.get("alternatives") or []:
                 proposed = alternative.get("proposed_value")
-                proposed_scope = proposed.get("player_choice_scope") if isinstance(proposed, dict) else None
-                choice_scope = (
-                    alternative.get("player_choice_scope")
-                    or proposed_scope
-                    or conflict.get("player_choice_scope")
-                    or []
+                choice_scope = self._explicit_choice_scope(
+                    alternative, proposed if isinstance(proposed, dict) else None, conflict
                 )
                 self._add_fact(
                     self.facts,
@@ -745,9 +759,17 @@ class CanonicalIndex:
 
     def player_choice_gaps(self, snapshot: Dict[str, Any], question: Optional[str] = None) -> List[str]:
         snapshot = snapshot or {}
-        question_chars = {char for char in (question or "") if not char.isspace()}
+        question = question or ""
+        question_chars = {char for char in question if not char.isspace()}
+        relevant_entities = set()
+        for page in self.pages:
+            names = [page.canonical_name] + page.aliases
+            if any(name and name in question for name in names):
+                relevant_entities.add(page.entity_id)
         gaps = []
         for page in self.pages:
+            if relevant_entities and page.entity_id not in relevant_entities:
+                continue
             for fact in page.facts:
                 if fact.status in ("rejected", "superseded"):
                     continue
@@ -813,10 +835,10 @@ class CanonicalIndex:
             values = sorted(group["values"])
             if len(values) > 1:
                 result[group_key] = {"status": "ambiguous", "value": None, "values": values}
+            elif group["unresolved"]:
+                result[group_key] = {"status": "unresolved", "value": None, "values": values}
             elif len(values) == 1:
                 result[group_key] = {"status": "applicable", "value": values[0], "values": values}
-            elif group["unresolved"]:
-                result[group_key] = {"status": "unresolved", "value": None, "values": []}
             elif group["unknown"]:
                 result[group_key] = {"status": "unknown", "value": None, "values": []}
             else:
@@ -923,7 +945,7 @@ class CanonicalIndex:
         used: Dict[Tuple[str, str], str] = {}
         seen_text = set()
         for page, fact in hits:
-            dedupe_key = (fact.text, tuple(fact.player_choice_scope))
+            dedupe_key = (fact.record_id or fact.text, tuple(fact.player_choice_scope))
             if dedupe_key in seen_text:
                 continue
             seen_text.add(dedupe_key)

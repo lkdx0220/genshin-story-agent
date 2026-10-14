@@ -249,11 +249,12 @@ def test_identity_summary_does_not_leak_other_choice(tmp_path):
         ]
     )
     page = _page(tmp_path, data)
-    identity_facts = [f for f in page.facts if f.kind == "identity" and f.player_choice_scope]
-    aether_summary = [f for f in identity_facts if f.player_choice_scope == ["aether"]][0]
-    lumine_summary = [f for f in identity_facts if f.player_choice_scope == ["lumine"]][0]
-    assert "空" in aether_summary.text and "荧" not in aether_summary.text
-    assert "荧" in lumine_summary.text and "空" not in lumine_summary.text
+    name_facts = [f for f in page.facts if f.kind == "name"]
+    aether_name = [f for f in name_facts if f.player_choice_scope == ["aether"]][0]
+    lumine_name = [f for f in name_facts if f.player_choice_scope == ["lumine"]][0]
+    assert aether_name.text == "名称：空（旅行者）"
+    assert lumine_name.text == "名称：荧（旅行者）"
+    assert all("空" not in f.text and "荧" not in f.text for f in page.facts if f.kind == "identity")
 
 
 def test_conflict_alternative_inherits_choice_scope(tmp_path):
