@@ -112,6 +112,11 @@ def test_player_choice_branch_evidence_required():
             {
                 "event_id": "event:x",
                 "player_choice_scope": ["aether"],
+                "player_choice_branch": {
+                    "choice_id": "aether",
+                    "kind": "explicit_branch",
+                    "source_span_id": "span:test",
+                },
                 "evidence": [
                     {"source_span_id": "span:test", "basis": "explicit_text", "authority": "non_authoritative"}
                 ],
@@ -119,7 +124,7 @@ def test_player_choice_branch_evidence_required():
         ]
     )
     with pytest.raises(ingest.IngestError):
-        ingest._validate_player_choice(data, {"span:test": {"quote": "测试"}}, PROFILE)
+        ingest._validate_player_choice(data, {}, PROFILE)
     ingest._validate_player_choice(data, {"span:test": {"quote": "空的选择"}}, PROFILE)
 
 
@@ -189,3 +194,82 @@ def test_non_choice_entity_choice_parameter_has_no_effect(tmp_path):
     assert index._fact_applies(fact, {}) is True
     assert index._fact_applies(fact, {"player_choice": "aether"}) is True
     assert index._fact_applies(fact, {"player_choice": "lumine"}) is True
+
+
+def test_player_choice_tool_reports_binding_conflict():
+    from app.tools.canonical import canonical_query_tool
+
+    conflict = canonical_query_tool.invoke(
+        {"question": "旅行者是谁", "snapshot": {"player_choice": "lumine"}, "player_choice": "aether"}
+    )
+    assert "选择冲突" in conflict
+    invalid = canonical_query_tool.invoke({"question": "旅行者是谁", "player_choice": "invalid"})
+    assert "非法 player_choice" in invalid
+
+
+def test_identity_summary_does_not_leak_other_choice(tmp_path):
+    data = _base_data(
+        identity_versions=[
+            {
+                "identity_version_id": "identity:traveler",
+                "label": "旅行者",
+                "status": "candidate",
+                "evidence": [
+                    {"source_span_id": "span:test", "basis": "explicit_text", "authority": "non_authoritative"}
+                ],
+                "names": [
+                    {
+                        "name_id": "name:common",
+                        "value": "旅行者",
+                        "kind": "primary",
+                        "player_choice_scope": [],
+                        "evidence": [],
+                    },
+                    {
+                        "name_id": "name:aether",
+                        "value": "空",
+                        "kind": "alias",
+                        "player_choice_scope": ["aether"],
+                        "evidence": [],
+                    },
+                    {
+                        "name_id": "name:lumine",
+                        "value": "荧",
+                        "kind": "alias",
+                        "player_choice_scope": ["lumine"],
+                        "evidence": [],
+                    },
+                ],
+            }
+        ]
+    )
+    page = _page(tmp_path, data)
+    identity_facts = [f for f in page.facts if f.kind == "identity" and f.player_choice_scope]
+    aether_summary = [f for f in identity_facts if f.player_choice_scope == ["aether"]][0]
+    lumine_summary = [f for f in identity_facts if f.player_choice_scope == ["lumine"]][0]
+    assert "空" in aether_summary.text and "荧" not in aether_summary.text
+    assert "荧" in lumine_summary.text and "空" not in lumine_summary.text
+
+
+def test_conflict_alternative_inherits_choice_scope(tmp_path):
+    data = _base_data(
+        conflicts=[
+            {
+                "conflict_id": "conflict:c1",
+                "status": "open",
+                "summary": "测试冲突",
+                "target_ref": "attribute:attr:test",
+                "alternatives": [
+                    {
+                        "alternative_id": "alt:a",
+                        "statement": "空分支说法",
+                        "proposed_value": {"player_choice_scope": ["aether"]},
+                        "evidence": [],
+                    }
+                ],
+            }
+        ]
+    )
+    page = _page(tmp_path, data)
+    alternatives = [f for f in page.facts if f.kind == "conflict_alternative"]
+    assert alternatives[0].player_choice_scope == ["aether"]

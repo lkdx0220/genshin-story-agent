@@ -262,15 +262,45 @@ class CanonicalPage:
                 continue
             label = str(identity.get("label") or "")
             allowed_names = [n for n in identity.get("names") or [] if n.get("status") != "rejected"]
-            names = [str(n.get("value") or "") for n in allowed_names]
-            self._add_fact(
-                self.facts,
-                "identity",
-                f"{label}（名称：{'、'.join(n for n in names if n)}）",
-                identity,
-                evidence=identity.get("evidence") or [],
-                identity_ids=[identity.get("identity_version_id")],
-            )
+            common_names = [n for n in allowed_names if not n.get("player_choice_scope")]
+            scoped: Dict[tuple, List[Dict[str, Any]]] = {}
+            for name in allowed_names:
+                scope = tuple(name.get("player_choice_scope") or [])
+                if scope:
+                    scoped.setdefault(scope, []).append(name)
+            if not scoped:
+                names = [str(n.get("value") or "") for n in allowed_names]
+                self._add_fact(
+                    self.facts,
+                    "identity",
+                    f"{label}（名称：{'、'.join(n for n in names if n)}）",
+                    identity,
+                    evidence=identity.get("evidence") or [],
+                    identity_ids=[identity.get("identity_version_id")],
+                )
+            else:
+                if common_names:
+                    names = [str(n.get("value") or "") for n in common_names]
+                    self._add_fact(
+                        self.facts,
+                        "identity",
+                        f"{label}（共同名称：{'、'.join(n for n in names if n)}）",
+                        identity,
+                        evidence=identity.get("evidence") or [],
+                        identity_ids=[identity.get("identity_version_id")],
+                        player_choice_scope=[],
+                    )
+                for scope, group in scoped.items():
+                    names = [str(n.get("value") or "") for n in common_names + group]
+                    self._add_fact(
+                        self.facts,
+                        "identity",
+                        f"{label}（{'/'.join(scope)} 名称：{'、'.join(n for n in names if n)}）",
+                        identity,
+                        evidence=identity.get("evidence") or [],
+                        identity_ids=[identity.get("identity_version_id")],
+                        player_choice_scope=list(scope),
+                    )
             for name in allowed_names:
                 self._add_fact(
                     self.facts,
@@ -334,6 +364,14 @@ class CanonicalPage:
                 target_ref=conflict.get("target_ref"),
             )
             for alternative in conflict.get("alternatives") or []:
+                proposed = alternative.get("proposed_value")
+                proposed_scope = proposed.get("player_choice_scope") if isinstance(proposed, dict) else None
+                choice_scope = (
+                    alternative.get("player_choice_scope")
+                    or proposed_scope
+                    or conflict.get("player_choice_scope")
+                    or []
+                )
                 self._add_fact(
                     self.facts,
                     "conflict_alternative",
@@ -343,6 +381,7 @@ class CanonicalPage:
                     status=conflict.get("status") or "open",
                     conflict_id=conflict.get("conflict_id"),
                     target_ref=conflict.get("target_ref"),
+                    player_choice_scope=choice_scope,
                 )
 
     def _build_attribute_facts(self):
@@ -774,9 +813,10 @@ class CanonicalIndex:
         used: Dict[Tuple[str, str], str] = {}
         seen_text = set()
         for page, fact in hits:
-            if fact.text in seen_text:
+            dedupe_key = (fact.text, tuple(fact.player_choice_scope))
+            if dedupe_key in seen_text:
                 continue
-            seen_text.add(fact.text)
+            seen_text.add(dedupe_key)
             labels = []
             for span_id in fact.evidence:
                 url = page.span_url.get(span_id)
@@ -785,6 +825,8 @@ class CanonicalIndex:
                     used[(url, span_id)] = page.entity_id
             scope_label = (fact.story_scope or {}).get("label")
             prefix = f"[{fact.status}]" + (f"（{scope_label}）" if scope_label else "")
+            if fact.player_choice_scope:
+                prefix += f"[选择:{'/'.join(fact.player_choice_scope)}]"
             conflict = f"（{fact.conflict_id} / {fact.target_ref}）" if fact.conflict_id else ""
             lines.append(f"- {prefix}{conflict} {fact.text}" + "".join(labels))
         if len(lines) == 1:
@@ -800,6 +842,19 @@ def default_index() -> CanonicalIndex:
     return CanonicalIndex.from_dir(CANONICAL_DIR)
 
 
-def canonical_query(question: str, top_k: int = 6, snapshot: Optional[Dict[str, Any]] = None) -> str:
+def canonical_query(
+    question: str,
+    top_k: int = 6,
+    snapshot: Optional[Dict[str, Any]] = None,
+    player_choice: Optional[str] = None,
+) -> str:
     """查询本地 canonical Wiki 候选页，返回带来源 citation 的证据文本。"""
-    return default_index().answer(question, top_k=top_k, snapshot=snapshot)
+    if player_choice is not None and player_choice not in ("aether", "lumine"):
+        return "> [选择冲突] 非法 player_choice；只允许 aether / lumine。"
+    merged = dict(snapshot or {})
+    if player_choice is not None:
+        existing = merged.get("player_choice")
+        if existing and existing != player_choice:
+            return "> [选择冲突] 结构化参数与 snapshot.player_choice 不一致；请先明确改选规则。"
+        merged["player_choice"] = player_choice
+    return default_index().answer(question, top_k=top_k, snapshot=merged or None)

@@ -13,7 +13,7 @@ from app.canonical import canonical_query as _canonical_query
 
 
 @tool("canonical_query")
-def canonical_query_tool(question: str, snapshot: Optional[dict] = None) -> str:
+def canonical_query_tool(question: str, snapshot: Optional[dict] = None, player_choice: Optional[str] = None) -> str:
     """查询 canonical Wiki 候选页（本地结构化事实 + 来源 citation）。
 
     适用问题：
@@ -32,4 +32,4 @@ def canonical_query_tool(question: str, snapshot: Optional[dict] = None) -> str:
     question = str(question or "").strip()
     if not question:
         raise ValueError("question 不能为空")
-    return _canonical_query(question, snapshot=snapshot)
+    return _canonical_query(question, snapshot=snapshot, player_choice=player_choice)
