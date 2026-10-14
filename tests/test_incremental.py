@@ -42,6 +42,7 @@ def _setup_project(tmp_path, monkeypatch):
         ],
     }
     _write(root / "fixture/raw/manifest.json", json.dumps(manifest, ensure_ascii=False))
+    _write(root / "reports/mini.md", "initial output")
     _write(
         root / "fixture-response.md",
         "---\n"
@@ -56,6 +57,7 @@ def _setup_project(tmp_path, monkeypatch):
                         "player_choice_scope": [],
                     }
                 ],
+                "field_assertions": [{"path": "/element", "status": "unknown", "evidence": [], "conflict_ids": []}],
             },
             ensure_ascii=False,
         )
@@ -190,6 +192,7 @@ def test_cycle_and_depth_are_bounded(tmp_path, monkeypatch):
         "blocked",
         "dirty",
         "events",
+        "field_impacts",
         "format_version",
         "freshness",
         "full_required",
@@ -257,3 +260,101 @@ def test_schema_file_change_is_full_required(tmp_path, monkeypatch):
     _write(root / "wiki/__schema__/entity.schema.json", '{"changed": true}')
     plan = incremental.build_plan(inputs, state)
     assert plan["full_required"] is True
+
+
+def test_main_rejects_derived_output_overlap(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    before = state.read_bytes()
+    graph = root / "reports/incremental/graph.json"
+    rc = incremental.main(
+        [
+            "plan",
+            "--inputs",
+            str(root / "config/incremental-inputs.json"),
+            "--state",
+            str(state),
+            "--plan",
+            str(state),
+            "--graph",
+            str(graph),
+        ]
+    )
+    assert rc == 2
+    assert state.read_bytes() == before
+
+    outside = tmp_path / "outside.json"
+    rc = incremental.main(
+        [
+            "plan",
+            "--inputs",
+            str(root / "config/incremental-inputs.json"),
+            "--state",
+            str(state),
+            "--plan",
+            str(outside),
+            "--graph",
+            str(graph),
+        ]
+    )
+    assert rc == 2
+    assert not outside.exists()
+
+
+def test_incomplete_baseline_is_full_required(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = root / "reports/incremental/state.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text('{"format_version": 1}', encoding="utf-8")
+    plan = incremental.build_plan(inputs, state)
+    assert plan["full_required"] is True
+    assert "state_not_validated" in plan["unknown"]
+
+
+def test_missing_output_hashes_are_not_fresh(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    inputs["inputs"][0]["managed_pages"][0]["output"] = None
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    plan = incremental.build_plan(inputs, state)
+    page_key = "fixture-response.md|fixture|char:mini"
+    assert plan["freshness"][page_key] == "unknown"
+
+
+def test_field_impacts_are_reported_for_source_change(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    case = root / "fixture/raw/case.txt"
+    case.write_bytes(case.read_bytes() + b"\nfield change\n")
+    plan = incremental.build_plan(inputs, state)
+    page_key = "fixture-response.md|fixture|char:mini"
+    impacts = plan["field_impacts"][page_key]
+    assert impacts
+    assert all("field" in item and item["action"] in ("evidence_rebind", "validation") for item in impacts)
+
+
+def test_explain_snapshot_detects_outdated_plan(tmp_path, monkeypatch, capsys):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    plan_path = root / "reports/incremental/plan.json"
+    plan_path.write_text(json.dumps(incremental.build_plan(inputs, state), ensure_ascii=False), encoding="utf-8")
+    case = root / "fixture/raw/case.txt"
+    case.write_bytes(case.read_bytes() + b"\nnew input\n")
+    rc = incremental.main(
+        [
+            "explain",
+            "--inputs",
+            str(root / "config/incremental-inputs.json"),
+            "--state",
+            str(state),
+            "--plan",
+            str(plan_path),
+            "--graph",
+            str(root / "reports/incremental/graph.json"),
+            "--snapshot-only",
+            "--page",
+            "fixture-response.md|fixture|char:mini",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "plan_outdated" in out

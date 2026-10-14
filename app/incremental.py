@@ -21,7 +21,7 @@ DEFAULT_PLAN = REPO_ROOT / "reports" / "incremental" / "plan.json"
 DEFAULT_GRAPH = REPO_ROOT / "reports" / "incremental" / "graph.json"
 PROTOCOL_VERSION = "b4-01-plan-v1"
 SKIP_DIRS = {".git", "__pycache__", "reports", "audits", ".venv", "node_modules"}
-COMMON_KEYS = ("schema", "template", "schema_lock", "registry", "lint", "prompts", "inputs_registry")
+COMMON_KEYS = ("schema", "template", "schema_lock", "registry", "lint", "prompts", "inputs_registry", "build_code")
 
 
 class IncrementalError(ValueError):
@@ -91,7 +91,23 @@ def _hash_tree(base: Path, suffixes: Optional[Iterable[str]] = None) -> Dict[str
     return result
 
 
-def _common_fingerprints() -> Dict[str, Any]:
+BUILD_FILES = (
+    "ingest.py",
+    "wiki_lint.py",
+    "wiki/__schema__/source-span-format.md",
+    "app/canonical.py",
+    "app/applicability.py",
+    "app/choice_contract.py",
+    "app/choice_proofs.py",
+    "app/versioning.py",
+)
+
+
+def _hash_build_code() -> Dict[str, Optional[str]]:
+    return {rel: _hash_if_exists(REPO_ROOT / rel) for rel in BUILD_FILES}
+
+
+def _common_fingerprints(inputs_path: Optional[Path] = None) -> Dict[str, Any]:
     prompts = _hash_tree(REPO_ROOT / "wiki" / "__schema__", {".md", ".json"})
     prompts = {key: value for key, value in prompts.items() if key.endswith(".prompt.md")}
     return {
@@ -101,17 +117,19 @@ def _common_fingerprints() -> Dict[str, Any]:
         "registry": _hash_if_exists(REPO_ROOT / "wiki" / "__schema__" / "version-registry.json"),
         "lint": _hash_tree(REPO_ROOT / "lint"),
         "prompts": prompts,
-        "inputs_registry": _hash_if_exists(DEFAULT_INPUTS),
+        "inputs_registry": _hash_if_exists(inputs_path or DEFAULT_INPUTS),
+        "build_code": _hash_build_code(),
         "protocol": PROTOCOL_VERSION,
     }
 
 
-def _manifest_sources(manifest: Dict[str, Any]) -> Dict[str, str]:
-    result: Dict[str, str] = {}
+def _manifest_sources(manifest: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+    result: Dict[str, Dict[str, str]] = {}
     for source in manifest.get("sources") or []:
+        source_id = source.get("source_id")
         file_name = source.get("file")
-        if isinstance(file_name, str) and file_name:
-            result[file_name] = str(source.get("sha256") or "")
+        if isinstance(source_id, str) and source_id and isinstance(file_name, str) and file_name:
+            result[source_id] = {"file": file_name, "declared": str(source.get("sha256") or "")}
     return result
 
 
@@ -178,18 +196,64 @@ def load_inputs(path: Path = DEFAULT_INPUTS) -> Dict[str, Any]:
     return normalized
 
 
-def fingerprint_inputs(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    observed: Dict[str, Any] = {"common": _common_fingerprints(), "inputs": {}}
+def _validation_errors(root: Path, manifest: Dict[str, Any], item: Dict[str, Any]) -> List[str]:
+    errors: List[str] = []
+    template = REPO_ROOT / "wiki" / "__schema__" / "entity-template.md"
+    try:
+        import ingest
+
+        bundle = ingest.load_bundle(root)
+    except Exception as exc:  # noqa: BLE001 - diagnostics are part of the contract
+        errors.append(f"{item['bundle_key']}:load_bundle:{exc}")
+        bundle = None
+    if bundle is not None:
+        lock_path = REPO_ROOT / "docs" / "schema-lock.json"
+        lock_has_entries = False
+        try:
+            lock_has_entries = bool(json.loads(lock_path.read_text(encoding="utf-8")).get("sha256"))
+        except (OSError, json.JSONDecodeError, AttributeError):
+            lock_has_entries = False
+        if lock_has_entries:
+            try:
+                ingest.verify_schema_lock(template)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{item['bundle_key']}:schema_lock:{exc}")
+        if manifest.get("choice_proofs_file"):
+            try:
+                from app.choice_proofs import load_choice_proofs
+
+                load_choice_proofs(bundle["root"], bundle, required=True)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{item['bundle_key']}:choice_proofs:{exc}")
+    for page in item["managed_pages"]:
+        if not (REPO_ROOT / page["response"]).exists():
+            errors.append(f"{page['page_key']}:response_missing")
+    return errors
+
+
+def fingerprint_inputs(inputs: Dict[str, Any], inputs_path: Path = DEFAULT_INPUTS) -> Dict[str, Any]:
+    observed: Dict[str, Any] = {"common": _common_fingerprints(Path(inputs_path)), "inputs": {}}
     observed_inputs: Dict[str, Any] = observed["inputs"]
     for item in inputs["inputs"]:
         bundle_key = item["bundle_key"]
         root = _inside_root(REPO_ROOT / item["root"])
         manifest_path = root / "manifest.json"
-        manifest = _read_json(manifest_path) if manifest_path.exists() else {}
-        _need(isinstance(manifest, dict), f"manifest must be object: {bundle_key}")
+        manifest_error = None
+        try:
+            manifest = _read_json(manifest_path) if manifest_path.exists() else {}
+        except IncrementalError as exc:
+            manifest_error = str(exc)
+            manifest = {}
+        if not isinstance(manifest, dict):
+            manifest_error = manifest_error or f"manifest must be object: {bundle_key}"
+            manifest = {}
         actual_sources: Dict[str, Dict[str, Optional[str]]] = {}
-        for file_name, declared in sorted(_manifest_sources(manifest).items()):
-            actual_sources[file_name] = {"declared": declared, "actual": _hash_if_exists(root / file_name)}
+        for source_id, source_meta in sorted(_manifest_sources(manifest).items()):
+            actual_sources[source_id] = {
+                "file": source_meta["file"],
+                "declared": source_meta["declared"],
+                "actual": _hash_if_exists(root / source_meta["file"]),
+            }
         proof_file = manifest.get("choice_proofs_file")
         proof_path = root / proof_file if isinstance(proof_file, str) and proof_file else None
         pages: Dict[str, Any] = {}
@@ -200,6 +264,9 @@ def fingerprint_inputs(inputs: Dict[str, Any]) -> Dict[str, Any]:
             }
         observed_inputs[bundle_key] = {
             "root": item["root"],
+            "manifest_error": manifest_error,
+            "validation_errors": ([manifest_error] if manifest_error else [])
+            + _validation_errors(root, manifest, item),
             "manifest": _hash_if_exists(manifest_path),
             "manifest_data": manifest,
             "sources": actual_sources,
@@ -227,12 +294,34 @@ def load_baseline(path: Path = DEFAULT_STATE) -> Tuple[Optional[Dict[str, Any]],
         return None, ["state_corrupt"]
     if not isinstance(data, dict) or data.get("format_version") != 1:
         return None, ["state_version_unsupported"]
+    if data.get("validated") is not True or data.get("project") != "b4-incremental":
+        return None, ["state_not_validated"]
+    if not isinstance(data.get("generation"), str) or not data["generation"]:
+        return None, ["state_generation_missing"]
+    if data.get("protocol") != PROTOCOL_VERSION:
+        return None, ["state_protocol_mismatch"]
+    if not isinstance(data.get("inputs"), dict) or "common" not in data["inputs"] or "inputs" not in data["inputs"]:
+        return None, ["state_inputs_incomplete"]
+    if not isinstance(data.get("graph"), dict):
+        return None, ["state_graph_missing"]
     return data, []
 
 
-def make_baseline(observed: Dict[str, Any], generation: str = "test-generation") -> Dict[str, Any]:
+def make_baseline(
+    observed: Dict[str, Any],
+    generation: str = "test-generation",
+    graph: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """测试/成功构建方可使用；plan 自身绝不调用。"""
-    return {"format_version": 1, "generation": generation, "inputs": observed}
+    return {
+        "format_version": 1,
+        "generation": generation,
+        "validated": True,
+        "project": "b4-incremental",
+        "protocol": PROTOCOL_VERSION,
+        "inputs": observed,
+        "graph": graph or {"format_version": 1, "protocol": PROTOCOL_VERSION, "nodes": [], "edges": []},
+    }
 
 
 def plan_generation(observed: Dict[str, Any], baseline: Optional[Dict[str, Any]]) -> str:
@@ -311,6 +400,11 @@ def _diff_input(
         events.append({"kind": "profile_changed", "bundle_key": bundle_key, "page_keys": page_keys})
     if old.get("prompt") != new.get("prompt"):
         events.append({"kind": "prompt_changed", "bundle_key": bundle_key, "page_keys": page_keys})
+    old_errors = old.get("validation_errors") or []
+    new_errors = new.get("validation_errors") or []
+    if new_errors and new_errors != old_errors:
+        blocked.extend(f"{bundle_key}:validation:{error}" for error in new_errors)
+        events.append({"kind": "validation_blocked", "bundle_key": bundle_key, "page_keys": page_keys})
     events.extend(_diff_pages(bundle_key, old.get("pages") or {}, new.get("pages") or {}))
     return events, blocked, unknown, full_required
 
@@ -334,6 +428,8 @@ def diff_fingerprints(
     if common_events:
         full_required = True
         events.extend(common_events)
+        for event in common_events:
+            blocked.append(f"common:{event.get('key')}")
     for item in inputs["inputs"]:
         bundle_key = item["bundle_key"]
         old = baseline_inputs.get(bundle_key)
@@ -449,6 +545,30 @@ def _add_flat_records(
             _add_alternatives(owner, record, key, index, nodes, edges)
 
 
+def _field_support_keys(page_data: Dict[str, Any], page_key: str, path: str) -> List[Tuple]:
+    if path in ("/canonical_name",) or path.startswith("/aliases/"):
+        return [
+            (page_key, "name", str(name.get("name_id")))
+            for identity in page_data.get("identity_versions") or []
+            for name in identity.get("names") or []
+            if isinstance(name, dict)
+        ]
+    if path in ("/element", "/weapon", "/nation"):
+        attr_key = path.lstrip("/")
+        return [
+            (page_key, "attribute", str(record.get("attribute_id")))
+            for record in page_data.get("attribute_records") or []
+            if isinstance(record, dict) and record.get("key") == attr_key
+        ]
+    if path == "/affiliation":
+        return [
+            (page_key, "affiliation_state", str(state.get("state_id")))
+            for state in page_data.get("affiliation_states") or []
+            if isinstance(state, dict)
+        ]
+    return []
+
+
 def _add_fields(
     page_data: Dict[str, Any], page_node: Tuple, nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]
 ) -> None:
@@ -458,6 +578,25 @@ def _add_fields(
             nodes.append({"key": field_key, "type": "field", "page_key": page_node[1], "business_id": field_key[2]})
             edges.append({"consumer": page_node, "dependency": field_key})
             _add_evidence(nodes, edges, field_key, assertion)
+            for support in _field_support_keys(page_data, page_node[1], str(assertion["path"])):
+                edges.append({"consumer": field_key, "dependency": support})
+
+
+def _resolve_local_reference_edges(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    owners: Dict[Tuple[str, str], Tuple] = {}
+    for node in nodes:
+        key = tuple(node["key"])
+        if len(key) == 3 and key[1] in _REFERENCE_TYPES:
+            owners[(key[1], key[2])] = key
+    resolved = []
+    for edge in edges:
+        dependency = tuple(edge["dependency"])
+        if len(dependency) == 2 and dependency[0] in _REFERENCE_TYPES:
+            match = owners.get((dependency[0], dependency[1]))
+            if match is not None:
+                edge = dict(edge, dependency=match)
+        resolved.append(edge)
+    return resolved
 
 
 def _record_keys(page_data: Dict[str, Any], page_key: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -468,7 +607,7 @@ def _record_keys(page_data: Dict[str, Any], page_key: str) -> Tuple[List[Dict[st
     _add_identity_nodes(page_data, page_node, nodes, edges)
     _add_flat_records(page_data, page_node, nodes, edges)
     _add_fields(page_data, page_node, nodes, edges)
-    return nodes, edges
+    return nodes, _resolve_local_reference_edges(nodes, edges)
 
 
 def _collect_source_nodes(
@@ -482,7 +621,7 @@ def _collect_source_nodes(
         for anchor in sorted((source.get("paragraphs") or {}).keys()):
             paragraph_key = ("paragraph", str(source_id), anchor)
             nodes.append({"key": paragraph_key, "type": "paragraph", "source_id": str(source_id), "anchor": anchor})
-            edges.append({"consumer": source_key, "dependency": paragraph_key})
+            edges.append({"consumer": paragraph_key, "dependency": source_key})
     return nodes, edges
 
 
@@ -511,8 +650,67 @@ def _dedup_edges(edges: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [result[key] for key in sorted(result, key=str)]
 
 
+def _span_paragraph_edges(
+    inputs: Dict[str, Any], nodes: List[Dict[str, Any]], diagnostics: List[str]
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    edges: List[Dict[str, Any]] = []
+    for item in inputs["inputs"]:
+        root = _inside_root(REPO_ROOT / item["root"])
+        try:
+            import ingest
+
+            bundle = ingest.load_bundle(root)
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(f"{item['bundle_key']}:bundle_unavailable:{exc}")
+            continue
+        by_span = {}
+        for paragraph in bundle.get("paragraphs") or []:
+            by_span[paragraph["span_id"]] = paragraph
+        for paragraph in bundle.get("paragraphs") or []:
+            paragraph_key = ("paragraph", paragraph["source_id"], paragraph["anchor"])
+            span_key = ("span", paragraph["span_id"])
+            nodes.append({"key": span_key, "type": "span", "span_id": paragraph["span_id"]})
+            edges.append({"consumer": span_key, "dependency": paragraph_key})
+    return nodes, edges
+
+
+_REFERENCE_TYPES = {
+    "event",
+    "identity_version",
+    "name",
+    "attribute",
+    "affiliation_state",
+    "conflict",
+    "memory_record",
+    "relation",
+}
+
+
+def _resolve_reference_edges(
+    nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]], diagnostics: List[str]
+) -> List[Dict[str, Any]]:
+    owners: Dict[Tuple[str, str], List[Tuple]] = {}
+    for node in nodes:
+        key = tuple(node["key"])
+        if len(key) == 3 and key[1] in _REFERENCE_TYPES:
+            owners.setdefault((key[1], key[2]), []).append(key)
+    resolved = []
+    for edge in edges:
+        dependency = tuple(edge["dependency"])
+        if len(dependency) == 2 and dependency[0] in _REFERENCE_TYPES:
+            matches = owners.get((dependency[0], dependency[1])) or []
+            if len(matches) == 1:
+                edge = dict(edge, dependency=matches[0])
+            elif not matches:
+                diagnostics.append(f"unresolved_reference:{dependency}")
+            else:
+                diagnostics.append(f"ambiguous_reference:{dependency}")
+        resolved.append(edge)
+    return resolved
+
+
 def collect_dependencies(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    nodes: List[Dict[str, Any]] = []
+    nodes: List[Dict[str, Any]] = [{"key": ("index", "canonical"), "type": "index"}]
     edges: List[Dict[str, Any]] = []
     diagnostics: List[str] = []
     for item in inputs["inputs"]:
@@ -530,11 +728,14 @@ def collect_dependencies(inputs: Dict[str, Any]) -> Dict[str, Any]:
             nodes.append(
                 {"key": page_node, "type": "page", "page_key": page["page_key"], "entity_id": page.get("entity_id")}
             )
-            edges.append({"consumer": ("bundle", bundle_key), "dependency": page_node})
+            edges.append({"consumer": page_node, "dependency": ("bundle", bundle_key)})
             page_data = _load_page_data(REPO_ROOT / page["response"], page["page_key"], diagnostics)
             page_nodes, page_edges = _record_keys(page_data, page["page_key"])
             nodes.extend(page_nodes)
             edges.extend(page_edges)
+    nodes, span_edges = _span_paragraph_edges(inputs, nodes, diagnostics)
+    edges.extend(span_edges)
+    edges = _resolve_reference_edges(nodes, edges, diagnostics)
     return {
         "format_version": 1,
         "protocol": PROTOCOL_VERSION,
@@ -592,6 +793,7 @@ def mark_dirty(
         "proof_changed",
         "generated_output_modified",
         "response_changed",
+        "validation_blocked",
     }
     for event in events:
         kind = event.get("kind")
@@ -628,6 +830,14 @@ def compute_freshness(
                 continue
             old_page = (base.get("pages") or {}).get(page_key) or {}
             new_page = (current.get("pages") or {}).get(page_key) or {}
+            if (
+                not old_page.get("output")
+                or not old_page.get("response")
+                or not new_page.get("output")
+                or not new_page.get("response")
+            ):
+                result[page_key] = "unknown"
+                continue
             changed = (
                 page_key in dirty
                 or old_page.get("output") != new_page.get("output")
@@ -635,6 +845,47 @@ def compute_freshness(
             )
             result[page_key] = "stale" if changed else "fresh"
     return result
+
+
+def _field_impacts(graph: Optional[Dict[str, Any]], dirty: Dict[str, List[str]]) -> Dict[str, List[Dict[str, Any]]]:
+    if not dirty or not graph:
+        return {}
+    fields_by_page: Dict[str, List[str]] = {}
+    for node in graph.get("nodes") or []:
+        if node.get("type") == "field" and node.get("page_key"):
+            fields_by_page.setdefault(node["page_key"], []).append(str(node.get("business_id")))
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    for page_key, reasons in dirty.items():
+        result[page_key] = [
+            {
+                "field": field_path,
+                "reasons": reasons,
+                "action": "evidence_rebind" if "source_file_changed" in reasons else "validation",
+            }
+            for field_path in sorted(fields_by_page.get(page_key, []))
+        ]
+    return result
+
+
+def _merge_graphs(old: Optional[Dict[str, Any]], new: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(old, dict) or old.get("protocol") != PROTOCOL_VERSION:
+        if old:
+            new = dict(new)
+            new["diagnostics"] = sorted(set((new.get("diagnostics") or []) + ["old_graph_unbound"]))
+        return new
+    nodes = {tuple(node["key"]): node for node in old.get("nodes") or []}
+    for node in new.get("nodes") or []:
+        nodes[tuple(node["key"])] = node
+    edges: Dict[Tuple, Dict[str, Any]] = {}
+    for edge in (old.get("edges") or []) + (new.get("edges") or []):
+        edges[(tuple(edge["consumer"]), tuple(edge["dependency"]))] = edge
+    return {
+        "format_version": 1,
+        "protocol": PROTOCOL_VERSION,
+        "nodes": [nodes[key] for key in sorted(nodes, key=str)],
+        "edges": [edges[key] for key in sorted(edges, key=str)],
+        "diagnostics": sorted(set((old.get("diagnostics") or []) + (new.get("diagnostics") or []))),
+    }
 
 
 def build_plan(
@@ -646,24 +897,31 @@ def build_plan(
     baseline, baseline_errors = load_baseline(state_path)
     not_implemented = ["rebuild", "runtime_stale"]
     if baseline is None:
+        current_errors = [
+            f"{bundle_key}:validation:{error}"
+            for bundle_key, entry in (observed.get("inputs") or {}).items()
+            for error in entry.get("validation_errors") or []
+        ]
         return {
             "format_version": 1,
             "generation": plan_generation(observed, None),
             "full_required": True,
             "unknown": baseline_errors or ["state_unavailable"],
-            "blocked": [],
+            "blocked": sorted(set(current_errors)),
             "dirty": {},
             "observed": observed,
             "not_implemented": not_implemented,
             "freshness": {page["page_key"]: "unknown" for item in inputs["inputs"] for page in item["managed_pages"]},
         }
     events, blocked, unknown, full_required = diff_fingerprints(baseline, observed, inputs)
-    graph = collect_dependencies(inputs)
+    graph = _merge_graphs((baseline or {}).get("graph"), collect_dependencies(inputs))
     dirty, _mark_blocked, mark_full = mark_dirty(events, inputs, graph)
     full_required = full_required or mark_full
     freshness = compute_freshness(inputs, observed, baseline, dirty)
     if full_required:
         freshness = {key: "stale" for key in freshness}
+    graph_diagnostics = graph.get("diagnostics") or []
+    unknown = sorted(set(unknown + [f"graph:{item}" for item in graph_diagnostics]))
     return {
         "format_version": 1,
         "generation": plan_generation(observed, baseline),
@@ -675,12 +933,13 @@ def build_plan(
         "not_implemented": not_implemented,
         "freshness": freshness,
         "events": events,
-        "graph_diagnostics": graph.get("diagnostics") or [],
+        "field_impacts": _field_impacts(graph, dirty),
+        "graph_diagnostics": graph_diagnostics,
     }
 
 
 def explain_page(plan: Dict[str, Any], page_key: str) -> Dict[str, Any]:
-    return {
+    result = {
         "page_key": page_key,
         "dirty": (plan.get("dirty") or {}).get(page_key, []),
         "freshness": (plan.get("freshness") or {}).get(page_key, "unknown"),
@@ -688,6 +947,66 @@ def explain_page(plan: Dict[str, Any], page_key: str) -> Dict[str, Any]:
         "blocked": list(plan.get("blocked") or []),
         "not_implemented": list(plan.get("not_implemented") or []),
     }
+    impacts = (plan.get("field_impacts") or {}).get(page_key)
+    if impacts:
+        result["field_impacts"] = impacts
+    if plan.get("snapshot_only"):
+        result["snapshot_only"] = True
+    if plan.get("plan_outdated"):
+        result["plan_outdated"] = True
+    return result
+
+
+def _derived_root() -> Path:
+    return (REPO_ROOT / "reports" / "incremental").resolve()
+
+
+def _protected_paths(inputs: Dict[str, Any], state_path: Path, inputs_path: Path) -> set:
+    protected = {Path(inputs_path).resolve(), Path(state_path).resolve()}
+    protected.add((REPO_ROOT / "wiki" / "__schema__" / "entity.schema.json").resolve())
+    protected.add((REPO_ROOT / "wiki" / "__schema__" / "entity-template.md").resolve())
+    protected.add((REPO_ROOT / "wiki" / "__schema__" / "source-span-format.md").resolve())
+    protected.add((REPO_ROOT / "wiki" / "__schema__" / "version-registry.json").resolve())
+    protected.add((REPO_ROOT / "docs" / "schema-lock.json").resolve())
+    for item in inputs["inputs"]:
+        root = _inside_root(REPO_ROOT / item["root"])
+        protected.add((root / "manifest.json").resolve())
+        for file_name in _manifest_sources(
+            _read_json(root / "manifest.json") if (root / "manifest.json").exists() else {}
+        ):
+            protected.add((root / file_name).resolve())
+        for page in item["managed_pages"]:
+            protected.add((REPO_ROOT / page["response"]).resolve())
+            if page.get("output"):
+                protected.add((REPO_ROOT / page["output"]).resolve())
+        if item.get("prompt"):
+            protected.add((REPO_ROOT / item["prompt"]).resolve())
+        for profile_id in item["profile_ids"]:
+            protected.add(
+                (REPO_ROOT / "wiki" / "__schema__" / "entities" / f"{profile_id.replace(':', '_')}.json").resolve()
+            )
+    return protected
+
+
+def _ensure_derived_output(path: Path, protected: set, siblings: List[Path]) -> Path:
+    resolved = Path(path).resolve()
+    root = _derived_root()
+    if resolved != root and root not in resolved.parents:
+        raise IncrementalError(f"derived output must stay under {root}: {resolved}")
+    if resolved in protected:
+        raise IncrementalError(f"derived output overlaps protected input: {resolved}")
+    for sibling in siblings:
+        if resolved == Path(sibling).resolve():
+            raise IncrementalError(f"derived outputs must not overlap: {resolved}")
+    return resolved
+
+
+def _ensure_read_path(path: Path, label: str) -> Path:
+    resolved = Path(path).resolve()
+    root = REPO_ROOT.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise IncrementalError(f"{label} must stay inside project: {resolved}")
+    return resolved
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -698,32 +1017,44 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--plan", default=str(DEFAULT_PLAN))
     parser.add_argument("--graph", default=str(DEFAULT_GRAPH))
     parser.add_argument("--page")
+    parser.add_argument("--snapshot-only", action="store_true")
     args = parser.parse_args(argv)
     try:
-        inputs = load_inputs(Path(args.inputs))
+        inputs_path = _ensure_read_path(Path(args.inputs), "inputs")
+        state_path = _ensure_read_path(Path(args.state), "state")
+        inputs = load_inputs(inputs_path)
+        protected = _protected_paths(inputs, state_path, inputs_path)
+        plan_path = _ensure_derived_output(Path(args.plan), protected, [Path(args.graph)])
+        graph_path = _ensure_derived_output(Path(args.graph), protected, [plan_path])
         if args.command == "graph":
             graph = collect_dependencies(inputs)
-            _write_json(Path(args.graph), graph)
+            _write_json(graph_path, graph)
             print(
                 json.dumps(
-                    {"graph": args.graph, "nodes": len(graph["nodes"]), "edges": len(graph["edges"])},
+                    {"graph": str(graph_path), "nodes": len(graph["nodes"]), "edges": len(graph["edges"])},
                     ensure_ascii=False,
                 )
             )
             return 0
         if args.command == "plan":
-            plan = build_plan(inputs, Path(args.state))
-            _write_json(Path(args.plan), plan)
-            _write_json(Path(args.graph), collect_dependencies(inputs))
+            plan = build_plan(inputs, state_path)
+            _write_json(plan_path, plan)
+            _write_json(graph_path, collect_dependencies(inputs))
             print(
                 json.dumps(
-                    {"plan": args.plan, "full_required": plan["full_required"], "dirty": len(plan["dirty"])},
+                    {"plan": str(plan_path), "full_required": plan["full_required"], "dirty": len(plan["dirty"])},
                     ensure_ascii=False,
                 )
             )
             return 0
-        plan_path = Path(args.plan)
-        plan = _read_json(plan_path) if plan_path.exists() else build_plan(inputs, Path(args.state))
+        current_plan = build_plan(inputs, state_path)
+        if args.snapshot_only and plan_path.exists():
+            plan = _read_json(plan_path)
+            plan["snapshot_only"] = True
+            if plan.get("generation") != current_plan.get("generation"):
+                plan["plan_outdated"] = True
+        else:
+            plan = current_plan
         if not args.page:
             print(json.dumps(plan.get("freshness") or {}, ensure_ascii=False, indent=2))
             return 0
