@@ -1061,18 +1061,6 @@ def _propagate(queue: List[Tuple[Tuple, str, int]], reverse: Dict[Tuple, List[Tu
     return full_required
 
 
-def _forward_dependencies(start: Tuple, adjacency: Dict[Tuple, List[Tuple]]) -> set:
-    result: set = set()
-    stack = [start]
-    while stack:
-        node = stack.pop()
-        for dependency in adjacency.get(node, []):
-            if dependency not in result:
-                result.add(dependency)
-                stack.append(dependency)
-    return result
-
-
 def _seed_owned_nodes(
     page_key: str,
     reason: str,
