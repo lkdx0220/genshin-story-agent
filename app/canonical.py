@@ -156,6 +156,18 @@ class Fact:
     player_choice_missing: bool = False
 
 
+def _load_player_choice_profile_options(entity_id: str) -> List[Dict[str, Any]]:
+    slug = str(entity_id or "").replace(":", "_")
+    path = REPO_ROOT / "wiki" / "__schema__" / "entities" / (slug + ".json")
+    if not path.exists():
+        return []
+    try:
+        profile = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return list(profile.get("player_choice_options") or [])
+
+
 class CanonicalPage:
     """单个 canonical 页的解析结果。"""
 
@@ -163,7 +175,10 @@ class CanonicalPage:
         self.path = Path(path)
         self.registry = registry
         self.data, self.body = _parse_front_matter(text)
-        self.has_player_choice = bool(self.data.get("player_choice_options"))
+        self.player_choice_options = list(self.data.get("player_choice_options") or [])
+        if not self.player_choice_options:
+            self.player_choice_options = _load_player_choice_profile_options(self.data.get("entity_id"))
+        self.has_player_choice = bool(self.player_choice_options)
         self.span_url: Dict[str, str] = {}
         for match in _FOOTNOTE_RE.finditer(self.body):
             self.span_url[match.group("span")] = match.group("url")
@@ -270,12 +285,13 @@ class CanonicalPage:
             label = str(identity.get("label") or "")
             allowed_names = [n for n in identity.get("names") or [] if n.get("status") != "rejected"]
             common_names = [n for n in allowed_names if "player_choice_scope" in n and not n.get("player_choice_scope")]
+            missing_names = [n for n in allowed_names if "player_choice_scope" not in n]
             scoped: Dict[tuple, List[Dict[str, Any]]] = {}
             for name in allowed_names:
                 scope = tuple(name.get("player_choice_scope") or [])
                 if scope:
                     scoped.setdefault(scope, []).append(name)
-            if not scoped:
+            if not scoped and (not missing_names or not self.has_player_choice):
                 names = [str(n.get("value") or "") for n in allowed_names]
                 self._add_fact(
                     self.facts,
@@ -659,43 +675,41 @@ class CanonicalIndex:
         if fact.status in ("rejected", "superseded"):
             return "excluded"
         snapshot = snapshot or {}
+        statuses = []
         identity_id = snapshot.get("identity_version_id")
         if identity_id and fact.identity_version_ids and identity_id not in fact.identity_version_ids:
-            return "excluded"
+            statuses.append("excluded")
         if (fact.story_scope.get("from_event_id") or fact.story_scope.get("to_event_id")) and not self._scope_applies(
             fact.story_scope, snapshot
         ):
-            return "excluded"
-        version_status = self._version_status(fact.version, snapshot, registry=self.registry)
-        if version_status == "excluded":
-            return "excluded"
-        if version_status == "unresolved":
-            return "unresolved"
+            statuses.append("excluded")
+        statuses.append(self._version_status(fact.version, snapshot, registry=self.registry))
         if fact.player_choice_missing:
-            return "unresolved"
-        choice_status = self._player_choice_applies(fact.player_choice_scope, snapshot)
-        if choice_status == "excluded":
-            return "excluded"
-        if choice_status == "unresolved":
-            return "unresolved"
+            statuses.append("unresolved")
+        else:
+            statuses.append(self._player_choice_applies(fact.player_choice_scope, snapshot))
         if fact.observed_at:
             if not snapshot:
-                return "unresolved"
-            if not any(self._observation_matches(item, snapshot) for item in fact.observed_at):
-                return "excluded"
+                statuses.append("unresolved")
+            elif not any(self._observation_matches(item, snapshot) for item in fact.observed_at):
+                statuses.append("excluded")
+        if "excluded" in statuses:
+            return "excluded"
+        if "unresolved" in statuses:
+            return "unresolved"
         return "applicable"
 
     def player_choice_gaps(self, snapshot: Dict[str, Any], question: Optional[str] = None) -> List[str]:
         snapshot = snapshot or {}
-        if snapshot.get("player_choice"):
-            return []
         question_chars = {char for char in (question or "") if not char.isspace()}
         gaps = []
         for page in self.pages:
             for fact in page.facts:
-                if fact.status in ("rejected", "superseded") or not (
-                    fact.player_choice_scope or fact.player_choice_missing
-                ):
+                if fact.status in ("rejected", "superseded"):
+                    continue
+                if not (fact.player_choice_scope or fact.player_choice_missing):
+                    continue
+                if not fact.player_choice_missing and snapshot.get("player_choice"):
                     continue
                 identity_id = snapshot.get("identity_version_id")
                 if identity_id and fact.identity_version_ids and identity_id not in fact.identity_version_ids:
@@ -706,16 +720,23 @@ class CanonicalIndex:
                     continue
                 if self._version_status(fact.version, snapshot, registry=self.registry) == "excluded":
                     continue
-                if (
-                    fact.observed_at
-                    and snapshot
-                    and not any(self._observation_matches(item, snapshot) for item in fact.observed_at)
-                ):
-                    continue
+                if fact.observed_at:
+                    if snapshot.get("player_choice"):
+                        matched = any(self._observation_matches(item, snapshot) for item in fact.observed_at)
+                    else:
+                        matched = False
+                        for candidate in fact.player_choice_scope or [None]:
+                            trial = dict(snapshot)
+                            trial["player_choice"] = candidate
+                            if any(self._observation_matches(item, trial) for item in fact.observed_at):
+                                matched = True
+                                break
+                    if not matched:
+                        continue
                 if question_chars and not (question_chars & set(fact.text)):
                     continue
                 cites = "".join(
-                    f"[^source:{page.span_url[span_id]}]" for span_id in fact.evidence if span_id in page.span_url
+                    f"[原文]({page.span_url[span_id]})" for span_id in fact.evidence if span_id in page.span_url
                 )
                 if fact.player_choice_missing:
                     gaps.append(f"{page.entity_id}: {fact.text[:40]}（未分类：缺少 player_choice_scope）{cites}")

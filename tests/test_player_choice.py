@@ -185,7 +185,12 @@ def test_player_choice_gap_not_hidden_by_topk(tmp_path):
 
 
 def test_non_choice_entity_choice_parameter_has_no_effect(tmp_path):
-    data = _base_data(player_choice_options=[], events=[{"event_id": "event:x", "title": "普通事件"}])
+    data = _base_data(
+        entity_id="char:other",
+        canonical_name="其他",
+        player_choice_options=[],
+        events=[{"event_id": "event:x", "title": "普通事件"}],
+    )
     page = _page(tmp_path, data)
     from app.canonical import CanonicalIndex
 
@@ -358,3 +363,131 @@ def test_attribute_version_excluded_beats_choice_unresolved(tmp_path):
     assert index.attribute_projection({"game_version": "5.1"})["char:traveler:element"]["status"] == "not_applicable"
     gaps = index.player_choice_gaps({"game_version": "5.1"}, question="元素")
     assert not any("attr:traveler-element" in gap for gap in gaps)
+
+
+def test_profile_detection_marks_missing_scope(tmp_path):
+    data = _base_data(events=[{"event_id": "event:x", "title": "旧页事件"}])
+    data.pop("player_choice_options", None)
+    page = _page(tmp_path, data)
+    fact = [item for item in page.facts if "旧页事件" in item.text][0]
+    assert fact.player_choice_missing is True
+
+
+def test_identity_summary_excludes_missing_names(tmp_path):
+    data = _base_data(
+        identity_versions=[
+            {
+                "identity_version_id": "identity:traveler",
+                "label": "旅行者",
+                "status": "candidate",
+                "evidence": [],
+                "names": [{"name_id": "name:x", "value": "未分类名", "kind": "primary", "evidence": []}],
+            }
+        ]
+    )
+    page = _page(tmp_path, data)
+    assert all("未分类名" not in fact.text for fact in page.facts if fact.kind == "identity")
+
+
+def test_choice_specified_still_reports_missing_scope_gaps(tmp_path):
+    data = _base_data(events=[{"event_id": "event:x", "title": "旧页事件"}])
+    data.pop("player_choice_options", None)
+    page = _page(tmp_path, data)
+    from app.canonical import CanonicalIndex
+
+    gaps = CanonicalIndex([page]).player_choice_gaps({"player_choice": "lumine"}, question="事件")
+    assert any("未分类" in gap for gap in gaps)
+
+
+def test_axis_excluded_beats_version_unresolved(tmp_path):
+    record = _record_for_choice("element", "anemo", ["aether"], {"valid_from_label": "月之七", "valid_to": None})
+    data = _base_data(attribute_records=[record])
+    page = _page(tmp_path, data)
+    from app.canonical import CanonicalIndex
+
+    status = CanonicalIndex([page]).attribute_projection({"player_choice": "lumine"})["char:traveler:element"]["status"]
+    assert status == "not_applicable"
+
+
+def _record_for_choice(key, value, scope, version):
+    return {
+        "attribute_id": "attr:traveler-element",
+        "key": key,
+        "value": value,
+        "value_label": None,
+        "identity_version_ids": [],
+        "story_scope": {
+            "label": None,
+            "from_event_id": None,
+            "from_boundary": "unknown",
+            "to_event_id": None,
+            "to_boundary": "unknown",
+        },
+        "version": {"introduced_in": None, "valid_from": None, "valid_to": None, "verified_in": [], **version},
+        "status": "candidate",
+        "evidence": [],
+        "conflict_ids": [],
+        "player_choice_scope": scope,
+        "observed_at": [],
+    }
+
+
+def test_ingest_attribute_projection_respects_observed_at():
+    record = {
+        "attribute_id": "attr:traveler-element",
+        "key": "element",
+        "value": "anemo",
+        "value_label": None,
+        "identity_version_ids": [],
+        "story_scope": {
+            "label": None,
+            "from_event_id": None,
+            "from_boundary": "unknown",
+            "to_event_id": None,
+            "to_boundary": "unknown",
+        },
+        "version": {"introduced_in": None, "valid_from": None, "valid_to": None, "verified_in": []},
+        "status": "candidate",
+        "evidence": [{"source_span_id": "span:test", "basis": "explicit_text", "authority": "non_authoritative"}],
+        "conflict_ids": [],
+        "observed_at": [
+            {"identity_version_id": None, "story_event_id": None, "position": "unknown", "game_version": "3.2"}
+        ],
+        "player_choice_scope": [],
+    }
+    data = _base_data(attribute_records=[record])
+    data["snapshot"] = {
+        "game_version": "5.1",
+        "story_event_id": None,
+        "position": "unknown",
+        "identity_version_id": None,
+    }
+    ingest._validate_attribute_records(
+        data,
+        {"span:test": {"quote": "风元素"}},
+        set(),
+        __import__("app.versioning", fromlist=["load_registry"]).load_registry(),
+    )
+
+
+def test_observed_affiliation_choice_mismatch():
+    state = {"observed_at": [{"identity_version_id": "identity:traveler", "player_choice": "aether"}]}
+    assert (
+        ingest._observed_applies(
+            state, {"identity_version_id": "identity:traveler", "player_choice": "lumine"}, "identity:traveler"
+        )
+        is False
+    )
+
+
+def test_conflict_choice_scope_needs_branch():
+    conflict = {
+        "conflict_id": "conflict:c1",
+        "status": "open",
+        "summary": "冲突",
+        "target_ref": "attribute:attr:test",
+        "player_choice_scope": ["aether"],
+        "alternatives": [],
+    }
+    with pytest.raises(ingest.IngestError):
+        ingest._validate_player_choice(_base_data(conflicts=[conflict]), {}, PROFILE)
