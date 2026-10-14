@@ -30,7 +30,7 @@ def test_missing_or_broken_required_profile_is_error(tmp_path, monkeypatch):
     path.write_text(json.dumps({"entity_id": "char:traveler", "player_choice_options": []}), encoding="utf-8")
     options, error = canonical._load_player_choice_profile_options("char:traveler")
     assert options == []
-    assert error is None
+    assert "exactly aether/lumine" in error
     path.write_text("{not json", encoding="utf-8")
     options, error = canonical._load_player_choice_profile_options("char:traveler")
     assert options == []

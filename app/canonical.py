@@ -178,10 +178,13 @@ def _load_player_choice_profile_options(entity_id: str):
     if not isinstance(profile, dict) or profile.get("entity_id") != entity_id:
         return [], "choice profile entity_id mismatch"
     options = profile.get("player_choice_options")
+    required = entity_id in REQUIRED_CHOICE_PROFILE_IDS
     if options is None:
+        if required:
+            return [], "required choice profile needs exactly aether/lumine options"
         return [], None
-    if not isinstance(options, list):
-        return [], "choice profile options must be an array"
+    if not isinstance(options, list) or (required and len(options) != 2):
+        return [], "choice profile options must be exactly aether/lumine for required profiles"
     seen_ids = set()
     seen_aliases = set()
     for option in options:
@@ -193,14 +196,21 @@ def _load_player_choice_profile_options(entity_id: str):
         if choice_id not in ("aether", "lumine") or choice_id in seen_ids:
             return [], "choice profile option id invalid/duplicate"
         seen_ids.add(choice_id)
-        if not isinstance(label, str) or not label.strip():
-            return [], "choice profile label required"
+        if not isinstance(label, str) or not label.strip() or not re.search(r"[一-鿿]", label):
+            return [], "choice profile label must be non-empty Chinese text"
         if not isinstance(aliases, list) or not aliases:
             return [], "choice profile aliases required"
         for alias in aliases:
-            if not isinstance(alias, str) or not alias.strip() or alias in seen_aliases:
-                return [], "choice profile alias invalid/duplicate"
+            if (
+                not isinstance(alias, str)
+                or not alias.strip()
+                or not re.search(r"[一-鿿]", alias)
+                or alias in seen_aliases
+            ):
+                return [], "choice profile alias must be non-empty Chinese and unique"
             seen_aliases.add(alias)
+    if required and seen_ids != {"aether", "lumine"}:
+        return [], "required choice profile must contain aether and lumine"
     return options, None
 
 
@@ -656,13 +666,9 @@ class CanonicalIndex:
 
     @staticmethod
     def _player_choice_applies(scope: List[str], snapshot: Dict[str, Any]) -> str:
-        scope = scope or []
-        if not scope:
-            return "applicable"
-        choice = (snapshot or {}).get("player_choice")
-        if not choice:
-            return "unresolved"
-        return "applicable" if choice in scope else "excluded"
+        from app.choice_contract import choice_status
+
+        return choice_status(scope, snapshot, has_choice=True, field_present=True)
 
     @classmethod
     def _fact_applies(cls, fact: Fact, snapshot: Dict[str, Any], registry: Any = _REGISTRY_UNSET) -> bool:
@@ -676,6 +682,11 @@ class CanonicalIndex:
             return False
         if cls._player_choice_applies(fact.player_choice_scope, snapshot) != "applicable":
             return False
+        if fact.observed_at:
+            from app.choice_contract import APPLICABLE, observations_status
+
+            if observations_status(fact.observed_at, snapshot, registry=registry) != APPLICABLE:
+                return False
         return cls._version_applies(fact.version, snapshot, registry=registry)
 
     def registry_gaps(self, snapshot: Dict[str, Any]) -> List[str]:
@@ -747,10 +758,9 @@ class CanonicalIndex:
         else:
             statuses.append(self._player_choice_applies(fact.player_choice_scope, snapshot))
         if fact.observed_at:
-            if not snapshot:
-                statuses.append("unresolved")
-            elif not any(self._observation_matches(item, snapshot) for item in fact.observed_at):
-                statuses.append("excluded")
+            from app.choice_contract import observations_status
+
+            statuses.append(observations_status(fact.observed_at, snapshot, registry=self.registry))
         if "excluded" in statuses:
             return "excluded"
         if "unresolved" in statuses:

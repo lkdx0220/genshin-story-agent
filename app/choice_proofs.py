@@ -63,10 +63,17 @@ def generate_fixture_choice_proofs(bundle: Dict[str, Any]) -> List[Dict[str, Any
     return proofs
 
 
-def load_choice_proofs(source_dir: Path, bundle: Dict[str, Any]) -> List[Dict[str, Any]]:
+def load_choice_proofs(source_dir: Path, bundle: Dict[str, Any], required: bool = False) -> List[Dict[str, Any]]:
     manifest = bundle.get("manifest") or {}
     rel = manifest.get("choice_proofs_file")
-    if rel:
+    if not rel:
+        if required:
+            raise ChoiceProofError("choice entity requires manifest.choice_proofs_file")
+        if bundle.get("mode") == "fixture":
+            proofs = generate_fixture_choice_proofs(bundle)
+        else:
+            proofs = []
+    else:
         root = Path(source_dir).resolve()
         path = (root / rel).resolve()
         if root not in path.parents and path != root:
@@ -75,22 +82,48 @@ def load_choice_proofs(source_dir: Path, bundle: Dict[str, Any]) -> List[Dict[st
             raw = path.read_bytes()
         except OSError as exc:
             raise ChoiceProofError("choice_proofs_file unreadable: " + str(exc)) from exc
-        expected = manifest.get("choice_proofs_sha256")
-        if expected and hashlib.sha256(raw).hexdigest() != expected:
+        expected_sha = manifest.get("choice_proofs_sha256")
+        if not expected_sha:
+            raise ChoiceProofError("choice entity requires manifest.choice_proofs_sha256")
+        if hashlib.sha256(raw).hexdigest() != expected_sha:
             raise ChoiceProofError("choice_proofs_sha256 mismatch")
         try:
             data = json.loads(raw.decode("utf-8"))
         except json.JSONDecodeError as exc:
             raise ChoiceProofError("choice_proofs JSON invalid") from exc
-        proofs = data.get("proofs") if isinstance(data, dict) else None
-    elif bundle.get("mode") == "fixture":
-        proofs = generate_fixture_choice_proofs(bundle)
-    else:
-        proofs = []
+        if not isinstance(data, dict) or data.get("format_version") != 1:
+            raise ChoiceProofError("choice_proofs format_version must be 1")
+        proofs = data.get("proofs")
     if not isinstance(proofs, list):
         raise ChoiceProofError("choice proofs must be an array")
     _validate_proof_structure(proofs, bundle)
+    if any(proof.get("rule_id") == "fixture-choice-marker-v1" for proof in proofs):
+        if bundle.get("mode") != "fixture":
+            raise ChoiceProofError("fixture choice proof rule is fixture-only")
+        for source in bundle.get("sources") or []:
+            if source.get("provider") != "user_fixture":
+                raise ChoiceProofError("fixture choice proof rule requires user_fixture provider")
+        expected = generate_fixture_choice_proofs(bundle)
+        if _proof_signature(expected) != _proof_signature(proofs):
+            raise ChoiceProofError("choice_proofs does not match raw marker coverage")
     return proofs
+
+
+def _proof_signature(proofs: List[Dict[str, Any]]):
+    return sorted(
+        (
+            proof.get("proof_id"),
+            tuple(proof.get("scope") or []),
+            proof.get("source_id"),
+            proof.get("source_sha256"),
+            proof.get("anchor_span_id"),
+            proof.get("anchor_quote_sha256"),
+            tuple(proof.get("covered_span_ids") or []),
+            proof.get("rule_id"),
+        )
+        for proof in proofs
+        if isinstance(proof, dict)
+    )
 
 
 def _validate_proof_structure(proofs: List[Dict[str, Any]], bundle: Dict[str, Any]) -> None:

@@ -60,6 +60,12 @@ def choice_status(scope: Any, snapshot: Optional[Dict[str, Any]], *, has_choice:
 def _axis_equality(observation: Dict[str, Any], snapshot: Dict[str, Any], key: str) -> str:
     observed = observation.get(key)
     queried = snapshot.get(key)
+    if key == "position":
+        if observed in (None, "unknown"):
+            return APPLICABLE
+        if queried in (None, "unknown"):
+            return UNRESOLVED
+        return APPLICABLE if observed == queried else EXCLUDED
     if observed is None:
         return APPLICABLE
     if queried is None:
