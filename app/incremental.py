@@ -347,6 +347,50 @@ def fingerprint_inputs(inputs: Dict[str, Any], inputs_path: Optional[Path] = Non
     return observed
 
 
+def _page_hashes_ok(page: Any) -> bool:
+    if not isinstance(page, dict) or "output" not in page or "response" not in page:
+        return False
+    for key in ("output", "response"):
+        if page[key] is not None and not isinstance(page[key], str):
+            return False
+    return True
+
+
+def _source_entries_ok(sources: Any) -> bool:
+    if not isinstance(sources, dict):
+        return False
+    for source in sources.values():
+        if not isinstance(source, dict):
+            return False
+        for key in ("file", "declared", "actual"):
+            if source.get(key) is not None and not isinstance(source.get(key), str):
+                return False
+    return True
+
+
+def _profile_entries_ok(profiles: Any) -> bool:
+    if profiles is None:
+        return True
+    if not isinstance(profiles, dict):
+        return False
+    return all(value is None or isinstance(value, str) for value in profiles.values())
+
+
+def _input_entry_errors(entry: Any) -> List[str]:
+    if not isinstance(entry, dict):
+        return ["state_inputs_incomplete"]
+    pages = entry.get("pages")
+    if not isinstance(pages, dict) or not all(_page_hashes_ok(page) for page in pages.values()):
+        return ["state_pages_incomplete"]
+    if not _source_entries_ok(entry.get("sources")):
+        return ["state_sources_incomplete"]
+    if not _profile_entries_ok(entry.get("profiles")):
+        return ["state_inputs_incomplete"]
+    if entry.get("validation_errors"):
+        return ["state_validation_failed"]
+    return []
+
+
 def _baseline_input_errors(inputs: Any) -> List[str]:
     if not isinstance(inputs, dict) or not isinstance(inputs.get("common"), dict):
         return ["state_inputs_incomplete"]
@@ -354,15 +398,9 @@ def _baseline_input_errors(inputs: Any) -> List[str]:
     if not isinstance(entries, dict):
         return ["state_inputs_incomplete"]
     for entry in entries.values():
-        if not isinstance(entry, dict):
-            return ["state_inputs_incomplete"]
-        if not isinstance(entry.get("pages"), dict):
-            return ["state_pages_incomplete"]
-        for page in entry["pages"].values():
-            if not isinstance(page, dict) or "output" not in page or "response" not in page:
-                return ["state_pages_incomplete"]
-        if entry.get("validation_errors"):
-            return ["state_validation_failed"]
+        errors = _input_entry_errors(entry)
+        if errors:
+            return errors
     return []
 
 
@@ -543,9 +581,18 @@ def _diff_pages(bundle_key: str, old_pages: Dict[str, Any], new_pages: Dict[str,
         old_page = old_pages.get(page_key) or {}
         new_page = new_pages.get(page_key) or {}
         if old_page.get("output") != new_page.get("output"):
-            events.append({"kind": "generated_output_modified", "bundle_key": bundle_key, "page_key": page_key})
+            events.append(
+                {
+                    "kind": "generated_output_modified",
+                    "bundle_key": bundle_key,
+                    "page_key": page_key,
+                    "page_keys": [page_key],
+                }
+            )
         if old_page.get("response") != new_page.get("response"):
-            events.append({"kind": "response_changed", "bundle_key": bundle_key, "page_key": page_key})
+            events.append(
+                {"kind": "response_changed", "bundle_key": bundle_key, "page_key": page_key, "page_keys": [page_key]}
+            )
     return events
 
 
@@ -642,13 +689,39 @@ def _add_evidence(
             edges.append({"consumer": owner, "dependency": span_key})
 
 
-def _add_refs(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]], owner: Tuple, record: Dict[str, Any]) -> None:
+def _add_identity_refs(
+    nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]], owner: Tuple, record: Dict[str, Any]
+) -> None:
     for identity_id in record.get("identity_version_ids") or []:
         _append_ref(nodes, edges, owner, "identity_version", identity_id)
+
+
+def _add_choice_conflict_refs(
+    nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]], owner: Tuple, record: Dict[str, Any]
+) -> None:
     for proof_id in record.get("player_choice_proof_refs") or []:
         _append_ref(nodes, edges, owner, "proof", proof_id)
     for conflict_id in record.get("conflict_ids") or []:
         _append_ref(nodes, edges, owner, "conflict", conflict_id)
+    target_ref = record.get("target_ref")
+    if not isinstance(target_ref, str) or ":" not in target_ref:
+        return
+    prefix, business_id = target_ref.split(":", 1)
+    node_type = {
+        "attribute": "attribute",
+        "event": "event",
+        "name": "name",
+        "identity_version": "identity_version",
+        "memory": "memory_record",
+        "affiliation_state": "affiliation_state",
+    }.get(prefix)
+    if node_type:
+        _append_ref(nodes, edges, owner, node_type, business_id)
+
+
+def _add_version_time_refs(
+    nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]], owner: Tuple, record: Dict[str, Any]
+) -> None:
     story_scope = record.get("story_scope") or {}
     for edge in ("from_event_id", "to_event_id"):
         _append_ref(nodes, edges, owner, "event", story_scope.get(edge))
@@ -659,7 +732,7 @@ def _add_refs(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]], owner: T
     for event_id in record.get("about_event_ids") or []:
         _append_ref(nodes, edges, owner, "event", event_id)
     story_time = record.get("story_time") or {}
-    for event_id in (story_time.get("after_event_ids") or []) + (story_time.get("before_event_ids") or []):
+    for event_id in list(story_time.get("after_event_ids") or []) + list(story_time.get("before_event_ids") or []):
         _append_ref(nodes, edges, owner, "event", event_id)
     branch = record.get("player_choice_branch") or {}
     if branch.get("source_span_id"):
@@ -671,22 +744,15 @@ def _add_refs(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]], owner: T
         _append_ref(nodes, edges, owner, "event", observation.get("story_event_id"))
         _append_ref(nodes, edges, owner, "version", observation.get("game_version_label"))
         _append_ref(nodes, edges, owner, "version", observation.get("game_version"))
-    target_ref = record.get("target_ref")
-    if isinstance(target_ref, str) and ":" in target_ref:
-        prefix, business_id = target_ref.split(":", 1)
-        node_type = {
-            "attribute": "attribute",
-            "event": "event",
-            "name": "name",
-            "identity_version": "identity_version",
-            "memory": "memory_record",
-            "affiliation_state": "affiliation_state",
-        }.get(prefix)
-        if node_type:
-            _append_ref(nodes, edges, owner, node_type, business_id)
     version = record.get("version") or {}
     for key in ("version_id", "valid_from_label", "valid_to_label", "introduced_in_label"):
         _append_ref(nodes, edges, owner, "version", version.get(key))
+
+
+def _add_refs(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]], owner: Tuple, record: Dict[str, Any]) -> None:
+    _add_identity_refs(nodes, edges, owner, record)
+    _add_choice_conflict_refs(nodes, edges, owner, record)
+    _add_version_time_refs(nodes, edges, owner, record)
 
 
 def _add_identity_nodes(
@@ -1007,6 +1073,24 @@ def _forward_dependencies(start: Tuple, adjacency: Dict[Tuple, List[Tuple]]) -> 
     return result
 
 
+def _seed_owned_nodes(
+    page_key: str,
+    reason: str,
+    graph: Optional[Dict[str, Any]],
+    adjacency: Dict[Tuple, List[Tuple]],
+    queue: List[Tuple[Tuple, str, int]],
+) -> None:
+    page_node = ("page", page_key)
+    queue.append((page_node, reason, 0))
+    for dependency in adjacency.get(page_node, []):
+        if dependency and dependency[0] not in ("bundle", "source"):
+            queue.append((dependency, reason, 0))
+    for node in (graph or {}).get("nodes") or []:
+        key = tuple(node.get("key") or [])
+        if len(key) >= 3 and key[0] == page_key:
+            queue.append((key, reason, 0))
+
+
 def mark_dirty(
     events: List[Dict[str, Any]],
     inputs: Dict[str, Any],
@@ -1039,20 +1123,11 @@ def mark_dirty(
         if kind in page_kinds:
             for page_key in event.get("page_keys") or managed.get(event.get("bundle_key"), []):
                 add_page(page_key, kind)
-                page_node = ("page", page_key)
-                seeded = {page_node} | {
-                    node
-                    for node in _forward_dependencies(page_node, adjacency)
-                    if not (node and node[0] in ("bundle", "source"))
-                }
-                for node in seeded:
-                    queue.append((node, kind, 0))
+                _seed_owned_nodes(page_key, kind, graph, adjacency, queue)
         elif kind in ("profile_changed", "prompt_changed"):
             for page_key in event.get("page_keys") or []:
                 add_page(page_key, kind)
-                page_node = ("page", page_key)
-                for node in {page_node} | _forward_dependencies(page_node, adjacency):
-                    queue.append((node, kind, 0))
+                _seed_owned_nodes(page_key, kind, graph, adjacency, queue)
         else:
             full_required = True
     full_required = _propagate(queue, reverse, add_page) or full_required
@@ -1203,7 +1278,7 @@ def _finalize_plan(
         result["full_required_reasons"] = sorted(
             set(unknown + list(blocked) + [f"graph:{item}" for item in graph_diagnostics]) or ["conservative_full"]
         )
-        result["affected_pages"] = sorted(dirty) or managed_pages
+        result["affected_pages"] = sorted(set(dirty) | set(managed_pages))
     return result
 
 
