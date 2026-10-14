@@ -652,6 +652,15 @@ def _add_refs(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]], owner: T
     story_scope = record.get("story_scope") or {}
     for edge in ("from_event_id", "to_event_id"):
         _append_ref(nodes, edges, owner, "event", story_scope.get(edge))
+    for identity_id in record.get("predecessor_ids") or []:
+        _append_ref(nodes, edges, owner, "identity_version", identity_id)
+    _append_ref(nodes, edges, owner, "event", record.get("transition_event_id"))
+    _append_ref(nodes, edges, owner, "identity_version", record.get("subject_identity_version_id"))
+    for event_id in record.get("about_event_ids") or []:
+        _append_ref(nodes, edges, owner, "event", event_id)
+    story_time = record.get("story_time") or {}
+    for event_id in (story_time.get("after_event_ids") or []) + (story_time.get("before_event_ids") or []):
+        _append_ref(nodes, edges, owner, "event", event_id)
     branch = record.get("player_choice_branch") or {}
     if branch.get("source_span_id"):
         _append_ref(nodes, edges, owner, "span", branch.get("source_span_id"))
