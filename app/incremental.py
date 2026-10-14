@@ -187,7 +187,7 @@ def load_inputs(path: Path = DEFAULT_INPUTS) -> Dict[str, Any]:
     _need(isinstance(data, dict) and data.get("format_version") == 1, "incremental inputs format_version must be 1")
     entries = data.get("inputs")
     _need(isinstance(entries, list) and bool(entries), "incremental inputs must contain a non-empty inputs array")
-    normalized: Dict[str, Any] = {"format_version": 1, "inputs": []}
+    normalized: Dict[str, Any] = {"format_version": 1, "inputs": [], "_inputs_path": str(Path(path).resolve())}
     normalized_inputs: List[Dict[str, Any]] = normalized["inputs"]
     seen_bundle_keys: set = set()
     seen_page_keys: set = set()
@@ -198,7 +198,35 @@ def load_inputs(path: Path = DEFAULT_INPUTS) -> Dict[str, Any]:
 
 def _validation_errors(root: Path, manifest: Dict[str, Any], item: Dict[str, Any]) -> List[str]:
     errors: List[str] = []
-    template = REPO_ROOT / "wiki" / "__schema__" / "entity-template.md"
+    lock_path = REPO_ROOT / "docs" / "schema-lock.json"
+    if not lock_path.exists():
+        errors.append(f"{item['bundle_key']}:lock_missing")
+    else:
+        try:
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            lock = None
+            errors.append(f"{item['bundle_key']}:lock_invalid_json")
+        if isinstance(lock, dict):
+            if lock.get("schema_version") != "0.2.0-draft":
+                errors.append(f"{item['bundle_key']}:lock_version_mismatch")
+            hashes = lock.get("sha256")
+            if not isinstance(hashes, dict) or not hashes:
+                errors.append(f"{item['bundle_key']}:lock_empty")
+            else:
+                for rel, expected in hashes.items():
+                    path = REPO_ROOT / rel
+                    if not path.exists() or _hash_if_exists(path) != expected:
+                        errors.append(f"{item['bundle_key']}:lock_hash_mismatch:{rel}")
+            machine = REPO_ROOT / "wiki" / "__schema__" / "entity.schema.json"
+            template = REPO_ROOT / "wiki" / "__schema__" / "entity-template.md"
+            if machine.exists() and template.exists():
+                try:
+                    schema = json.loads(machine.read_text(encoding="utf-8"))
+                    if schema.get("x-template-sha256") != _hash_if_exists(template):
+                        errors.append(f"{item['bundle_key']}:lock_template_mismatch")
+                except (OSError, json.JSONDecodeError):
+                    errors.append(f"{item['bundle_key']}:lock_schema_unreadable")
     try:
         import ingest
 
@@ -207,17 +235,6 @@ def _validation_errors(root: Path, manifest: Dict[str, Any], item: Dict[str, Any
         errors.append(f"{item['bundle_key']}:load_bundle:{exc}")
         bundle = None
     if bundle is not None:
-        lock_path = REPO_ROOT / "docs" / "schema-lock.json"
-        lock_has_entries = False
-        try:
-            lock_has_entries = bool(json.loads(lock_path.read_text(encoding="utf-8")).get("sha256"))
-        except (OSError, json.JSONDecodeError, AttributeError):
-            lock_has_entries = False
-        if lock_has_entries:
-            try:
-                ingest.verify_schema_lock(template)
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"{item['bundle_key']}:schema_lock:{exc}")
         if manifest.get("choice_proofs_file"):
             try:
                 from app.choice_proofs import load_choice_proofs
@@ -231,8 +248,9 @@ def _validation_errors(root: Path, manifest: Dict[str, Any], item: Dict[str, Any
     return errors
 
 
-def fingerprint_inputs(inputs: Dict[str, Any], inputs_path: Path = DEFAULT_INPUTS) -> Dict[str, Any]:
-    observed: Dict[str, Any] = {"common": _common_fingerprints(Path(inputs_path)), "inputs": {}}
+def fingerprint_inputs(inputs: Dict[str, Any], inputs_path: Optional[Path] = None) -> Dict[str, Any]:
+    selected_inputs = Path(inputs_path or inputs.get("_inputs_path") or DEFAULT_INPUTS)
+    observed: Dict[str, Any] = {"common": _common_fingerprints(selected_inputs), "inputs": {}}
     observed_inputs: Dict[str, Any] = observed["inputs"]
     for item in inputs["inputs"]:
         bundle_key = item["bundle_key"]
@@ -663,11 +681,25 @@ def _span_paragraph_edges(
         except Exception as exc:  # noqa: BLE001
             diagnostics.append(f"{item['bundle_key']}:bundle_unavailable:{exc}")
             continue
-        by_span = {}
+        manifest_path = root / "manifest.json"
+        try:
+            manifest = _read_json(manifest_path) if manifest_path.exists() else {}
+        except IncrementalError as exc:
+            diagnostics.append(f"{item['bundle_key']}:manifest_unavailable:{exc}")
+            manifest = {}
+        anchors_by_source = {
+            source.get("source_id"): sorted((source.get("paragraphs") or {}).keys())
+            for source in manifest.get("sources") or []
+            if isinstance(source, dict)
+        }
+        counters = {}
         for paragraph in bundle.get("paragraphs") or []:
-            by_span[paragraph["span_id"]] = paragraph
-        for paragraph in bundle.get("paragraphs") or []:
-            paragraph_key = ("paragraph", paragraph["source_id"], paragraph["anchor"])
+            source_id = paragraph["source_id"]
+            position = counters.get(source_id, 0)
+            counters[source_id] = position + 1
+            anchors = anchors_by_source.get(source_id) or []
+            anchor = anchors[position] if position < len(anchors) else f"p{position + 1:03d}"
+            paragraph_key = ("paragraph", source_id, anchor)
             span_key = ("span", paragraph["span_id"])
             nodes.append({"key": span_key, "type": "span", "span_id": paragraph["span_id"]})
             edges.append({"consumer": span_key, "dependency": paragraph_key})
@@ -729,6 +761,7 @@ def collect_dependencies(inputs: Dict[str, Any]) -> Dict[str, Any]:
                 {"key": page_node, "type": "page", "page_key": page["page_key"], "entity_id": page.get("entity_id")}
             )
             edges.append({"consumer": page_node, "dependency": ("bundle", bundle_key)})
+            edges.append({"consumer": ("index", "canonical"), "dependency": page_node})
             page_data = _load_page_data(REPO_ROOT / page["response"], page["page_key"], diagnostics)
             page_nodes, page_edges = _record_keys(page_data, page["page_key"])
             nodes.extend(page_nodes)
@@ -971,10 +1004,16 @@ def _protected_paths(inputs: Dict[str, Any], state_path: Path, inputs_path: Path
     for item in inputs["inputs"]:
         root = _inside_root(REPO_ROOT / item["root"])
         protected.add((root / "manifest.json").resolve())
-        for file_name in _manifest_sources(
-            _read_json(root / "manifest.json") if (root / "manifest.json").exists() else {}
-        ):
-            protected.add((root / file_name).resolve())
+        manifest_data: Dict[str, Any] = {}
+        try:
+            manifest_data = _read_json(root / "manifest.json") if (root / "manifest.json").exists() else {}
+        except IncrementalError:
+            manifest_data = {}
+        for source_meta in _manifest_sources(manifest_data).values():
+            protected.add((root / source_meta["file"]).resolve())
+        proof_file = manifest_data.get("choice_proofs_file")
+        if isinstance(proof_file, str) and proof_file:
+            protected.add((root / proof_file).resolve())
         for page in item["managed_pages"]:
             protected.add((REPO_ROOT / page["response"]).resolve())
             if page.get("output"):
