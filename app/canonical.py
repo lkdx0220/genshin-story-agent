@@ -683,7 +683,7 @@ class CanonicalIndex:
 
     @classmethod
     def _fact_status(cls, fact: Fact, snapshot: Dict[str, Any], registry: Any = _REGISTRY_UNSET) -> str:
-        from app.choice_contract import APPLICABLE, combine_all, observations_status
+        from app.choice_contract import APPLICABLE, observations_status
 
         snapshot = snapshot or {}
         statuses = []
@@ -728,7 +728,9 @@ class CanonicalIndex:
         snapshot = snapshot or {}
         for page in self.pages:
             for fact in page.facts:
-                if fact.status == "rejected" or not fact.version:
+                if fact.status in ("rejected", "superseded") or not fact.version:
+                    continue
+                if self._fact_status(fact, snapshot, registry=self.registry) == "excluded":
                     continue
                 identity_id = snapshot.get("identity_version_id")
                 if identity_id and fact.identity_version_ids and identity_id not in fact.identity_version_ids:
@@ -773,6 +775,8 @@ class CanonicalIndex:
         return True
 
     def _attribute_status(self, fact: Fact, snapshot: Dict[str, Any]) -> str:
+        if fact.status in ("rejected", "superseded"):
+            return "excluded"
         return self._fact_status(fact, snapshot, registry=self.registry)
 
     def player_choice_gaps(self, snapshot: Dict[str, Any], question: Optional[str] = None) -> List[str]:
@@ -848,7 +852,9 @@ class CanonicalIndex:
                 if fact.status in ("rejected", "superseded"):
                     continue
                 if fact.config_error or fact.player_choice_missing:
-                    groups["unclassified"].append(f"{fact.text[:50]}（{page.player_choice_error or '缺少 player_choice_scope'}）")
+                    groups["unclassified"].append(
+                        f"{fact.text[:50]}（{page.player_choice_error or '缺少 player_choice_scope'}）"
+                    )
                     continue
                 if not fact.player_choice_scope:
                     continue
@@ -1007,6 +1013,9 @@ class CanonicalIndex:
         if choice not in (None, "aether", "lumine"):
             return "> [选择冲突] snapshot.player_choice 非法；只允许 aether / lumine。"
         warnings = []
+        for page in self.pages:
+            if page.player_choice_error:
+                warnings.append(f"> [配置错误] {page.entity_id}: {page.player_choice_error}")
         for name, ids in self.alias_ambiguities().items():
             if name and name in question:
                 warnings.append(f"> [歧义] 「{name}」在多个实体中出现：{', '.join(ids)}；不得默认归一。")
@@ -1038,6 +1047,9 @@ class CanonicalIndex:
                 tuple(fact.identity_version_ids),
                 json.dumps(fact.story_scope, sort_keys=True, ensure_ascii=False),
                 json.dumps(fact.version, sort_keys=True, ensure_ascii=False),
+                fact.status,
+                json.dumps(fact.observed_at, sort_keys=True, ensure_ascii=False),
+                json.dumps(fact.parent_identity, sort_keys=True, ensure_ascii=False),
             )
             if dedupe_key in seen_text:
                 continue

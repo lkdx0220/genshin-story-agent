@@ -178,37 +178,104 @@ def _validate_proof_structure(proofs: List[Dict[str, Any]], bundle: Dict[str, An
         raise ChoiceProofError("unsupported choice proof rule")
 
 
-def validate_choice_bindings(data: Dict[str, Any], proofs: List[Dict[str, Any]]) -> None:
-    proofs_by_id = {item["proof_id"]: item for item in proofs}
-    for obj in _descendants(data):
-        if "player_choice_scope" not in obj:
+def _find_record(records, record_id):
+    for record in records:
+        for key in ("attribute_id", "event_id", "name_id", "relation_id", "memory_id", "affiliation_id", "state_id"):
+            if record.get(key) == record_id:
+                return record
+    return None
+
+
+_ALLOWED_NARROW_FIELDS = {
+    "player_choice_scope",
+    "player_choice_branch",
+    "player_choice_proof_refs",
+    "status",
+    "conflict_ids",
+    "observed_at",
+}
+
+
+def _records_by_business_id(data):
+    records = {}
+    values = []
+    for key in ("attribute_records", "events", "relations", "memory_records", "affiliation_states"):
+        values.extend(data.get(key) or [])
+    for identity in data.get("identity_versions") or []:
+        values.append(identity)
+        values.extend(identity.get("names") or [])
+    if not values and any(
+        data.get(key)
+        for key in ("attribute_id", "event_id", "name_id", "relation_id", "memory_id", "affiliation_id", "state_id")
+    ):
+        values.append(data)
+    for value in values:
+        if not isinstance(value, dict):
             continue
-        scope = obj.get("player_choice_scope")
-        if scope not in ([], ["aether"], ["lumine"]):
-            raise ChoiceProofError("invalid player_choice_scope")
-        refs = obj.get("player_choice_proof_refs")
-        if not isinstance(refs, list) or len(set(refs)) != len(refs):
-            raise ChoiceProofError("player_choice_proof_refs required")
-        selected = [proofs_by_id.get(ref) for ref in refs]
-        if any(item is None for item in selected):
-            raise ChoiceProofError("player_choice_proof_refs references unknown proof")
-        if scope:
-            _validate_scoped_record(obj, refs, selected)
-        else:
-            _validate_common_record(obj, selected)
-    _validate_conflict_refs(data, proofs_by_id)
+        for key in ("attribute_id", "event_id", "name_id", "relation_id", "memory_id", "affiliation_id", "state_id"):
+            if value.get(key):
+                records[value[key]] = value
+    return records
 
 
-def _validate_scoped_record(obj, refs, selected):
+def _narrowing_authorized(target, alternative, conflict):
+    if target is None or target.get("player_choice_scope") not in ([], None):
+        return False
+    target_refs = target.get("player_choice_proof_refs") or []
+    if not target_refs:
+        return False
+    proposed = alternative.get("proposed_value")
+    if not isinstance(proposed, dict):
+        return False
+    differing = {
+        key
+        for key in set(target) | set(proposed)
+        if key not in _ALLOWED_NARROW_FIELDS and target.get(key) != proposed.get(key)
+    }
+    if differing:
+        return False
+    if (proposed.get("player_choice_proof_refs") or []) != target_refs:
+        return False
+    if (proposed.get("evidence") or []) != (target.get("evidence") or []):
+        return False
+    return True
+
+
+def _authorized_narrowings(data):
+    authorized = set()
+    conflicts = data.get("conflicts") or ([data] if data.get("conflict_id") else [])
+    records = _records_by_business_id(data)
+    for conflict in conflicts:
+        target_ref = conflict.get("target_ref")
+        if not isinstance(target_ref, str) or ":" not in target_ref:
+            continue
+        target = records.get(target_ref.split(":", 1)[1])
+        child_refs = set()
+        authorized_child = False
+        for alternative in conflict.get("alternatives") or []:
+            child_refs.update(alternative.get("player_choice_proof_refs") or [])
+            if _narrowing_authorized(target, alternative, conflict):
+                authorized.add(id(alternative.get("proposed_value")))
+                authorized.add(id(alternative))
+                authorized_child = True
+        if authorized_child and set(conflict.get("player_choice_proof_refs") or []) == child_refs:
+            authorized.add(id(conflict))
+    return authorized
+
+
+def _validate_scoped_record(obj, refs, selected, authorized_ids):
     if not refs:
         raise ChoiceProofError("scoped record needs proof refs")
     branch = obj.get("player_choice_branch")
     if not isinstance(branch, dict) or branch.get("kind") != "source_metadata":
         raise ChoiceProofError("scoped record needs source_metadata branch")
     current_scope = obj.get("player_choice_scope")
-    if any(item.get("scope") not in ([], current_scope) for item in selected):
+    allowed = {tuple(current_scope)}
+    if id(obj) in authorized_ids:
+        allowed.add(())
+    if any(tuple(item.get("scope") or []) not in allowed for item in selected):
         raise ChoiceProofError("incompatible proof scope referenced")
-    matching_scope = [item for item in selected if item.get("scope") in ([], current_scope)]
+    matching_scope = [item for item in selected if tuple(item.get("scope") or []) in allowed]
     if not matching_scope:
         raise ChoiceProofError("branch scope not covered by proof")
     if not any(item.get("anchor_span_id") == branch.get("source_span_id") for item in matching_scope):
@@ -232,6 +299,28 @@ def _validate_common_record(obj, selected):
         covered.update(item.get("covered_span_ids") or [])
     if {e.get("source_span_id") for e in obj.get("evidence") or []} - covered:
         raise ChoiceProofError("common evidence not covered by common proof")
+
+
+def validate_choice_bindings(data: Dict[str, Any], proofs: List[Dict[str, Any]]) -> None:
+    proofs_by_id = {item["proof_id"]: item for item in proofs}
+    authorized_ids = _authorized_narrowings(data)
+    for obj in _descendants(data):
+        if "player_choice_scope" not in obj:
+            continue
+        scope = obj.get("player_choice_scope")
+        if scope not in ([], ["aether"], ["lumine"]):
+            raise ChoiceProofError("invalid player_choice_scope")
+        refs = obj.get("player_choice_proof_refs")
+        if not isinstance(refs, list) or len(set(refs)) != len(refs):
+            raise ChoiceProofError("player_choice_proof_refs required")
+        selected = [proofs_by_id.get(ref) for ref in refs]
+        if any(item is None for item in selected):
+            raise ChoiceProofError("player_choice_proof_refs references unknown proof")
+        if scope:
+            _validate_scoped_record(obj, refs, selected, authorized_ids)
+        else:
+            _validate_common_record(obj, selected)
+    _validate_conflict_refs(data, proofs_by_id)
 
 
 def _validate_conflict_refs(data: Dict[str, Any], proofs_by_id: Dict[str, Any]) -> None:
