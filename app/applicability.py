@@ -87,5 +87,5 @@ def record_status(
     snapshot = snapshot or {}
     statuses = _node_statuses(record, snapshot, registry, story_applies, current=not historical)
     if parent:
-        statuses.extend(_node_statuses(parent, snapshot, registry, story_applies, current=False))
+        statuses.extend(_node_statuses(parent, snapshot, registry, story_applies, current=not historical))
     return combine_all(statuses) if statuses else APPLICABLE

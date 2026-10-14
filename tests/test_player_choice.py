@@ -557,3 +557,28 @@ def test_field_assertion_attribute_evidence_must_match_contributors():
 
     with pytest.raises(ingest.IngestError):
         ingest._validate_field_assertions(data, {"span:a": {}, "span:b": {}}, versioning.load_registry())
+
+
+def test_superseded_parent_name_current_hidden_historical_visible(tmp_path):
+    identity = {
+        "identity_version_id": "identity:old-review",
+        "label": "旅行者旧身份",
+        "status": "superseded",
+        "player_choice_scope": [],
+        "names": [
+            {
+                "name_id": "name:old-review",
+                "value": "旧身份专用名称",
+                "status": "candidate",
+                "player_choice_scope": [],
+            }
+        ],
+    }
+    page = _page(tmp_path, _base_data(identity_versions=[identity]))
+    from app.canonical import CanonicalIndex
+
+    index = CanonicalIndex([page])
+    current = index.answer("旅行者名称", top_k=10, snapshot={})
+    assert "名称：旧身份专用名称" not in current
+    historical = index.answer("旅行者名称", top_k=10, snapshot={}, include_superseded=True)
+    assert "名称：旧身份专用名称" in historical
