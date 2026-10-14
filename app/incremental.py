@@ -391,9 +391,37 @@ def _input_entry_errors(entry: Any) -> List[str]:
     return []
 
 
-def _baseline_input_errors(inputs: Any) -> List[str]:
-    if not isinstance(inputs, dict) or not isinstance(inputs.get("common"), dict):
+COMMON_STRING_KEYS = ("schema", "template", "schema_lock", "registry", "inputs_registry")
+COMMON_DICT_KEYS = ("lint", "prompts", "build_code")
+
+
+def _common_errors(common: Any) -> List[str]:
+    if not isinstance(common, dict):
         return ["state_inputs_incomplete"]
+    for key in COMMON_STRING_KEYS:
+        value = common.get(key)
+        if value is not None and not isinstance(value, str):
+            return ["state_inputs_incomplete"]
+    for key in COMMON_DICT_KEYS:
+        value = common.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, dict):
+            return ["state_inputs_incomplete"]
+        if not all(item is None or isinstance(item, str) for item in value.values()):
+            return ["state_inputs_incomplete"]
+    protocol = common.get("protocol")
+    if protocol is not None and not isinstance(protocol, str):
+        return ["state_inputs_incomplete"]
+    return []
+
+
+def _baseline_input_errors(inputs: Any) -> List[str]:
+    if not isinstance(inputs, dict):
+        return ["state_inputs_incomplete"]
+    common_errors = _common_errors(inputs.get("common"))
+    if common_errors:
+        return common_errors
     entries = inputs.get("inputs")
     if not isinstance(entries, dict):
         return ["state_inputs_incomplete"]
@@ -440,6 +468,10 @@ def _baseline_graph_errors(graph: Any) -> List[str]:
         return ["state_graph_invalid"]
     if not isinstance(graph.get("nodes"), list) or not isinstance(graph.get("edges"), list):
         return ["state_graph_incomplete"]
+    diagnostics = graph.get("diagnostics")
+    if diagnostics is not None:
+        if not isinstance(diagnostics, list) or not all(isinstance(item, str) for item in diagnostics):
+            return ["state_graph_incomplete"]
     node_errors, node_keys = _graph_node_keys(graph["nodes"])
     if node_errors:
         return node_errors
@@ -497,7 +529,7 @@ def load_baseline(path: Path = DEFAULT_STATE) -> Tuple[Optional[Dict[str, Any]],
         return None, ["state_unavailable"]
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None, ["state_corrupt"]
     if not isinstance(data, dict):
         return None, ["state_not_validated"]
@@ -1071,7 +1103,7 @@ def _seed_owned_nodes(
     page_node = ("page", page_key)
     queue.append((page_node, reason, 0))
     for dependency in adjacency.get(page_node, []):
-        if dependency and dependency[0] not in ("bundle", "source"):
+        if len(dependency) >= 3 and dependency[0] == page_key:
             queue.append((dependency, reason, 0))
     for node in (graph or {}).get("nodes") or []:
         key = tuple(node.get("key") or [])
