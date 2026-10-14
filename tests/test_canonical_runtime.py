@@ -266,7 +266,8 @@ def test_runtime_version_semantics_publication_vs_range():
     assert CanonicalIndex._fact_applies(ranged, {"game_version": "3.2.1"}) is True
     assert CanonicalIndex._fact_applies(ranged, {"game_version": "3.3"}) is False
     assert CanonicalIndex._fact_applies(ranged, {"game_version": "5.1"}) is False
-    assert CanonicalIndex._fact_applies(ranged, {}) is True
+    # M02 S03: a record with a declared validity range needs a query version to resolve.
+    assert CanonicalIndex._fact_applies(ranged, {}) is False
 
 
 def test_runtime_unknown_label_order_does_not_widen_range():

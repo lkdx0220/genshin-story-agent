@@ -192,7 +192,6 @@ _ALLOWED_NARROW_FIELDS = {
     "player_choice_proof_refs",
     "status",
     "conflict_ids",
-    "observed_at",
 }
 
 
@@ -289,6 +288,8 @@ def _validate_scoped_record(obj, refs, selected, authorized_ids):
 
 
 def _validate_common_record(obj, selected):
+    if any(item.get("scope") != [] for item in selected):
+        raise ChoiceProofError("ordinary common record references branch proof")
     if not obj.get("evidence"):
         return
     common = [item for item in selected if item.get("scope") == []]

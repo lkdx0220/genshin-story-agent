@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Build the traveler conflict fixture for strict narrowing acceptance."""
+
 import hashlib
 import json
 from pathlib import Path
@@ -187,7 +188,11 @@ def build_response(bundle, proofs):
                 "version": version,
                 "evidence": common_evidence,
                 "player_choice_scope": ["aether"],
-                "player_choice_branch": {"choice_id": "aether", "kind": "source_metadata", "source_span_id": common_anchor},
+                "player_choice_branch": {
+                    "choice_id": "aether",
+                    "kind": "source_metadata",
+                    "source_span_id": common_anchor,
+                },
                 "player_choice_proof_refs": [common_proof],
             },
             {
@@ -197,7 +202,11 @@ def build_response(bundle, proofs):
                 "version": version,
                 "evidence": aether_evidence,
                 "player_choice_scope": ["aether"],
-                "player_choice_branch": {"choice_id": "aether", "kind": "source_metadata", "source_span_id": aether_anchor},
+                "player_choice_branch": {
+                    "choice_id": "aether",
+                    "kind": "source_metadata",
+                    "source_span_id": aether_anchor,
+                },
                 "player_choice_proof_refs": [aether_proof],
             },
         ],
@@ -217,13 +226,15 @@ def build_response(bundle, proofs):
             "completeness": "partial",
             "limitations": None,
         },
-        "observed_at": [{
-            "game_version": "5.0",
-            "story_event_id": None,
-            "position": "unknown",
-            "identity_version_id": "identity:traveler",
-            "player_choice": None,
-        }],
+        "observed_at": [
+            {
+                "game_version": "5.0",
+                "story_event_id": None,
+                "position": "unknown",
+                "identity_version_id": "identity:traveler",
+                "player_choice": None,
+            }
+        ],
         "version": version,
         "story_scope": unknown_scope,
         "status": "candidate",

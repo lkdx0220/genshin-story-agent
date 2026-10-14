@@ -629,45 +629,16 @@ class CanonicalIndex:
 
     @classmethod
     def _version_status(cls, version: Dict[str, Any], snapshot: Dict[str, Any], registry: Any = _REGISTRY_UNSET) -> str:
-        version = version or {}
-        has_range = any(version.get(key) for key in ("valid_from", "valid_from_label", "valid_to", "valid_to_label"))
-        if not has_range:
-            # introduced_in / label 只表示首次公开，不是有效期过滤。
-            return "applicable"
-        if not (snapshot.get("game_version") or snapshot.get("game_version_label")):
-            return "applicable"
-        try:
-            from app.versioning import VersionRegistryError, load_registry, range_contains, resolve_version
+        from app.applicability import version_status
 
-            if registry is _REGISTRY_UNSET:
+        if registry is _REGISTRY_UNSET:
+            try:
+                from app.versioning import load_registry
+
                 registry = load_registry()
-            elif registry is None:
+            except Exception:
                 return "unresolved"
-            value = resolve_version(
-                numeric=snapshot.get("game_version"),
-                label=snapshot.get("game_version_label"),
-                registry=registry,
-            )
-            lower = None
-            upper = None
-            if version.get("valid_from") or version.get("valid_from_label"):
-                lower = resolve_version(
-                    numeric=version.get("valid_from"),
-                    label=version.get("valid_from_label"),
-                    registry=registry,
-                )
-            if version.get("valid_to") or version.get("valid_to_label"):
-                upper = resolve_version(
-                    numeric=version.get("valid_to"),
-                    label=version.get("valid_to_label"),
-                    registry=registry,
-                )
-        except VersionRegistryError:
-            return "unresolved"
-        result = range_contains(value, lower, upper)
-        if result is None:
-            return "unresolved"
-        return "applicable" if result else "excluded"
+        return version_status(version, snapshot or {}, registry)
 
     @classmethod
     def _version_applies(
@@ -1042,7 +1013,8 @@ class CanonicalIndex:
             dedupe_key = (
                 page.entity_id,
                 fact.kind,
-                fact.record_id or fact.text,
+                fact.record_id,
+                fact.text,
                 tuple(fact.player_choice_scope),
                 tuple(fact.identity_version_ids),
                 json.dumps(fact.story_scope, sort_keys=True, ensure_ascii=False),
