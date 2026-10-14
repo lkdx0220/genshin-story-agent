@@ -576,7 +576,12 @@ def _diff_input(
         blocked.extend(f"{bundle_key}:validation:{error}" for error in new_errors)
         if new_errors != old_errors:
             events.append({"kind": "validation_blocked", "bundle_key": bundle_key, "page_keys": page_keys})
-    events.extend(_diff_pages(bundle_key, old.get("pages") or {}, new.get("pages") or {}))
+    old_pages = old.get("pages") or {}
+    new_pages = new.get("pages") or {}
+    if set(old_pages) != set(new_pages):
+        full_required = True
+        unknown.append(f"{bundle_key}:page_set_changed")
+    events.extend(_diff_pages(bundle_key, old_pages, new_pages))
     return events, blocked, unknown, full_required
 
 
@@ -1137,16 +1142,19 @@ def _missing_baseline_plan(
         for bundle_key, entry in (observed.get("inputs") or {}).items()
         for error in entry.get("validation_errors") or []
     ]
+    managed_pages = [page["page_key"] for item in inputs["inputs"] for page in item["managed_pages"]]
     return {
         "format_version": 1,
         "generation": plan_generation(observed, None),
         "full_required": True,
+        "full_required_reasons": sorted(set(baseline_errors or ["state_unavailable"]) | set(current_errors)),
+        "affected_pages": managed_pages,
         "unknown": baseline_errors or ["state_unavailable"],
         "blocked": sorted(set(current_errors)),
         "dirty": {},
         "observed": observed,
         "not_implemented": ["rebuild", "runtime_stale"],
-        "freshness": {page["page_key"]: "unknown" for item in inputs["inputs"] for page in item["managed_pages"]},
+        "freshness": {page_key: "unknown" for page_key in managed_pages},
     }
 
 
@@ -1167,7 +1175,8 @@ def _finalize_plan(
     full_required = full_required or bool(graph_diagnostics)
     if full_required:
         freshness = {key: "stale" for key in freshness}
-    return {
+    managed_pages = [page["page_key"] for item in inputs["inputs"] for page in item["managed_pages"]]
+    result = {
         "format_version": 1,
         "generation": plan_generation(observed, baseline),
         "full_required": full_required,
@@ -1181,6 +1190,12 @@ def _finalize_plan(
         "field_impacts": _field_impacts(graph, dirty),
         "graph_diagnostics": graph_diagnostics,
     }
+    if full_required:
+        result["full_required_reasons"] = sorted(
+            set(unknown + list(blocked) + [f"graph:{item}" for item in graph_diagnostics]) or ["conservative_full"]
+        )
+        result["affected_pages"] = sorted(dirty) or managed_pages
+    return result
 
 
 def _project_mismatch(baseline: Dict[str, Any], observed: Dict[str, Any]) -> bool:
@@ -1223,6 +1238,10 @@ def explain_page(plan: Dict[str, Any], page_key: str) -> Dict[str, Any]:
     impacts = (plan.get("field_impacts") or {}).get(page_key)
     if impacts:
         result["field_impacts"] = impacts
+    if plan.get("full_required_reasons"):
+        result["full_required_reasons"] = list(plan["full_required_reasons"])
+    if plan.get("affected_pages"):
+        result["affected_pages"] = list(plan["affected_pages"])
     if plan.get("snapshot_only"):
         result["snapshot_only"] = True
     if plan.get("plan_outdated"):
