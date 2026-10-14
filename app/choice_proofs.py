@@ -40,8 +40,14 @@ def generate_fixture_choice_proofs(bundle: Dict[str, Any]) -> List[Dict[str, Any
     sources = _sources_by_id(bundle)
     proofs: List[Dict[str, Any]] = []
     current: Optional[Dict[str, Any]] = None
+    current_source = None
     for paragraph in paragraphs:
-        quote = (paragraph.get("quote") or "").strip()
+        if paragraph.get("source_id") != current_source:
+            if current:
+                proofs.append(current)
+                current = None
+            current_source = paragraph.get("source_id")
+        quote = paragraph.get("quote") or ""
         if quote in MARKER_TO_SCOPE:
             if current:
                 proofs.append(current)
@@ -199,7 +205,10 @@ def _validate_scoped_record(obj, refs, selected):
     branch = obj.get("player_choice_branch")
     if not isinstance(branch, dict) or branch.get("kind") != "source_metadata":
         raise ChoiceProofError("scoped record needs source_metadata branch")
-    matching_scope = [item for item in selected if item.get("scope") == obj.get("player_choice_scope")]
+    current_scope = obj.get("player_choice_scope")
+    if any(item.get("scope") not in ([], current_scope) for item in selected):
+        raise ChoiceProofError("incompatible proof scope referenced")
+    matching_scope = [item for item in selected if item.get("scope") in ([], current_scope)]
     if not matching_scope:
         raise ChoiceProofError("branch scope not covered by proof")
     if not any(item.get("anchor_span_id") == branch.get("source_span_id") for item in matching_scope):
