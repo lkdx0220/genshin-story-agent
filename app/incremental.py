@@ -347,6 +347,29 @@ def fingerprint_inputs(inputs: Dict[str, Any], inputs_path: Optional[Path] = Non
     return observed
 
 
+def _baseline_errors(data: Dict[str, Any]) -> List[str]:
+    if data.get("format_version") != 1:
+        return ["state_version_unsupported"]
+    if data.get("validated") is not True or not str(data.get("project") or "").startswith("b4-incremental:"):
+        return ["state_not_validated"]
+    if not isinstance(data.get("generation"), str) or not data["generation"]:
+        return ["state_generation_missing"]
+    if data.get("protocol") != PROTOCOL_VERSION:
+        return ["state_protocol_mismatch"]
+    inputs = data.get("inputs")
+    if not isinstance(inputs, dict) or "common" not in inputs or "inputs" not in inputs:
+        return ["state_inputs_incomplete"]
+    graph = data.get("graph")
+    if not isinstance(graph, dict) or graph.get("format_version") != 1 or graph.get("protocol") != PROTOCOL_VERSION:
+        return ["state_graph_invalid"]
+    if not isinstance(graph.get("nodes"), list) or not isinstance(graph.get("edges"), list):
+        return ["state_graph_incomplete"]
+    for entry in inputs.get("inputs", {}).values():
+        if isinstance(entry, dict) and entry.get("validation_errors"):
+            return ["state_validation_failed"]
+    return []
+
+
 def load_baseline(path: Path = DEFAULT_STATE) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     path = Path(path)
     if not path.exists():
@@ -355,24 +378,11 @@ def load_baseline(path: Path = DEFAULT_STATE) -> Tuple[Optional[Dict[str, Any]],
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None, ["state_corrupt"]
-    if not isinstance(data, dict) or data.get("format_version") != 1:
-        return None, ["state_version_unsupported"]
-    if data.get("validated") is not True or data.get("project") != "b4-incremental":
+    if not isinstance(data, dict):
         return None, ["state_not_validated"]
-    if not isinstance(data.get("generation"), str) or not data["generation"]:
-        return None, ["state_generation_missing"]
-    if data.get("protocol") != PROTOCOL_VERSION:
-        return None, ["state_protocol_mismatch"]
-    if not isinstance(data.get("inputs"), dict) or "common" not in data["inputs"] or "inputs" not in data["inputs"]:
-        return None, ["state_inputs_incomplete"]
-    graph = data.get("graph")
-    if not isinstance(graph, dict) or graph.get("format_version") != 1 or graph.get("protocol") != PROTOCOL_VERSION:
-        return None, ["state_graph_invalid"]
-    if not isinstance(graph.get("nodes"), list) or not isinstance(graph.get("edges"), list):
-        return None, ["state_graph_incomplete"]
-    for entry in (data.get("inputs") or {}).get("inputs", {}).values():
-        if isinstance(entry, dict) and entry.get("validation_errors"):
-            return None, ["state_validation_failed"]
+    errors = _baseline_errors(data)
+    if errors:
+        return None, errors
     return data, []
 
 
@@ -382,11 +392,12 @@ def make_baseline(
     graph: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """测试/成功构建方可使用；plan 自身绝不调用。"""
+    registry_hash = (observed.get("common") or {}).get("inputs_registry") or "unknown"
     return {
         "format_version": 1,
         "generation": generation,
         "validated": True,
-        "project": "b4-incremental",
+        "project": "b4-incremental:" + str(registry_hash)[:16],
         "protocol": PROTOCOL_VERSION,
         "inputs": observed,
         "graph": graph or {"format_version": 1, "protocol": PROTOCOL_VERSION, "nodes": [], "edges": []},
@@ -979,19 +990,26 @@ def compute_freshness(
 def _field_impacts(graph: Optional[Dict[str, Any]], dirty: Dict[str, List[str]]) -> Dict[str, List[Dict[str, Any]]]:
     if not dirty or not graph:
         return {}
-    fields_by_page: Dict[str, List[str]] = {}
+    fields_by_page: Dict[str, List[Tuple]] = {}
+    dependencies: Dict[Tuple, List[Tuple]] = {}
+    for edge in graph.get("edges") or []:
+        consumer = tuple(edge["consumer"])
+        dependencies.setdefault(consumer, []).append(tuple(edge["dependency"]))
     for node in graph.get("nodes") or []:
+        key = tuple(node.get("key"))
         if node.get("type") == "field" and node.get("page_key"):
-            fields_by_page.setdefault(node["page_key"], []).append(str(node.get("business_id")))
+            fields_by_page.setdefault(node["page_key"], []).append(key)
     result: Dict[str, List[Dict[str, Any]]] = {}
     for page_key, reasons in dirty.items():
         result[page_key] = [
             {
-                "field": field_path,
+                "field": field_key[2],
+                "dependencies": [list(dep) for dep in dependencies.get(field_key, [])],
+                "origin": reasons[0],
                 "reasons": reasons,
                 "action": "evidence_rebind" if "source_file_changed" in reasons else "validation",
             }
-            for field_path in sorted(fields_by_page.get(page_key, []))
+            for field_key in sorted(fields_by_page.get(page_key, []), key=str)
         ]
     return result
 
@@ -1017,42 +1035,44 @@ def _merge_graphs(old: Optional[Dict[str, Any]], new: Dict[str, Any]) -> Dict[st
     }
 
 
-def build_plan(
-    inputs: Optional[Dict[str, Any]] = None,
-    state_path: Path = DEFAULT_STATE,
+def _missing_baseline_plan(
+    inputs: Dict[str, Any], observed: Dict[str, Any], baseline_errors: List[str]
 ) -> Dict[str, Any]:
-    inputs = inputs or load_inputs()
-    observed = fingerprint_inputs(inputs)
-    baseline, baseline_errors = load_baseline(state_path)
-    not_implemented = ["rebuild", "runtime_stale"]
-    if baseline is None:
-        current_errors = [
-            f"{bundle_key}:validation:{error}"
-            for bundle_key, entry in (observed.get("inputs") or {}).items()
-            for error in entry.get("validation_errors") or []
-        ]
-        return {
-            "format_version": 1,
-            "generation": plan_generation(observed, None),
-            "full_required": True,
-            "unknown": baseline_errors or ["state_unavailable"],
-            "blocked": sorted(set(current_errors)),
-            "dirty": {},
-            "observed": observed,
-            "not_implemented": not_implemented,
-            "freshness": {page["page_key"]: "unknown" for item in inputs["inputs"] for page in item["managed_pages"]},
-        }
-    events, blocked, unknown, full_required = diff_fingerprints(baseline, observed, inputs)
-    graph = _merge_graphs((baseline or {}).get("graph"), collect_dependencies(inputs))
-    dirty, _mark_blocked, mark_full = mark_dirty(events, inputs, graph)
-    full_required = full_required or mark_full
+    current_errors = [
+        f"{bundle_key}:validation:{error}"
+        for bundle_key, entry in (observed.get("inputs") or {}).items()
+        for error in entry.get("validation_errors") or []
+    ]
+    return {
+        "format_version": 1,
+        "generation": plan_generation(observed, None),
+        "full_required": True,
+        "unknown": baseline_errors or ["state_unavailable"],
+        "blocked": sorted(set(current_errors)),
+        "dirty": {},
+        "observed": observed,
+        "not_implemented": ["rebuild", "runtime_stale"],
+        "freshness": {page["page_key"]: "unknown" for item in inputs["inputs"] for page in item["managed_pages"]},
+    }
+
+
+def _finalize_plan(
+    inputs: Dict[str, Any],
+    observed: Dict[str, Any],
+    baseline: Dict[str, Any],
+    events: List[Dict[str, Any]],
+    blocked: List[str],
+    unknown: List[str],
+    full_required: bool,
+    graph: Dict[str, Any],
+    dirty: Dict[str, List[str]],
+) -> Dict[str, Any]:
     freshness = compute_freshness(inputs, observed, baseline, dirty)
-    if full_required:
-        freshness = {key: "stale" for key in freshness}
     graph_diagnostics = graph.get("diagnostics") or []
     unknown = sorted(set(unknown + [f"graph:{item}" for item in graph_diagnostics]))
-    if graph_diagnostics:
-        full_required = True
+    full_required = full_required or bool(graph_diagnostics)
+    if full_required:
+        freshness = {key: "stale" for key in freshness}
     return {
         "format_version": 1,
         "generation": plan_generation(observed, baseline),
@@ -1061,12 +1081,38 @@ def build_plan(
         "blocked": sorted(set(blocked)),
         "dirty": {key: sorted(set(value)) for key, value in sorted(dirty.items())},
         "observed": observed,
-        "not_implemented": not_implemented,
+        "not_implemented": ["rebuild", "runtime_stale"],
         "freshness": freshness,
         "events": events,
         "field_impacts": _field_impacts(graph, dirty),
         "graph_diagnostics": graph_diagnostics,
     }
+
+
+def _project_mismatch(baseline: Dict[str, Any], observed: Dict[str, Any]) -> bool:
+    baseline_registry = ((baseline.get("inputs") or {}).get("common") or {}).get("inputs_registry")
+    current_registry = (observed.get("common") or {}).get("inputs_registry")
+    return bool(baseline_registry and current_registry and baseline_registry != current_registry)
+
+
+def build_plan(
+    inputs: Optional[Dict[str, Any]] = None,
+    state_path: Path = DEFAULT_STATE,
+) -> Dict[str, Any]:
+    inputs = inputs or load_inputs()
+    observed = fingerprint_inputs(inputs)
+    baseline, baseline_errors = load_baseline(state_path)
+    if baseline is None:
+        return _missing_baseline_plan(inputs, observed, baseline_errors)
+    events, blocked, unknown, full_required = diff_fingerprints(baseline, observed, inputs)
+    if _project_mismatch(baseline, observed):
+        full_required = True
+        unknown.append("state_project_mismatch")
+    graph = _merge_graphs((baseline or {}).get("graph"), collect_dependencies(inputs))
+    dirty, _mark_blocked, mark_full = mark_dirty(events, inputs, graph)
+    return _finalize_plan(
+        inputs, observed, baseline, events, blocked, unknown, full_required or mark_full, graph, dirty
+    )
 
 
 def explain_page(plan: Dict[str, Any], page_key: str) -> Dict[str, Any]:
