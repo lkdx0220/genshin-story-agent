@@ -1,0 +1,259 @@
+# -*- coding: utf-8 -*-
+"""B4-01 首批：只读增量 plan/explain 契约测试。"""
+
+import hashlib
+import json
+from pathlib import Path
+
+from app import incremental
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _setup_project(tmp_path, monkeypatch):
+    root = tmp_path
+    monkeypatch.setattr(incremental, "REPO_ROOT", root)
+    monkeypatch.setattr(incremental, "DEFAULT_INPUTS", root / "config/incremental-inputs.json")
+    _write(root / "wiki/__schema__/entity.schema.json", "{}")
+    _write(root / "wiki/__schema__/entity-template.md", "# template\n")
+    _write(root / "wiki/__schema__/version-registry.json", '{"versions": []}')
+    _write(root / "wiki/__schema__/ingest-mini.prompt.md", "{{SCHEMA}}")
+    _write(root / "wiki/__schema__/entities/char_mini.json", '{"entity_id": "char:mini"}')
+    _write(root / "docs/schema-lock.json", "{}")
+    _write(root / "lint/wiki-lint-rules.yaml", "ruleset_version: test\n")
+    case = root / "fixture/raw/case.txt"
+    _write(case, "共同事实\n")
+    manifest = {
+        "data_mode": "fixture",
+        "sources": [
+            {
+                "source_id": "source:mini",
+                "file": "case.txt",
+                "sha256": _sha(case.read_bytes()),
+                "paragraphs": {"p001": {"basis": "explicit_text", "authority": "non_authoritative"}},
+            }
+        ],
+    }
+    _write(root / "fixture/raw/manifest.json", json.dumps(manifest, ensure_ascii=False))
+    _write(
+        root / "fixture-response.md",
+        "---\n"
+        + json.dumps(
+            {
+                "entity_id": "char:mini",
+                "canonical_name": "迷你",
+                "events": [
+                    {
+                        "event_id": "event:mini",
+                        "evidence": [{"source_span_id": "span:mini"}],
+                        "player_choice_scope": [],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+        + "\n---\n# 迷你\n",
+    )
+    inputs = {
+        "format_version": 1,
+        "inputs": [
+            {
+                "bundle_key": "mini",
+                "root": "fixture/raw",
+                "data_mode": "fixture",
+                "managed_pages": [
+                    {
+                        "page_key": "fixture-response.md|fixture|char:mini",
+                        "entity_id": "char:mini",
+                        "response": "fixture-response.md",
+                        "output": "reports/mini.md",
+                    }
+                ],
+                "sources": ["source:mini"],
+                "profile_ids": ["char:mini"],
+                "prompt": "wiki/__schema__/ingest-mini.prompt.md",
+            }
+        ],
+    }
+    _write(root / "config/incremental-inputs.json", json.dumps(inputs, ensure_ascii=False))
+    return inputs, root
+
+
+def _write_baseline(root: Path, observed) -> Path:
+    state = root / "reports/incremental/state.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(
+        json.dumps(incremental.make_baseline(observed, generation="g1"), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return state
+
+
+def test_state_missing_is_full_required(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    plan = incremental.build_plan(inputs, root / "reports/incremental/missing.json")
+    assert plan["full_required"] is True
+    assert "state_unavailable" in plan["unknown"]
+    assert plan["not_implemented"] == ["rebuild", "runtime_stale"]
+
+
+def test_plan_does_not_advance_baseline_and_is_stable(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    before = state.read_bytes()
+
+    clean = incremental.build_plan(inputs, state)
+    assert clean["dirty"] == {}
+    assert clean["full_required"] is False
+    assert clean["freshness"]["fixture-response.md|fixture|char:mini"] == "fresh"
+
+    case = root / "fixture/raw/case.txt"
+    case.write_bytes(case.read_bytes() + b"\nnew paragraph\n")
+    first = incremental.build_plan(inputs, state)
+    second = incremental.build_plan(inputs, state)
+    assert first["dirty"] == second["dirty"]
+    assert "source_file_changed" in first["dirty"]["fixture-response.md|fixture|char:mini"]
+    assert any("raw_snapshot_hash_mismatch" in item for item in first["blocked"])
+    assert state.read_bytes() == before
+
+
+def test_legal_new_snapshot_marks_source_pages_dirty_without_block(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    observed = incremental.fingerprint_inputs(inputs)
+    state = _write_baseline(root, observed)
+    case = root / "fixture/raw/case.txt"
+    case.write_bytes(case.read_bytes() + b"\nlegal new snapshot\n")
+    manifest_path = root / "fixture/raw/manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["sources"][0]["sha256"] = _sha(case.read_bytes())
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    plan = incremental.build_plan(inputs, state)
+    assert plan["full_required"] is False
+    assert "source_file_changed" in plan["dirty"]["fixture-response.md|fixture|char:mini"]
+    assert not any("raw_snapshot_hash_mismatch" in item for item in plan["blocked"])
+
+
+def test_registry_or_schema_change_is_full_required(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    _write(root / "wiki/__schema__/version-registry.json", '{"versions": [{"version_id": "x"}]}')
+    plan = incremental.build_plan(inputs, state)
+    assert plan["full_required"] is True
+
+
+def test_output_modified_is_stale_and_dirty(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    _write(root / "reports/mini.md", "manual edit")
+    plan = incremental.build_plan(inputs, state)
+    page_key = "fixture-response.md|fixture|char:mini"
+    assert "generated_output_modified" in plan["dirty"][page_key]
+    assert plan["freshness"][page_key] == "stale"
+
+
+def test_graph_extracts_records_spans_and_edges(tmp_path, monkeypatch):
+    inputs, _root = _setup_project(tmp_path, monkeypatch)
+    graph = incremental.collect_dependencies(inputs)
+    types = {node["type"] for node in graph["nodes"]}
+    assert {"page", "event", "span", "bundle", "source", "paragraph"} <= types
+    page_key = "fixture-response.md|fixture|char:mini"
+    event_node = (page_key, "event", "event:mini")
+    assert any(tuple(edge["consumer"]) == event_node and edge["dependency"][0] == "span" for edge in graph["edges"])
+
+
+def test_cycle_and_depth_are_bounded(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    graph = {
+        "edges": [
+            {"consumer": ["page", "a"], "dependency": ["page", "b"]},
+            {"consumer": ["page", "b"], "dependency": ["page", "a"]},
+        ]
+    }
+    dirty, _blocked, full = incremental.mark_dirty(
+        [{"kind": "source_file_changed", "bundle_key": "mini", "page_keys": ["fixture-response.md|fixture|char:mini"]}],
+        inputs,
+        graph,
+    )
+    assert full is False
+    assert "fixture-response.md|fixture|char:mini" in dirty
+    plan = incremental.build_plan(inputs, state)
+    assert set(plan) == {
+        "blocked",
+        "dirty",
+        "events",
+        "format_version",
+        "freshness",
+        "full_required",
+        "generation",
+        "graph_diagnostics",
+        "not_implemented",
+        "observed",
+        "unknown",
+    }
+
+
+def test_explain_reports_page_reason(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    case = root / "fixture/raw/case.txt"
+    case.write_bytes(case.read_bytes() + b"\nchange\n")
+    plan = incremental.build_plan(inputs, state)
+    info = incremental.explain_page(plan, "fixture-response.md|fixture|char:mini")
+    assert info["dirty"]
+    assert info["full_required"] is False
+    assert info["not_implemented"] == ["rebuild", "runtime_stale"]
+
+
+def test_source_set_change_is_full_required(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    extra = root / "fixture/raw/extra.txt"
+    _write(extra, "second source\n")
+    manifest_path = root / "fixture/raw/manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["sources"].append(
+        {
+            "source_id": "source:mini-2",
+            "file": "extra.txt",
+            "sha256": _sha(extra.read_bytes()),
+            "paragraphs": {"p001": {"basis": "explicit_text", "authority": "non_authoritative"}},
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    plan = incremental.build_plan(inputs, state)
+    assert plan["full_required"] is True
+    assert any("input_source_added_or_removed" in item for item in plan["unknown"])
+
+
+def test_proof_missing_is_dirty_and_blocked(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    proof = root / "fixture/raw/choice-proofs.json"
+    _write(proof, '{"format_version": 1, "proofs": []}')
+    manifest_path = root / "fixture/raw/manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["choice_proofs_file"] = "choice-proofs.json"
+    manifest["choice_proofs_sha256"] = _sha(proof.read_bytes())
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    proof.unlink()
+    plan = incremental.build_plan(inputs, state)
+    page_key = "fixture-response.md|fixture|char:mini"
+    assert "proof_changed" in plan["dirty"][page_key]
+    assert any("proof_hash_mismatch" in item for item in plan["blocked"])
+
+
+def test_schema_file_change_is_full_required(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    _write(root / "wiki/__schema__/entity.schema.json", '{"changed": true}')
+    plan = incremental.build_plan(inputs, state)
+    assert plan["full_required"] is True

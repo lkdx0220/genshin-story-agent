@@ -1,0 +1,37 @@
+{
+  "format_version": 1,
+  "inputs": [
+    {
+      "bundle_key": "traveler-fixture",
+      "root": "tests/fixtures/traveler/raw",
+      "data_mode": "fixture",
+      "managed_pages": [
+        {
+          "page_key": "tests/fixtures/traveler-response.md|fixture|char:traveler",
+          "entity_id": "char:traveler",
+          "response": "tests/fixtures/traveler-response.md",
+          "output": "reports/fixtures/traveler.md"
+        }
+      ],
+      "sources": ["source:traveler-fixture"],
+      "profile_ids": ["char:traveler"],
+      "prompt": "wiki/__schema__/ingest-traveler.prompt.md"
+    },
+    {
+      "bundle_key": "traveler-conflict-fixture",
+      "root": "tests/fixtures/traveler-conflict/raw",
+      "data_mode": "fixture",
+      "managed_pages": [
+        {
+          "page_key": "tests/fixtures/traveler-conflict-response.md|fixture|char:traveler",
+          "entity_id": "char:traveler",
+          "response": "tests/fixtures/traveler-conflict-response.md",
+          "output": "reports/fixtures/traveler-conflict.md"
+        }
+      ],
+      "sources": ["source:traveler-conflict"],
+      "profile_ids": ["char:traveler"],
+      "prompt": "wiki/__schema__/ingest-traveler.prompt.md"
+    }
+  ]
+}
