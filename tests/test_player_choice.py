@@ -517,3 +517,43 @@ def test_choice_candidate_lines_groups_both_branches(tmp_path):
     lines = CanonicalIndex([page]).choice_candidate_lines({})
     assert any("aether" in line for line in lines)
     assert any("lumine" in line for line in lines)
+
+
+def test_field_assertion_attribute_evidence_must_match_contributors():
+    data = _base_data(
+        snapshot={"game_version": None, "story_event_id": None, "position": "unknown", "identity_version_id": None},
+        element="anemo",
+        attribute_records=[
+            {
+                "attribute_id": "attr:traveler-element",
+                "key": "element",
+                "value": "anemo",
+                "value_label": None,
+                "identity_version_ids": [],
+                "story_scope": {
+                    "label": None,
+                    "from_event_id": None,
+                    "from_boundary": "unknown",
+                    "to_event_id": None,
+                    "to_boundary": "unknown",
+                },
+                "version": {"introduced_in": None, "valid_from": None, "valid_to": None, "verified_in": []},
+                "status": "candidate",
+                "evidence": [{"source_span_id": "span:a", "basis": "explicit_text", "authority": "non_authoritative"}],
+                "conflict_ids": [],
+                "player_choice_scope": [],
+            }
+        ],
+        field_assertions=[
+            {
+                "path": "/element",
+                "status": "candidate",
+                "evidence": [{"source_span_id": "span:b", "basis": "explicit_text", "authority": "non_authoritative"}],
+                "conflict_ids": [],
+            }
+        ],
+    )
+    from app import versioning
+
+    with pytest.raises(ingest.IngestError):
+        ingest._validate_field_assertions(data, {"span:a": {}, "span:b": {}}, versioning.load_registry())
