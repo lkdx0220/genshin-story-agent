@@ -196,55 +196,101 @@ def load_inputs(path: Path = DEFAULT_INPUTS) -> Dict[str, Any]:
     return normalized
 
 
-def _validation_errors(root: Path, manifest: Dict[str, Any], item: Dict[str, Any]) -> List[str]:
+def _lock_errors(item: Dict[str, Any]) -> List[str]:
     errors: List[str] = []
     lock_path = REPO_ROOT / "docs" / "schema-lock.json"
     if not lock_path.exists():
-        errors.append(f"{item['bundle_key']}:lock_missing")
+        return [f"{item['bundle_key']}:lock_missing"]
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [f"{item['bundle_key']}:lock_invalid_json"]
+    if not isinstance(lock, dict):
+        return [f"{item['bundle_key']}:lock_invalid_json"]
+    if lock.get("schema_version") != "0.2.0-draft":
+        errors.append(f"{item['bundle_key']}:lock_version_mismatch")
+    hashes = lock.get("sha256")
+    if not isinstance(hashes, dict) or not hashes:
+        errors.append(f"{item['bundle_key']}:lock_empty")
     else:
+        for rel, expected in hashes.items():
+            path = REPO_ROOT / rel
+            if not path.exists() or _hash_if_exists(path) != expected:
+                errors.append(f"{item['bundle_key']}:lock_hash_mismatch:{rel}")
+    machine = REPO_ROOT / "wiki" / "__schema__" / "entity.schema.json"
+    template = REPO_ROOT / "wiki" / "__schema__" / "entity-template.md"
+    if machine.exists() and template.exists():
         try:
-            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            schema = json.loads(machine.read_text(encoding="utf-8"))
+            if schema.get("x-template-sha256") != _hash_if_exists(template):
+                errors.append(f"{item['bundle_key']}:lock_template_mismatch")
         except (OSError, json.JSONDecodeError):
-            lock = None
-            errors.append(f"{item['bundle_key']}:lock_invalid_json")
-        if isinstance(lock, dict):
-            if lock.get("schema_version") != "0.2.0-draft":
-                errors.append(f"{item['bundle_key']}:lock_version_mismatch")
-            hashes = lock.get("sha256")
-            if not isinstance(hashes, dict) or not hashes:
-                errors.append(f"{item['bundle_key']}:lock_empty")
-            else:
-                for rel, expected in hashes.items():
-                    path = REPO_ROOT / rel
-                    if not path.exists() or _hash_if_exists(path) != expected:
-                        errors.append(f"{item['bundle_key']}:lock_hash_mismatch:{rel}")
-            machine = REPO_ROOT / "wiki" / "__schema__" / "entity.schema.json"
-            template = REPO_ROOT / "wiki" / "__schema__" / "entity-template.md"
-            if machine.exists() and template.exists():
-                try:
-                    schema = json.loads(machine.read_text(encoding="utf-8"))
-                    if schema.get("x-template-sha256") != _hash_if_exists(template):
-                        errors.append(f"{item['bundle_key']}:lock_template_mismatch")
-                except (OSError, json.JSONDecodeError):
-                    errors.append(f"{item['bundle_key']}:lock_schema_unreadable")
+            errors.append(f"{item['bundle_key']}:lock_schema_unreadable")
+    return errors
+
+
+def _bundle_errors(
+    root: Path, manifest: Dict[str, Any], item: Dict[str, Any]
+) -> Tuple[List[str], Optional[Dict[str, Any]]]:
     try:
         import ingest
 
         bundle = ingest.load_bundle(root)
     except Exception as exc:  # noqa: BLE001 - diagnostics are part of the contract
-        errors.append(f"{item['bundle_key']}:load_bundle:{exc}")
-        bundle = None
-    if bundle is not None:
-        if manifest.get("choice_proofs_file"):
-            try:
-                from app.choice_proofs import load_choice_proofs
+        return [f"{item['bundle_key']}:load_bundle:{exc}"], None
+    errors: List[str] = []
+    if manifest.get("choice_proofs_file"):
+        try:
+            from app.choice_proofs import load_choice_proofs
 
-                load_choice_proofs(bundle["root"], bundle, required=True)
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"{item['bundle_key']}:choice_proofs:{exc}")
+            load_choice_proofs(bundle["root"], bundle, required=True)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{item['bundle_key']}:choice_proofs:{exc}")
+    return errors, bundle
+
+
+def _page_errors(item: Dict[str, Any], bundle: Dict[str, Any]) -> List[str]:
+    errors: List[str] = []
+    import ingest
+
     for page in item["managed_pages"]:
-        if not (REPO_ROOT / page["response"]).exists():
+        response_path = REPO_ROOT / page["response"]
+        if not response_path.exists():
             errors.append(f"{page['page_key']}:response_missing")
+            continue
+        try:
+            text = response_path.read_text(encoding="utf-8")
+            data, _ = ingest.parse_page(text)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{page['page_key']}:response_unreadable:{exc}")
+            continue
+        if not isinstance(data, dict) or not data.get("schema_version"):
+            errors.append(f"{page['page_key']}:response_not_canonical")
+            continue
+        if page.get("entity_id") and data.get("entity_id") != page.get("entity_id"):
+            errors.append(f"{page['page_key']}:entity_mismatch")
+        if data.get("data_mode") and data.get("data_mode") != item.get("data_mode"):
+            errors.append(f"{page['page_key']}:data_mode_mismatch")
+        try:
+            ingest.schema_check(data, REPO_ROOT / "wiki" / "__schema__" / "entity-template.md", bundle)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{page['page_key']}:schema_check:{exc}")
+            continue
+        try:
+            import wiki_lint
+
+            wiki_lint.run_lint(text, bundle)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{page['page_key']}:lint:{exc}")
+    return errors
+
+
+def _validation_errors(root: Path, manifest: Dict[str, Any], item: Dict[str, Any]) -> List[str]:
+    errors = _lock_errors(item)
+    bundle_errors, bundle = _bundle_errors(root, manifest, item)
+    errors.extend(bundle_errors)
+    if bundle is not None:
+        errors.extend(_page_errors(item, bundle))
     return errors
 
 
