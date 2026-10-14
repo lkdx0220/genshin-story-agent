@@ -366,19 +366,50 @@ def _baseline_input_errors(inputs: Any) -> List[str]:
     return []
 
 
+def _graph_node_keys(nodes: List[Any]) -> Tuple[List[str], set]:
+    keys = set()
+    for node in nodes:
+        if not isinstance(node, dict) or not isinstance(node.get("key"), (list, tuple)):
+            return ["state_graph_incomplete"], set()
+        key = node["key"]
+        if not key or not all(isinstance(part, (str, int)) for part in key):
+            return ["state_graph_incomplete"], set()
+        keys.add(tuple(key))
+    return [], keys
+
+
+def _graph_edge_errors(edges: List[Any], node_keys: set) -> List[str]:
+    for edge in edges:
+        if not isinstance(edge, dict) or not isinstance(edge.get("consumer"), (list, tuple)):
+            return ["state_graph_incomplete"]
+        if not isinstance(edge.get("dependency"), (list, tuple)):
+            return ["state_graph_incomplete"]
+        consumer = edge["consumer"]
+        dependency = edge["dependency"]
+        if (
+            not consumer
+            or not dependency
+            or not all(isinstance(part, (str, int)) for part in list(consumer) + list(dependency))
+        ):
+            return ["state_graph_incomplete"]
+        if tuple(consumer) not in node_keys or tuple(dependency) not in node_keys:
+            return ["state_graph_endpoint_missing"]
+    return []
+
+
 def _baseline_graph_errors(graph: Any) -> List[str]:
     if not isinstance(graph, dict) or graph.get("format_version") != 1 or graph.get("protocol") != PROTOCOL_VERSION:
         return ["state_graph_invalid"]
     if not isinstance(graph.get("nodes"), list) or not isinstance(graph.get("edges"), list):
         return ["state_graph_incomplete"]
-    for node in graph["nodes"]:
-        if not isinstance(node, dict) or not isinstance(node.get("key"), (list, tuple)):
-            return ["state_graph_incomplete"]
-    for edge in graph["edges"]:
-        if not isinstance(edge, dict) or not isinstance(edge.get("consumer"), (list, tuple)):
-            return ["state_graph_incomplete"]
-        if not isinstance(edge.get("dependency"), (list, tuple)):
-            return ["state_graph_incomplete"]
+    node_errors, node_keys = _graph_node_keys(graph["nodes"])
+    if node_errors:
+        return node_errors
+    edge_errors = _graph_edge_errors(graph["edges"], node_keys)
+    if edge_errors:
+        return edge_errors
+    if graph["nodes"] and graph.get("generation") in (None, ""):
+        return ["state_graph_generation_missing"]
     return []
 
 
@@ -397,6 +428,8 @@ def _baseline_errors(data: Dict[str, Any]) -> List[str]:
         return ["state_version_unsupported"]
     if data.get("validated") is not True or not str(data.get("project") or "").startswith("b4-incremental:"):
         return ["state_not_validated"]
+    if not isinstance(data.get("project_root"), str) or not data["project_root"]:
+        return ["state_project_root_missing"]
     if not isinstance(data.get("generation"), str) or not data["generation"]:
         return ["state_generation_missing"]
     if data.get("protocol") != PROTOCOL_VERSION:
@@ -436,6 +469,10 @@ def load_baseline(path: Path = DEFAULT_STATE) -> Tuple[Optional[Dict[str, Any]],
     return data, []
 
 
+def _project_root_id() -> str:
+    return _sha_text(str(REPO_ROOT.resolve()))
+
+
 def make_baseline(
     observed: Dict[str, Any],
     generation: str = "test-generation",
@@ -448,6 +485,7 @@ def make_baseline(
         "generation": generation,
         "validated": True,
         "project": "b4-incremental:" + str(registry_hash)[:16],
+        "project_root": _project_root_id(),
         "protocol": PROTOCOL_VERSION,
         "inputs": observed,
         "graph": dict(graph, generation=generation)
@@ -1146,6 +1184,8 @@ def _finalize_plan(
 
 
 def _project_mismatch(baseline: Dict[str, Any], observed: Dict[str, Any]) -> bool:
+    if baseline.get("project_root") != _project_root_id():
+        return True
     baseline_registry = ((baseline.get("inputs") or {}).get("common") or {}).get("inputs_registry")
     current_registry = (observed.get("common") or {}).get("inputs_registry")
     return bool(baseline_registry and current_registry and baseline_registry != current_registry)
@@ -1276,9 +1316,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             return 0
         if args.command == "plan":
+            graph_payload = collect_dependencies(inputs)
             plan = build_plan(inputs, state_path)
             _write_json(plan_path, plan)
-            _write_json(graph_path, collect_dependencies(inputs))
+            _write_json(graph_path, graph_payload)
             print(
                 json.dumps(
                     {"plan": str(plan_path), "full_required": plan["full_required"], "dirty": len(plan["dirty"])},
