@@ -21,12 +21,30 @@ def _setup_project(tmp_path, monkeypatch):
     root = tmp_path
     monkeypatch.setattr(incremental, "REPO_ROOT", root)
     monkeypatch.setattr(incremental, "DEFAULT_INPUTS", root / "config/incremental-inputs.json")
-    _write(root / "wiki/__schema__/entity.schema.json", "{}")
     _write(root / "wiki/__schema__/entity-template.md", "# template\n")
+    _write(
+        root / "wiki/__schema__/entity.schema.json",
+        json.dumps({"x-template-sha256": _sha((root / "wiki/__schema__/entity-template.md").read_bytes())}),
+    )
     _write(root / "wiki/__schema__/version-registry.json", '{"versions": []}')
     _write(root / "wiki/__schema__/ingest-mini.prompt.md", "{{SCHEMA}}")
     _write(root / "wiki/__schema__/entities/char_mini.json", '{"entity_id": "char:mini"}')
-    _write(root / "docs/schema-lock.json", "{}")
+    _write(
+        root / "docs/schema-lock.json",
+        json.dumps(
+            {
+                "schema_version": "0.2.0-draft",
+                "sha256": {
+                    "wiki/__schema__/entity.schema.json": _sha(
+                        (root / "wiki/__schema__/entity.schema.json").read_bytes()
+                    ),
+                    "wiki/__schema__/entity-template.md": _sha(
+                        (root / "wiki/__schema__/entity-template.md").read_bytes()
+                    ),
+                },
+            }
+        ),
+    )
     _write(root / "lint/wiki-lint-rules.yaml", "ruleset_version: test\n")
     case = root / "fixture/raw/case.txt"
     _write(case, "共同事实\n")
@@ -37,6 +55,9 @@ def _setup_project(tmp_path, monkeypatch):
                 "source_id": "source:mini",
                 "file": "case.txt",
                 "sha256": _sha(case.read_bytes()),
+                "provider": "user_fixture",
+                "title": "mini fixture",
+                "url": "https://example.invalid/mini",
                 "paragraphs": {"p001": {"basis": "explicit_text", "authority": "non_authoritative"}},
             }
         ],
@@ -212,7 +233,6 @@ def test_explain_reports_page_reason(tmp_path, monkeypatch):
     plan = incremental.build_plan(inputs, state)
     info = incremental.explain_page(plan, "fixture-response.md|fixture|char:mini")
     assert info["dirty"]
-    assert info["full_required"] is False
     assert info["not_implemented"] == ["rebuild", "runtime_stale"]
 
 

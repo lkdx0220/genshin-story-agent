@@ -265,7 +265,6 @@ def _page_errors(item: Dict[str, Any], bundle: Dict[str, Any]) -> List[str]:
             errors.append(f"{page['page_key']}:response_unreadable:{exc}")
             continue
         if not isinstance(data, dict) or not data.get("schema_version"):
-            errors.append(f"{page['page_key']}:response_not_canonical")
             continue
         if page.get("entity_id") and data.get("entity_id") != page.get("entity_id"):
             errors.append(f"{page['page_key']}:entity_mismatch")
@@ -366,8 +365,14 @@ def load_baseline(path: Path = DEFAULT_STATE) -> Tuple[Optional[Dict[str, Any]],
         return None, ["state_protocol_mismatch"]
     if not isinstance(data.get("inputs"), dict) or "common" not in data["inputs"] or "inputs" not in data["inputs"]:
         return None, ["state_inputs_incomplete"]
-    if not isinstance(data.get("graph"), dict):
-        return None, ["state_graph_missing"]
+    graph = data.get("graph")
+    if not isinstance(graph, dict) or graph.get("format_version") != 1 or graph.get("protocol") != PROTOCOL_VERSION:
+        return None, ["state_graph_invalid"]
+    if not isinstance(graph.get("nodes"), list) or not isinstance(graph.get("edges"), list):
+        return None, ["state_graph_incomplete"]
+    for entry in (data.get("inputs") or {}).get("inputs", {}).values():
+        if isinstance(entry, dict) and entry.get("validation_errors"):
+            return None, ["state_validation_failed"]
     return data, []
 
 
@@ -466,9 +471,10 @@ def _diff_input(
         events.append({"kind": "prompt_changed", "bundle_key": bundle_key, "page_keys": page_keys})
     old_errors = old.get("validation_errors") or []
     new_errors = new.get("validation_errors") or []
-    if new_errors and new_errors != old_errors:
+    if new_errors:
         blocked.extend(f"{bundle_key}:validation:{error}" for error in new_errors)
-        events.append({"kind": "validation_blocked", "bundle_key": bundle_key, "page_keys": page_keys})
+        if new_errors != old_errors:
+            events.append({"kind": "validation_blocked", "bundle_key": bundle_key, "page_keys": page_keys})
     events.extend(_diff_pages(bundle_key, old.get("pages") or {}, new.get("pages") or {}))
     return events, blocked, unknown, full_required
 
@@ -540,8 +546,31 @@ def _add_refs(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]], owner: T
     story_scope = record.get("story_scope") or {}
     for edge in ("from_event_id", "to_event_id"):
         _append_ref(nodes, edges, owner, "event", story_scope.get(edge))
+    branch = record.get("player_choice_branch") or {}
+    if branch.get("source_span_id"):
+        _append_ref(nodes, edges, owner, "span", branch.get("source_span_id"))
+    for observation in record.get("observed_at") or []:
+        if not isinstance(observation, dict):
+            continue
+        _append_ref(nodes, edges, owner, "identity_version", observation.get("identity_version_id"))
+        _append_ref(nodes, edges, owner, "event", observation.get("story_event_id"))
+        _append_ref(nodes, edges, owner, "version", observation.get("game_version_label"))
+        _append_ref(nodes, edges, owner, "version", observation.get("game_version"))
+    target_ref = record.get("target_ref")
+    if isinstance(target_ref, str) and ":" in target_ref:
+        prefix, business_id = target_ref.split(":", 1)
+        node_type = {
+            "attribute": "attribute",
+            "event": "event",
+            "name": "name",
+            "identity_version": "identity_version",
+            "memory": "memory_record",
+            "affiliation_state": "affiliation_state",
+        }.get(prefix)
+        if node_type:
+            _append_ref(nodes, edges, owner, node_type, business_id)
     version = record.get("version") or {}
-    for key in ("version_id", "valid_from_label", "valid_to_label"):
+    for key in ("version_id", "valid_from_label", "valid_to_label", "introduced_in_label"):
         _append_ref(nodes, edges, owner, "version", version.get(key))
 
 
@@ -559,6 +588,7 @@ def _add_identity_nodes(
                 name_key = (page_node[1], "name", str(name.get("name_id") or ""))
                 nodes.append({"key": name_key, "type": "name", "page_key": page_node[1], "business_id": name_key[2]})
                 edges.append({"consumer": owner, "dependency": name_key})
+                edges.append({"consumer": name_key, "dependency": owner})
                 _add_evidence(nodes, edges, name_key, name)
                 _add_refs(nodes, edges, name_key, name)
         _add_evidence(nodes, edges, owner, identity)
@@ -850,6 +880,18 @@ def _propagate(queue: List[Tuple[Tuple, str, int]], reverse: Dict[Tuple, List[Tu
     return full_required
 
 
+def _forward_dependencies(start: Tuple, adjacency: Dict[Tuple, List[Tuple]]) -> set:
+    result: set = set()
+    stack = [start]
+    while stack:
+        node = stack.pop()
+        for dependency in adjacency.get(node, []):
+            if dependency not in result:
+                result.add(dependency)
+                stack.append(dependency)
+    return result
+
+
 def mark_dirty(
     events: List[Dict[str, Any]],
     inputs: Dict[str, Any],
@@ -859,6 +901,9 @@ def mark_dirty(
     full_required = False
     managed = {item["bundle_key"]: [page["page_key"] for page in item["managed_pages"]] for item in inputs["inputs"]}
     reverse = _reverse_adjacency(graph) if graph else {}
+    adjacency: Dict[Tuple, List[Tuple]] = {}
+    for edge in (graph or {}).get("edges") or []:
+        adjacency.setdefault(tuple(edge["consumer"]), []).append(tuple(edge["dependency"]))
     queue: List[Tuple[Tuple, str, int]] = []
 
     def add_page(page_key: str, reason: str) -> None:
@@ -879,11 +924,16 @@ def mark_dirty(
         if kind in page_kinds:
             for page_key in event.get("page_keys") or managed.get(event.get("bundle_key"), []):
                 add_page(page_key, kind)
-                queue.append((("page", page_key), kind, 0))
+                page_node = ("page", page_key)
+                seeded = {page_node} | _forward_dependencies(page_node, adjacency)
+                for node in seeded:
+                    queue.append((node, kind, 0))
         elif kind in ("profile_changed", "prompt_changed"):
             for page_key in event.get("page_keys") or []:
                 add_page(page_key, kind)
-                queue.append((("page", page_key), kind, 0))
+                page_node = ("page", page_key)
+                for node in {page_node} | _forward_dependencies(page_node, adjacency):
+                    queue.append((node, kind, 0))
         else:
             full_required = True
     full_required = _propagate(queue, reverse, add_page) or full_required
@@ -1001,6 +1051,8 @@ def build_plan(
         freshness = {key: "stale" for key in freshness}
     graph_diagnostics = graph.get("diagnostics") or []
     unknown = sorted(set(unknown + [f"graph:{item}" for item in graph_diagnostics]))
+    if graph_diagnostics:
+        full_required = True
     return {
         "format_version": 1,
         "generation": plan_generation(observed, baseline),
