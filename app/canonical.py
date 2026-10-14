@@ -152,6 +152,7 @@ class Fact:
     attribute_key: Optional[str] = None
     attribute_value: Any = None
     observed_at: List[Dict[str, Any]] = field(default_factory=list)
+    player_choice_scope: List[str] = field(default_factory=list)
 
 
 class CanonicalPage:
@@ -225,6 +226,7 @@ class CanonicalPage:
         attribute_key=None,
         attribute_value=None,
         observed_at=None,
+        player_choice_scope=None,
     ):
         obj = obj or {}
         status = status or obj.get("status") or "candidate"
@@ -250,6 +252,7 @@ class CanonicalPage:
                 attribute_key=attribute_key,
                 attribute_value=attribute_value,
                 observed_at=list(observed_at or []),
+                player_choice_scope=list(player_choice_scope or obj.get("player_choice_scope") or []),
             )
         )
 
@@ -359,6 +362,7 @@ class CanonicalPage:
                 attribute_key=key,
                 attribute_value=value,
                 observed_at=record.get("observed_at") or [],
+                player_choice_scope=record.get("player_choice_scope") or [],
             )
 
     def _build_facts(self) -> None:
@@ -531,6 +535,16 @@ class CanonicalIndex:
     ) -> bool:
         return cls._version_status(version, snapshot, registry=registry) == "applicable"
 
+    @staticmethod
+    def _player_choice_applies(scope: List[str], snapshot: Dict[str, Any]) -> str:
+        scope = scope or []
+        if not scope:
+            return "applicable"
+        choice = (snapshot or {}).get("player_choice")
+        if not choice:
+            return "unresolved"
+        return "applicable" if choice in scope else "excluded"
+
     @classmethod
     def _fact_applies(cls, fact: Fact, snapshot: Dict[str, Any], registry: Any = _REGISTRY_UNSET) -> bool:
         snapshot = snapshot or {}
@@ -538,6 +552,8 @@ class CanonicalIndex:
         if identity_id and fact.identity_version_ids and identity_id not in fact.identity_version_ids:
             return False
         if not cls._scope_applies(fact.story_scope, snapshot):
+            return False
+        if cls._player_choice_applies(fact.player_choice_scope, snapshot) != "applicable":
             return False
         return cls._version_applies(fact.version, snapshot, registry=registry)
 
@@ -592,6 +608,11 @@ class CanonicalIndex:
         if fact.status in ("rejected", "superseded"):
             return "excluded"
         snapshot = snapshot or {}
+        choice_status = self._player_choice_applies(fact.player_choice_scope, snapshot)
+        if choice_status == "excluded":
+            return "excluded"
+        if choice_status == "unresolved":
+            return "unresolved"
         if fact.observed_at:
             if not snapshot:
                 return "unresolved"
@@ -610,6 +631,18 @@ class CanonicalIndex:
         if version_status == "unresolved":
             return "unresolved"
         return "applicable"
+
+    def player_choice_gaps(self, snapshot: Dict[str, Any]) -> List[str]:
+        snapshot = snapshot or {}
+        if snapshot.get("player_choice"):
+            return []
+        gaps = []
+        for page in self.pages:
+            for fact in page.facts:
+                if fact.status == "rejected" or not fact.player_choice_scope:
+                    continue
+                gaps.append(f"{page.entity_id}: {fact.text[:40]}（选择范围：{','.join(fact.player_choice_scope)}）")
+        return sorted(set(gaps))
 
     def attribute_projection(self, snapshot: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         groups: Dict[str, Dict[str, Any]] = {}
@@ -719,6 +752,8 @@ class CanonicalIndex:
             if name and name in question:
                 warnings.append(f"> [歧义] 「{name}」在多个实体中出现：{', '.join(ids)}；不得默认归一。")
         warnings.extend(self.attribute_ambiguities(snapshot))
+        for gap in self.player_choice_gaps(snapshot)[:5]:
+            warnings.append(f"> [选择缺口] 未指定玩家选择，以下事实按条件候选处理：{gap}")
         hits = self.search(question, top_k=top_k, snapshot=snapshot, include_superseded=include_superseded)
         if not hits:
             message = (
