@@ -492,3 +492,28 @@ def test_conflict_choice_scope_needs_branch():
     }
     with pytest.raises(ingest.IngestError):
         ingest._validate_player_choice(_base_data(conflicts=[conflict]), {}, PROFILE)
+
+
+def test_aggregate_facts_merges_same_record_evidence():
+    from app.canonical import CanonicalIndex, Fact
+
+    first = Fact(kind="event", text="同一事件", record_id="event:x", evidence=["span:a"])
+    second = Fact(kind="event", text="同一事件", record_id="event:x", evidence=["span:b"])
+    merged = CanonicalIndex._aggregate_facts([first, second])
+    assert len(merged) == 1
+    assert merged[0].evidence == ["span:a", "span:b"]
+
+
+def test_choice_candidate_lines_groups_both_branches(tmp_path):
+    data = _base_data(
+        events=[
+            {"event_id": "event:aether", "title": "空的风", "player_choice_scope": ["aether"]},
+            {"event_id": "event:lumine", "title": "荧的岩", "player_choice_scope": ["lumine"]},
+        ]
+    )
+    page = _page(tmp_path, data)
+    from app.canonical import CanonicalIndex
+
+    lines = CanonicalIndex([page]).choice_candidate_lines({})
+    assert any("aether" in line for line in lines)
+    assert any("lumine" in line for line in lines)

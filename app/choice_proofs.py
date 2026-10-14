@@ -63,49 +63,55 @@ def generate_fixture_choice_proofs(bundle: Dict[str, Any]) -> List[Dict[str, Any
     return proofs
 
 
+def _load_external_proofs(source_dir: Path, manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rel = manifest.get("choice_proofs_file")
+    root = Path(source_dir).resolve()
+    path = (root / str(rel)).resolve()
+    if root not in path.parents and path != root:
+        raise ChoiceProofError("choice_proofs_file escapes source_dir")
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ChoiceProofError("choice_proofs_file unreadable: " + str(exc)) from exc
+    expected_sha = manifest.get("choice_proofs_sha256")
+    if not expected_sha:
+        raise ChoiceProofError("choice entity requires manifest.choice_proofs_sha256")
+    if hashlib.sha256(raw).hexdigest() != expected_sha:
+        raise ChoiceProofError("choice_proofs_sha256 mismatch")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ChoiceProofError("choice_proofs JSON invalid") from exc
+    if not isinstance(data, dict) or data.get("format_version") != 1:
+        raise ChoiceProofError("choice_proofs format_version must be 1")
+    proofs = data.get("proofs")
+    if not isinstance(proofs, list):
+        raise ChoiceProofError("choice proofs must be an array")
+    return proofs
+
+
+def _check_fixture_proofs(proofs: List[Dict[str, Any]], bundle: Dict[str, Any]) -> None:
+    if not any(proof.get("rule_id") == "fixture-choice-marker-v1" for proof in proofs):
+        return
+    if bundle.get("mode") != "fixture":
+        raise ChoiceProofError("fixture choice proof rule is fixture-only")
+    if any(source.get("provider") != "user_fixture" for source in bundle.get("sources") or []):
+        raise ChoiceProofError("fixture choice proof rule requires user_fixture provider")
+    if _proof_signature(generate_fixture_choice_proofs(bundle)) != _proof_signature(proofs):
+        raise ChoiceProofError("choice_proofs does not match raw marker coverage")
+
+
 def load_choice_proofs(source_dir: Path, bundle: Dict[str, Any], required: bool = False) -> List[Dict[str, Any]]:
     manifest = bundle.get("manifest") or {}
     rel = manifest.get("choice_proofs_file")
     if not rel:
         if required:
             raise ChoiceProofError("choice entity requires manifest.choice_proofs_file")
-        if bundle.get("mode") == "fixture":
-            proofs = generate_fixture_choice_proofs(bundle)
-        else:
-            proofs = []
+        proofs = generate_fixture_choice_proofs(bundle) if bundle.get("mode") == "fixture" else []
     else:
-        root = Path(source_dir).resolve()
-        path = (root / rel).resolve()
-        if root not in path.parents and path != root:
-            raise ChoiceProofError("choice_proofs_file escapes source_dir")
-        try:
-            raw = path.read_bytes()
-        except OSError as exc:
-            raise ChoiceProofError("choice_proofs_file unreadable: " + str(exc)) from exc
-        expected_sha = manifest.get("choice_proofs_sha256")
-        if not expected_sha:
-            raise ChoiceProofError("choice entity requires manifest.choice_proofs_sha256")
-        if hashlib.sha256(raw).hexdigest() != expected_sha:
-            raise ChoiceProofError("choice_proofs_sha256 mismatch")
-        try:
-            data = json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ChoiceProofError("choice_proofs JSON invalid") from exc
-        if not isinstance(data, dict) or data.get("format_version") != 1:
-            raise ChoiceProofError("choice_proofs format_version must be 1")
-        proofs = data.get("proofs")
-    if not isinstance(proofs, list):
-        raise ChoiceProofError("choice proofs must be an array")
+        proofs = _load_external_proofs(source_dir, manifest)
     _validate_proof_structure(proofs, bundle)
-    if any(proof.get("rule_id") == "fixture-choice-marker-v1" for proof in proofs):
-        if bundle.get("mode") != "fixture":
-            raise ChoiceProofError("fixture choice proof rule is fixture-only")
-        for source in bundle.get("sources") or []:
-            if source.get("provider") != "user_fixture":
-                raise ChoiceProofError("fixture choice proof rule requires user_fixture provider")
-        expected = generate_fixture_choice_proofs(bundle)
-        if _proof_signature(expected) != _proof_signature(proofs):
-            raise ChoiceProofError("choice_proofs does not match raw marker coverage")
+    _check_fixture_proofs(proofs, bundle)
     return proofs
 
 
@@ -140,10 +146,11 @@ def _validate_proof_structure(proofs: List[Dict[str, Any]], bundle: Dict[str, An
         scope = proof.get("scope")
         if scope not in ([], ["aether"], ["lumine"]):
             raise ChoiceProofError("bad proof scope")
-        source = sources.get(proof.get("source_id"))
+        source_id = str(proof.get("source_id") or "")
+        source = sources.get(source_id)
         if source is None or source.get("snapshot_sha256") != proof.get("source_sha256"):
             raise ChoiceProofError("proof source hash mismatch")
-        anchor = paragraphs.get(proof.get("anchor_span_id"))
+        anchor = paragraphs.get(str(proof.get("anchor_span_id") or ""))
         if anchor is None or anchor.get("source_id") != proof.get("source_id"):
             raise ChoiceProofError("proof anchor span unresolved")
         if _sha_text(anchor.get("quote") or "") != proof.get("anchor_quote_sha256"):
@@ -157,6 +164,38 @@ def _validate_proof_structure(proofs: List[Dict[str, Any]], bundle: Dict[str, An
                 raise ChoiceProofError("proof covered span unresolved: " + str(span_id))
         if proof.get("rule_id") != "fixture-choice-marker-v1":
             raise ChoiceProofError("unsupported choice proof rule in production/fixture: " + str(proof.get("rule_id")))
+
+
+def _validate_scoped_record(obj, scope, refs, selected, proofs_by_id):
+    if not refs:
+        raise ChoiceProofError("scoped record needs proof refs")
+    branch = obj.get("player_choice_branch")
+    if not isinstance(branch, dict) or branch.get("kind") != "source_metadata":
+        raise ChoiceProofError("scoped record needs source_metadata branch")
+    matching_scope = [item for item in selected if item.get("scope") == scope]
+    if not matching_scope:
+        raise ChoiceProofError("branch scope not covered by proof")
+    if not any(item.get("anchor_span_id") == branch.get("source_span_id") for item in matching_scope):
+        raise ChoiceProofError("branch anchor not covered by proof")
+    evidence_spans = {e.get("source_span_id") for e in obj.get("evidence") or []}
+    covered = set()
+    for item in matching_scope:
+        covered.update(item.get("covered_span_ids") or [])
+    if evidence_spans - covered:
+        raise ChoiceProofError("record evidence not covered by choice proof")
+
+
+def _validate_common_record(obj, selected):
+    if not obj.get("evidence"):
+        return
+    common = [item for item in selected if item.get("scope") == []]
+    if not common:
+        raise ChoiceProofError("common record needs common proof")
+    covered = set()
+    for item in common:
+        covered.update(item.get("covered_span_ids") or [])
+    if {e.get("source_span_id") for e in obj.get("evidence") or []} - covered:
+        raise ChoiceProofError("common evidence not covered by common proof")
 
 
 def validate_choice_bindings(data: Dict[str, Any], proofs: List[Dict[str, Any]]) -> None:
@@ -174,34 +213,23 @@ def validate_choice_bindings(data: Dict[str, Any], proofs: List[Dict[str, Any]])
         if any(item is None for item in selected):
             raise ChoiceProofError("player_choice_proof_refs references unknown proof")
         if scope:
-            if not refs:
-                raise ChoiceProofError("scoped record needs proof refs")
-            branch = obj.get("player_choice_branch")
-            if not isinstance(branch, dict) or branch.get("kind") != "source_metadata":
-                raise ChoiceProofError("scoped record needs source_metadata branch")
-            matching = [
-                item
-                for item in selected
-                if item.get("scope") == scope and item.get("anchor_span_id") == branch.get("source_span_id")
-            ]
-            if not matching:
-                raise ChoiceProofError("branch anchor/scope not covered by proof")
-            evidence_spans = {e.get("source_span_id") for e in obj.get("evidence") or []}
-            covered = set()
-            for item in matching:
-                covered.update(item.get("covered_span_ids") or [])
-            if evidence_spans - covered:
-                raise ChoiceProofError("record evidence not covered by choice proof")
+            _validate_scoped_record(obj, scope, refs, selected, proofs_by_id)
         else:
-            if obj.get("evidence"):
-                common = [item for item in selected if item.get("scope") == []]
-                if not common:
-                    raise ChoiceProofError("common record needs common proof")
-                covered = set()
-                for item in common:
-                    covered.update(item.get("covered_span_ids") or [])
-                if {e.get("source_span_id") for e in obj.get("evidence") or []} - covered:
-                    raise ChoiceProofError("common evidence not covered by common proof")
+            _validate_common_record(obj, selected)
+    _validate_conflict_refs(data, proofs_by_id)
+
+
+def _validate_conflict_refs(data: Dict[str, Any], proofs_by_id: Dict[str, Any]) -> None:
+    for conflict in data.get("conflicts") or []:
+        parent_refs = set(conflict.get("player_choice_proof_refs") or [])
+        child_refs = set()
+        for alternative in conflict.get("alternatives") or []:
+            child_refs.update(alternative.get("player_choice_proof_refs") or [])
+        if not conflict.get("evidence") and parent_refs != child_refs:
+            raise ChoiceProofError("conflict refs must equal union of alternative refs")
+        for ref in parent_refs | child_refs:
+            if ref not in proofs_by_id:
+                raise ChoiceProofError("conflict proof ref unknown: " + str(ref))
 
 
 def _descendants(value):

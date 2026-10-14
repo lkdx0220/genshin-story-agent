@@ -22,7 +22,7 @@ import functools
 import json
 import re
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -222,7 +222,7 @@ class CanonicalPage:
         self.registry = registry
         self.data, self.body = _parse_front_matter(text)
         page_options = self.data.get("player_choice_options")
-        profile_options, profile_error = _load_player_choice_profile_options(self.data.get("entity_id"))
+        profile_options, profile_error = _load_player_choice_profile_options(str(self.data.get("entity_id") or ""))
         self.player_choice_error = profile_error
         if page_options is not None:
             if profile_options and list(page_options) != profile_options:
@@ -801,9 +801,9 @@ class CanonicalIndex:
                         matched = any(self._observation_matches(item, snapshot) for item in fact.observed_at)
                     else:
                         matched = False
-                        for candidate in fact.player_choice_scope or [None]:
+                        for candidate in list(fact.player_choice_scope) or [""]:
                             trial = dict(snapshot)
-                            trial["player_choice"] = candidate
+                            trial["player_choice"] = candidate or None
                             if any(self._observation_matches(item, trial) for item in fact.observed_at):
                                 matched = True
                                 break
@@ -823,6 +823,35 @@ class CanonicalIndex:
                         f"{page.entity_id}: {fact.text[:40]}（选择范围：{','.join(fact.player_choice_scope)}）{cites}"
                     )
         return sorted(set(gaps))
+
+    def choice_candidate_lines(self, snapshot: Optional[Dict[str, Any]], question: Optional[str] = None) -> List[str]:
+        snapshot = snapshot or {}
+        if snapshot.get("player_choice"):
+            return []
+        question_chars = {char for char in (question or "") if not char.isspace()}
+        groups: Dict[str, List[str]] = {"aether": [], "lumine": [], "unclassified": []}
+        for page in self.pages:
+            for fact in self._aggregate_facts(page.facts):
+                if fact.status in ("rejected", "superseded"):
+                    continue
+                if fact.config_error or fact.player_choice_missing:
+                    groups["unclassified"].append(
+                        f"{fact.text[:50]}（{page.player_choice_error or '缺少 player_choice_scope'}）"
+                    )
+                    continue
+                if not fact.player_choice_scope:
+                    continue
+                if question_chars and not (question_chars & set(fact.text)):
+                    continue
+                for choice_id in fact.player_choice_scope:
+                    groups.setdefault(choice_id, []).append(fact.text[:50])
+        lines = []
+        for choice_id in ("aether", "lumine"):
+            for text in sorted(set(groups.get(choice_id) or []))[:3]:
+                lines.append(f"> [条件候选] 玩家选择 {choice_id} 时：{text}")
+        for text in sorted(set(groups.get("unclassified") or []))[:3]:
+            lines.append(f"> [未分类] {text}")
+        return lines
 
     def attribute_projection(self, snapshot: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         groups: Dict[str, Dict[str, Any]] = {}
@@ -897,6 +926,30 @@ class CanonicalIndex:
             return False
         return True
 
+    @staticmethod
+    def _aggregate_facts(facts: List[Fact]) -> List[Fact]:
+        grouped: Dict[tuple, Fact] = {}
+        for fact in facts:
+            key = (
+                fact.kind,
+                fact.record_id or fact.text,
+                fact.text,
+                tuple(fact.player_choice_scope),
+                tuple(fact.identity_version_ids),
+                json.dumps(fact.story_scope, sort_keys=True, ensure_ascii=False),
+                json.dumps(fact.version, sort_keys=True, ensure_ascii=False),
+            )
+            if key not in grouped:
+                grouped[key] = fact
+            else:
+                existing = grouped[key]
+                merged = list(existing.evidence)
+                for span_id in fact.evidence:
+                    if span_id not in merged:
+                        merged.append(span_id)
+                grouped[key] = replace(existing, evidence=merged)
+        return list(grouped.values())
+
     def search(
         self,
         question: str,
@@ -917,7 +970,7 @@ class CanonicalIndex:
         scored: List[Tuple[float, CanonicalPage, Fact]] = []
         for page in self.pages:
             page_names = [page.canonical_name] + page.aliases
-            for fact in page.facts:
+            for fact in self._aggregate_facts(page.facts):
                 if not self._passes_filters(fact, question, snapshot, historical, include_superseded):
                     continue
                 score = self._score_fact(fact, page_names, question, q_tokens, intent_kinds)
@@ -937,8 +990,9 @@ class CanonicalIndex:
             if name and name in question:
                 warnings.append(f"> [歧义] 「{name}」在多个实体中出现：{', '.join(ids)}；不得默认归一。")
         warnings.extend(self.attribute_ambiguities(snapshot))
-        for gap in self.player_choice_gaps(snapshot, question=question)[:5]:
-            warnings.append(f"> [选择缺口] 未指定玩家选择，以下事实按条件候选处理：{gap}")
+        warnings.extend(self.choice_candidate_lines(snapshot, question=question))
+        for gap in self.player_choice_gaps(snapshot or {}, question=question)[:5]:
+            warnings.append(f"> [选择缺口] {gap}")
         hits = self.search(question, top_k=top_k, snapshot=snapshot, include_superseded=include_superseded)
         if not hits:
             message = (
@@ -955,7 +1009,15 @@ class CanonicalIndex:
         used: Dict[Tuple[str, str], str] = {}
         seen_text = set()
         for page, fact in hits:
-            dedupe_key = (fact.record_id or fact.text, tuple(fact.player_choice_scope))
+            dedupe_key = (
+                page.entity_id,
+                fact.kind,
+                fact.record_id or fact.text,
+                tuple(fact.player_choice_scope),
+                tuple(fact.identity_version_ids),
+                json.dumps(fact.story_scope, sort_keys=True, ensure_ascii=False),
+                json.dumps(fact.version, sort_keys=True, ensure_ascii=False),
+            )
             if dedupe_key in seen_text:
                 continue
             seen_text.add(dedupe_key)
