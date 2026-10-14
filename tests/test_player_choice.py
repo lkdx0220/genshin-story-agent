@@ -273,3 +273,88 @@ def test_conflict_alternative_inherits_choice_scope(tmp_path):
     page = _page(tmp_path, data)
     alternatives = [f for f in page.facts if f.kind == "conflict_alternative"]
     assert alternatives[0].player_choice_scope == ["aether"]
+
+
+def test_search_none_snapshot_does_not_return_branch_hits(tmp_path):
+    data = _base_data(events=[{"event_id": "event:x", "title": "空分支事件", "player_choice_scope": ["aether"]}])
+    page = _page(tmp_path, data)
+    from app.canonical import CanonicalIndex
+
+    index = CanonicalIndex([page])
+    assert index.search("空分支事件", snapshot=None) == []
+    assert index.search("空分支事件", snapshot={}) == []
+
+
+def test_runtime_missing_scope_is_unclassified_gap(tmp_path):
+    data = _base_data(events=[{"event_id": "event:x", "title": "未分类事件"}])
+    page = _page(tmp_path, data)
+    from app.canonical import CanonicalIndex
+
+    fact = [item for item in page.facts if "未分类事件" in item.text][0]
+    index = CanonicalIndex([page])
+    assert fact.player_choice_missing is True
+    assert index._fact_applies(fact, {}) is False
+    assert any("未分类" in gap for gap in index.player_choice_gaps({}, question="事件"))
+
+
+def test_attribute_observed_search_respects_point_observation(tmp_path):
+    record = {
+        "attribute_id": "attr:traveler-element",
+        "key": "element",
+        "value": "anemo",
+        "value_label": None,
+        "identity_version_ids": [],
+        "story_scope": {
+            "label": None,
+            "from_event_id": None,
+            "from_boundary": "unknown",
+            "to_event_id": None,
+            "to_boundary": "unknown",
+        },
+        "version": {"introduced_in": None, "valid_from": None, "valid_to": None, "verified_in": []},
+        "status": "candidate",
+        "evidence": [],
+        "conflict_ids": [],
+        "player_choice_scope": [],
+        "observed_at": [
+            {"identity_version_id": None, "story_event_id": None, "position": "unknown", "game_version": "3.2"}
+        ],
+    }
+    data = _base_data(attribute_records=[record])
+    page = _page(tmp_path, data)
+    from app.canonical import CanonicalIndex
+
+    index = CanonicalIndex([page])
+    assert index.search("元素", snapshot={"game_version": "3.2", "position": "unknown"})
+    assert not index.search("元素", snapshot={"game_version": "5.1", "position": "unknown"})
+
+
+def test_attribute_version_excluded_beats_choice_unresolved(tmp_path):
+    record = {
+        "attribute_id": "attr:traveler-element",
+        "key": "element",
+        "value": "anemo",
+        "value_label": None,
+        "identity_version_ids": [],
+        "story_scope": {
+            "label": None,
+            "from_event_id": None,
+            "from_boundary": "unknown",
+            "to_event_id": None,
+            "to_boundary": "unknown",
+        },
+        "version": {"introduced_in": None, "valid_from": None, "valid_to": "3.2", "verified_in": []},
+        "status": "candidate",
+        "evidence": [],
+        "conflict_ids": [],
+        "player_choice_scope": ["aether"],
+        "observed_at": [],
+    }
+    data = _base_data(attribute_records=[record])
+    page = _page(tmp_path, data)
+    from app.canonical import CanonicalIndex
+
+    index = CanonicalIndex([page])
+    assert index.attribute_projection({"game_version": "5.1"})["char:traveler:element"]["status"] == "not_applicable"
+    gaps = index.player_choice_gaps({"game_version": "5.1"}, question="元素")
+    assert not any("attr:traveler-element" in gap for gap in gaps)
