@@ -390,3 +390,55 @@ def test_explain_snapshot_detects_outdated_plan(tmp_path, monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "plan_outdated" in out
+
+
+def test_baseline_graph_diagnostics_invalid_is_typed(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    data = json.loads(state.read_text(encoding="utf-8"))
+    data["graph"]["diagnostics"] = 1
+    state.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    plan = incremental.build_plan(inputs, state)
+    assert plan["full_required"] is True
+    assert any(item.startswith("state_") for item in plan["unknown"])
+
+
+def test_baseline_common_hash_object_is_typed(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    data = json.loads(state.read_text(encoding="utf-8"))
+    data["inputs"]["common"]["registry"] = {"invalid": "hash"}
+    state.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    plan = incremental.build_plan(inputs, state)
+    assert plan["full_required"] is True
+    assert any(item.startswith("state_") for item in plan["unknown"])
+
+
+def test_non_utf8_state_is_corrupt_without_crash(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = root / "reports/incremental/state.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_bytes(b"\xff\xfe\x00")
+    plan = incremental.build_plan(inputs, state)
+    assert plan["full_required"] is True
+    assert "state_corrupt" in plan["unknown"]
+
+
+def test_direct_external_owner_is_not_a_change_seed():
+    inputs = {"inputs": [{"bundle_key": "shared", "managed_pages": [{"page_key": "a"}, {"page_key": "b"}]}]}
+    graph = {
+        "nodes": [
+            {"key": ["page", "a"]},
+            {"key": ["page", "b"]},
+            {"key": ["b", "event", "event:b"]},
+        ],
+        "edges": [
+            {"consumer": ["page", "a"], "dependency": ["b", "event", "event:b"]},
+            {"consumer": ["page", "b"], "dependency": ["b", "event", "event:b"]},
+        ],
+    }
+    dirty, _blocked, full = incremental.mark_dirty(
+        [{"kind": "response_changed", "bundle_key": "shared", "page_keys": ["a"]}], inputs, graph
+    )
+    assert full is False
+    assert set(dirty) == {"a"}
