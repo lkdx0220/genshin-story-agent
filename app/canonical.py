@@ -154,18 +154,53 @@ class Fact:
     observed_at: List[Dict[str, Any]] = field(default_factory=list)
     player_choice_scope: List[str] = field(default_factory=list)
     player_choice_missing: bool = False
+    config_error: bool = False
 
 
-def _load_player_choice_profile_options(entity_id: str) -> List[Dict[str, Any]]:
-    slug = str(entity_id or "").replace(":", "_")
+REQUIRED_CHOICE_PROFILE_IDS = {"char:traveler"}
+
+
+def _load_player_choice_profile_options(entity_id: str):
+    """返回 (options, error)。错误不降级为非选择实体。"""
+    if not isinstance(entity_id, str) or not entity_id:
+        return [], "invalid entity_id for choice profile"
+    slug = entity_id.replace(":", "_")
     path = REPO_ROOT / "wiki" / "__schema__" / "entities" / (slug + ".json")
     if not path.exists():
-        return []
+        if entity_id in REQUIRED_CHOICE_PROFILE_IDS:
+            return [], "required choice profile missing: " + entity_id
+        return [], None
     try:
         profile = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    return list(profile.get("player_choice_options") or [])
+    except (OSError, json.JSONDecodeError) as exc:
+        return [], "choice profile unreadable: " + str(exc)
+    if not isinstance(profile, dict) or profile.get("entity_id") != entity_id:
+        return [], "choice profile entity_id mismatch"
+    options = profile.get("player_choice_options")
+    if options is None:
+        return [], None
+    if not isinstance(options, list):
+        return [], "choice profile options must be an array"
+    seen_ids = set()
+    seen_aliases = set()
+    for option in options:
+        if not isinstance(option, dict):
+            return [], "choice profile option must be an object"
+        choice_id = option.get("choice_id")
+        label = option.get("label")
+        aliases = option.get("aliases")
+        if choice_id not in ("aether", "lumine") or choice_id in seen_ids:
+            return [], "choice profile option id invalid/duplicate"
+        seen_ids.add(choice_id)
+        if not isinstance(label, str) or not label.strip():
+            return [], "choice profile label required"
+        if not isinstance(aliases, list) or not aliases:
+            return [], "choice profile aliases required"
+        for alias in aliases:
+            if not isinstance(alias, str) or not alias.strip() or alias in seen_aliases:
+                return [], "choice profile alias invalid/duplicate"
+            seen_aliases.add(alias)
+    return options, None
 
 
 class CanonicalPage:
@@ -175,10 +210,16 @@ class CanonicalPage:
         self.path = Path(path)
         self.registry = registry
         self.data, self.body = _parse_front_matter(text)
-        self.player_choice_options = list(self.data.get("player_choice_options") or [])
-        if not self.player_choice_options:
-            self.player_choice_options = _load_player_choice_profile_options(self.data.get("entity_id"))
-        self.has_player_choice = bool(self.player_choice_options)
+        page_options = self.data.get("player_choice_options")
+        profile_options, profile_error = _load_player_choice_profile_options(self.data.get("entity_id"))
+        self.player_choice_error = profile_error
+        if page_options is not None:
+            if profile_options and list(page_options) != profile_options:
+                self.player_choice_error = "page player_choice_options does not match profile"
+            self.player_choice_options = list(page_options)
+        else:
+            self.player_choice_options = list(profile_options or [])
+        self.has_player_choice = bool(self.player_choice_options) or bool(self.player_choice_error)
         self.span_url: Dict[str, str] = {}
         for match in _FOOTNOTE_RE.finditer(self.body):
             self.span_url[match.group("span")] = match.group("url")
@@ -275,6 +316,7 @@ class CanonicalPage:
                 observed_at=list(observed_at or []),
                 player_choice_scope=list(player_choice_scope or obj.get("player_choice_scope") or []),
                 player_choice_missing=player_choice_missing,
+                config_error=self.player_choice_error is not None,
             )
         )
 
@@ -616,7 +658,7 @@ class CanonicalIndex:
             return False
         if not cls._scope_applies(fact.story_scope, snapshot):
             return False
-        if fact.player_choice_missing:
+        if fact.config_error or fact.player_choice_missing:
             return False
         if cls._player_choice_applies(fact.player_choice_scope, snapshot) != "applicable":
             return False
@@ -684,6 +726,8 @@ class CanonicalIndex:
         ):
             statuses.append("excluded")
         statuses.append(self._version_status(fact.version, snapshot, registry=self.registry))
+        if fact.config_error:
+            statuses.append("excluded")
         if fact.player_choice_missing:
             statuses.append("unresolved")
         else:
@@ -707,7 +751,7 @@ class CanonicalIndex:
             for fact in page.facts:
                 if fact.status in ("rejected", "superseded"):
                     continue
-                if not (fact.player_choice_scope or fact.player_choice_missing):
+                if not (fact.player_choice_scope or fact.player_choice_missing or fact.config_error):
                     continue
                 if not fact.player_choice_missing and snapshot.get("player_choice"):
                     continue
@@ -738,7 +782,9 @@ class CanonicalIndex:
                 cites = "".join(
                     f"[原文]({page.span_url[span_id]})" for span_id in fact.evidence if span_id in page.span_url
                 )
-                if fact.player_choice_missing:
+                if fact.config_error:
+                    gaps.append(f"{page.entity_id}: {page.player_choice_error}（{fact.text[:40]}）")
+                elif fact.player_choice_missing:
                     gaps.append(f"{page.entity_id}: {fact.text[:40]}（未分类：缺少 player_choice_scope）{cites}")
                 else:
                     gaps.append(
