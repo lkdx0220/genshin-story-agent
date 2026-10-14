@@ -151,6 +151,7 @@ class Fact:
     attribute_id: Optional[str] = None
     attribute_key: Optional[str] = None
     attribute_value: Any = None
+    observed_at: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class CanonicalPage:
@@ -223,6 +224,7 @@ class CanonicalPage:
         attribute_id=None,
         attribute_key=None,
         attribute_value=None,
+        observed_at=None,
     ):
         obj = obj or {}
         status = status or obj.get("status") or "candidate"
@@ -247,6 +249,7 @@ class CanonicalPage:
                 attribute_id=attribute_id,
                 attribute_key=attribute_key,
                 attribute_value=attribute_value,
+                observed_at=list(observed_at or []),
             )
         )
 
@@ -355,6 +358,7 @@ class CanonicalPage:
                 attribute_id=record.get("attribute_id"),
                 attribute_key=key,
                 attribute_value=value,
+                observed_at=record.get("observed_at") or [],
             )
 
     def _build_facts(self) -> None:
@@ -559,10 +563,40 @@ class CanonicalIndex:
                     gaps.append(f"{page.entity_id}: {fact.text[:40]}（{label or '版本未知'}）")
         return sorted(set(gaps))
 
+    def _observation_matches(self, observation: Dict[str, Any], snapshot: Dict[str, Any]) -> bool:
+        snapshot = snapshot or {}
+        if observation.get("identity_version_id") not in (None, snapshot.get("identity_version_id")):
+            return False
+        if observation.get("story_event_id") not in (None, snapshot.get("story_event_id")):
+            return False
+        if observation.get("position") not in (None, snapshot.get("position")):
+            return False
+        obs_numeric = observation.get("game_version")
+        obs_label = observation.get("game_version_label")
+        snap_numeric = snapshot.get("game_version")
+        snap_label = snapshot.get("game_version_label")
+        if obs_numeric or obs_label:
+            if not (snap_numeric or snap_label):
+                return False
+            try:
+                from app.versioning import VersionRegistryError, compare_versions, resolve_version
+
+                observed = resolve_version(numeric=obs_numeric, label=obs_label, registry=self.registry)
+                queried = resolve_version(numeric=snap_numeric, label=snap_label, registry=self.registry)
+            except VersionRegistryError:
+                return False
+            return compare_versions(observed, queried) == 0
+        return True
+
     def _attribute_status(self, fact: Fact, snapshot: Dict[str, Any]) -> str:
         if fact.status in ("rejected", "superseded"):
             return "excluded"
         snapshot = snapshot or {}
+        if fact.observed_at:
+            if not snapshot:
+                return "unresolved"
+            if not any(self._observation_matches(item, snapshot) for item in fact.observed_at):
+                return "excluded"
         identity_id = snapshot.get("identity_version_id")
         if identity_id and fact.identity_version_ids and identity_id not in fact.identity_version_ids:
             return "excluded"

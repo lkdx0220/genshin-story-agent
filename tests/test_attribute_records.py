@@ -261,3 +261,97 @@ def test_attribute_conflict_target_ref_requires_same_key():
             {"proposed_value": bad, "version": bad["version"], "evidence": bad["evidence"]},
             SCHEMA,
         )
+
+
+def test_attribute_observed_at_is_point_not_interval(tmp_path):
+    record = _record("element", "anemo")
+    record["attribute_id"] = "attr:a-element-observed"
+    record["observed_at"] = [{"identity_version_id": "identity:a", "story_event_id": "event:x", "position": "after"}]
+    page = _page(tmp_path, [record])
+    from app.canonical import CanonicalIndex
+
+    index = CanonicalIndex([page])
+    matching = {"identity_version_id": "identity:a", "story_event_id": "event:x", "position": "after"}
+    assert index.attribute_projection(matching)["char:a:element"]["status"] == "applicable"
+    assert (
+        index.attribute_projection(
+            {"identity_version_id": "identity:a", "story_event_id": "event:y", "position": "after"}
+        )["char:a:element"]["status"]
+        == "not_applicable"
+    )
+    assert index.attribute_projection(None)["char:a:element"]["status"] == "unresolved"
+
+
+def test_attribute_subject_boundary_unresolved_is_ambiguous(tmp_path):
+    first = _record("element", "anemo")
+    first["attribute_id"] = "attr:a-element-1"
+    second = _record("element", "geo")
+    second["attribute_id"] = "attr:a-element-2"
+    page = _page(tmp_path, [first, second])
+    from app.canonical import CanonicalIndex
+
+    projection = CanonicalIndex([page]).attribute_projection({"identity_version_id": "identity:a"})
+    assert projection["char:a:element"]["status"] == "ambiguous"
+
+
+def test_attribute_three_axis_conjunction(tmp_path):
+    record = _record("element", "anemo")
+    record["attribute_id"] = "attr:a-element-axes"
+    record["identity_version_ids"] = ["identity:a"]
+    record["story_scope"] = {
+        "label": None,
+        "from_event_id": "event:x",
+        "from_boundary": "event",
+        "to_event_id": None,
+        "to_boundary": "unbounded",
+    }
+    record["version"] = {"introduced_in": None, "valid_from": "3.3", "valid_to": None, "verified_in": []}
+    record["observed_at"] = []
+    page = _page(tmp_path, [record])
+    from app.canonical import CanonicalIndex
+
+    index = CanonicalIndex([page])
+    assert (
+        index.attribute_projection(
+            {
+                "identity_version_id": "identity:a",
+                "story_event_id": "event:x",
+                "position": "after",
+                "game_version": "3.3",
+            }
+        )["char:a:element"]["status"]
+        == "applicable"
+    )
+    assert (
+        index.attribute_projection(
+            {
+                "identity_version_id": "identity:b",
+                "story_event_id": "event:x",
+                "position": "after",
+                "game_version": "3.3",
+            }
+        )["char:a:element"]["status"]
+        == "not_applicable"
+    )
+    assert (
+        index.attribute_projection(
+            {
+                "identity_version_id": "identity:a",
+                "story_event_id": "event:y",
+                "position": "after",
+                "game_version": "3.3",
+            }
+        )["char:a:element"]["status"]
+        == "not_applicable"
+    )
+    assert (
+        index.attribute_projection(
+            {
+                "identity_version_id": "identity:a",
+                "story_event_id": "event:x",
+                "position": "after",
+                "game_version": "3.2",
+            }
+        )["char:a:element"]["status"]
+        == "not_applicable"
+    )
