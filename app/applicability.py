@@ -53,21 +53,39 @@ def story_status(scope: Dict[str, Any], snapshot: Dict[str, Any], story_applies)
     return APPLICABLE if story_applies(scope, snapshot) else EXCLUDED
 
 
-def record_status(record: Dict[str, Any], snapshot: Dict[str, Any], registry: Any, story_applies) -> str:
-    snapshot = snapshot or {}
+def _node_statuses(node: Dict[str, Any], snapshot: Dict[str, Any], registry: Any, story_applies, current: bool) -> list:
     statuses = []
     identity_id = snapshot.get("identity_version_id")
-    identity_ids = record.get("identity_version_ids") or []
+    identity_ids = node.get("identity_version_ids") or []
     if identity_id and identity_ids and identity_id not in identity_ids:
         statuses.append(EXCLUDED)
-    if record.get("status") in ("rejected", "superseded"):
+    if node.get("config_error"):
         statuses.append(EXCLUDED)
-    statuses.append(story_status(record.get("story_scope") or {}, snapshot, story_applies))
-    statuses.append(version_status(record.get("version") or {}, snapshot, registry))
-    if "player_choice_scope" in record:
+    if node.get("player_choice_missing"):
+        statuses.append(UNRESOLVED)
+    if current and node.get("status") in ("rejected", "superseded"):
+        statuses.append(EXCLUDED)
+    statuses.append(story_status(node.get("story_scope") or {}, snapshot, story_applies))
+    statuses.append(version_status(node.get("version") or {}, snapshot, registry))
+    if "player_choice_scope" in node:
         from app.choice_contract import choice_status
 
-        statuses.append(choice_status(record.get("player_choice_scope"), snapshot, has_choice=True, field_present=True))
-    if record.get("observed_at"):
-        statuses.append(observations_status(record.get("observed_at") or [], snapshot, registry=registry))
+        statuses.append(choice_status(node.get("player_choice_scope"), snapshot, has_choice=True, field_present=True))
+    if node.get("observed_at"):
+        statuses.append(observations_status(node.get("observed_at") or [], snapshot, registry=registry))
+    return statuses
+
+
+def record_status(
+    record: Dict[str, Any],
+    snapshot: Dict[str, Any],
+    registry: Any,
+    story_applies,
+    parent: Dict[str, Any] | None = None,
+    historical: bool = False,
+) -> str:
+    snapshot = snapshot or {}
+    statuses = _node_statuses(record, snapshot, registry, story_applies, current=not historical)
+    if parent:
+        statuses.extend(_node_statuses(parent, snapshot, registry, story_applies, current=False))
     return combine_all(statuses) if statuses else APPLICABLE

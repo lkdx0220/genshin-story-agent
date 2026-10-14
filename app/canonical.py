@@ -653,46 +653,50 @@ class CanonicalIndex:
         return choice_status(scope, snapshot, has_choice=True, field_present=True)
 
     @classmethod
-    def _fact_status(cls, fact: Fact, snapshot: Dict[str, Any], registry: Any = _REGISTRY_UNSET) -> str:
-        from app.choice_contract import APPLICABLE, observations_status
+    def _fact_status(
+        cls,
+        fact: Fact,
+        snapshot: Dict[str, Any],
+        registry: Any = _REGISTRY_UNSET,
+        historical: bool = False,
+    ) -> str:
+        from app.applicability import record_status
 
-        snapshot = snapshot or {}
-        statuses = []
-        identity_id = snapshot.get("identity_version_id")
-        if identity_id and fact.identity_version_ids and identity_id not in fact.identity_version_ids:
-            statuses.append("excluded")
-        if (fact.story_scope.get("from_event_id") or fact.story_scope.get("to_event_id")) and not cls._scope_applies(
-            fact.story_scope, snapshot
-        ):
-            statuses.append("excluded")
-        statuses.append(cls._version_status(fact.version, snapshot, registry=registry))
-        parent = fact.parent_identity or {}
-        if parent:
-            statuses.append(cls._version_status(parent.get("version") or {}, snapshot, registry=registry))
-            parent_scope = parent.get("story_scope") or {}
-            if (parent_scope.get("from_event_id") or parent_scope.get("to_event_id")) and not cls._scope_applies(
-                parent_scope, snapshot
-            ):
-                statuses.append("excluded")
-            if parent.get("observed_at"):
-                statuses.append(observations_status(parent["observed_at"], snapshot, registry=registry))
-        if fact.config_error:
-            statuses.append("excluded")
-        if fact.player_choice_missing:
-            statuses.append("unresolved")
-        else:
-            statuses.append(cls._player_choice_applies(fact.player_choice_scope, snapshot))
-        if fact.observed_at:
-            statuses.append(observations_status(fact.observed_at, snapshot, registry=registry))
-        if "excluded" in statuses:
-            return "excluded"
-        if "unresolved" in statuses:
-            return "unresolved"
-        return APPLICABLE
+        if registry is _REGISTRY_UNSET:
+            try:
+                from app import versioning
+
+                registry = versioning.load_registry()
+            except Exception:
+                registry = None
+        record = {
+            "version": fact.version,
+            "story_scope": fact.story_scope,
+            "player_choice_scope": fact.player_choice_scope,
+            "identity_version_ids": fact.identity_version_ids,
+            "observed_at": fact.observed_at,
+            "status": fact.status,
+            "player_choice_missing": fact.player_choice_missing,
+            "config_error": fact.config_error,
+        }
+        return record_status(
+            record,
+            snapshot or {},
+            registry,
+            cls._scope_applies,
+            parent=fact.parent_identity or None,
+            historical=historical,
+        )
 
     @classmethod
-    def _fact_applies(cls, fact: Fact, snapshot: Dict[str, Any], registry: Any = _REGISTRY_UNSET) -> bool:
-        return cls._fact_status(fact, snapshot, registry=registry) == "applicable"
+    def _fact_applies(
+        cls,
+        fact: Fact,
+        snapshot: Dict[str, Any],
+        registry: Any = _REGISTRY_UNSET,
+        historical: bool = False,
+    ) -> bool:
+        return cls._fact_status(fact, snapshot, registry=registry, historical=historical) == "applicable"
 
     def registry_gaps(self, snapshot: Dict[str, Any]) -> List[str]:
         gaps = []
@@ -915,28 +919,35 @@ class CanonicalIndex:
     def _passes_filters(self, fact: Fact, question: str, snapshot, historical: bool, include_superseded: bool) -> bool:
         if fact.status == "superseded" and not (historical or include_superseded):
             return False
-        if not self._fact_applies(fact, snapshot or {}, registry=self.registry):
+        if not self._fact_applies(
+            fact, snapshot or {}, registry=self.registry, historical=historical or include_superseded
+        ):
             return False
         if fact.kind == "attribute" and self._attribute_status(fact, snapshot or {}) != "applicable":
             return False
         return True
 
     @staticmethod
+    def _fact_context_key(fact: Fact, entity_id: str = "") -> tuple:
+        return (
+            entity_id,
+            fact.kind,
+            fact.record_id,
+            fact.text,
+            tuple(fact.player_choice_scope),
+            tuple(fact.identity_version_ids),
+            json.dumps(fact.story_scope, sort_keys=True, ensure_ascii=False),
+            json.dumps(fact.version, sort_keys=True, ensure_ascii=False),
+            fact.status,
+            json.dumps(fact.observed_at, sort_keys=True, ensure_ascii=False),
+            json.dumps(fact.parent_identity, sort_keys=True, ensure_ascii=False),
+        )
+
+    @staticmethod
     def _aggregate_facts(facts: List[Fact]) -> List[Fact]:
         grouped: Dict[tuple, Fact] = {}
         for fact in facts:
-            key = (
-                fact.kind,
-                fact.record_id or fact.text,
-                fact.text,
-                tuple(fact.player_choice_scope),
-                tuple(fact.identity_version_ids),
-                json.dumps(fact.story_scope, sort_keys=True, ensure_ascii=False),
-                json.dumps(fact.version, sort_keys=True, ensure_ascii=False),
-                fact.status,
-                json.dumps(fact.observed_at, sort_keys=True, ensure_ascii=False),
-                json.dumps(fact.parent_identity, sort_keys=True, ensure_ascii=False),
-            )
+            key = CanonicalIndex._fact_context_key(fact)
             if key not in grouped:
                 grouped[key] = fact
             else:
@@ -1010,19 +1021,7 @@ class CanonicalIndex:
         used: Dict[Tuple[str, str], str] = {}
         seen_text = set()
         for page, fact in hits:
-            dedupe_key = (
-                page.entity_id,
-                fact.kind,
-                fact.record_id,
-                fact.text,
-                tuple(fact.player_choice_scope),
-                tuple(fact.identity_version_ids),
-                json.dumps(fact.story_scope, sort_keys=True, ensure_ascii=False),
-                json.dumps(fact.version, sort_keys=True, ensure_ascii=False),
-                fact.status,
-                json.dumps(fact.observed_at, sort_keys=True, ensure_ascii=False),
-                json.dumps(fact.parent_identity, sort_keys=True, ensure_ascii=False),
-            )
+            dedupe_key = self._fact_context_key(fact, entity_id=page.entity_id)
             if dedupe_key in seen_text:
                 continue
             seen_text.add(dedupe_key)
