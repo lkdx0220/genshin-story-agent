@@ -104,3 +104,88 @@ def test_runtime_bare_name_does_not_bind_choice(tmp_path):
     text = index.answer("空是谁？", snapshot={})
     assert "选择缺口" in text
     assert index.attribute_projection({}) == {}
+
+
+def test_player_choice_branch_evidence_required():
+    data = _base_data(
+        events=[
+            {
+                "event_id": "event:x",
+                "player_choice_scope": ["aether"],
+                "evidence": [
+                    {"source_span_id": "span:test", "basis": "explicit_text", "authority": "non_authoritative"}
+                ],
+            }
+        ]
+    )
+    with pytest.raises(ingest.IngestError):
+        ingest._validate_player_choice(data, {"span:test": {"quote": "测试"}}, PROFILE)
+    ingest._validate_player_choice(data, {"span:test": {"quote": "空的选择"}}, PROFILE)
+
+
+def test_player_choice_observed_at_mismatch(tmp_path):
+    record = {
+        "attribute_id": "attr:traveler-element",
+        "key": "element",
+        "value": "anemo",
+        "value_label": None,
+        "identity_version_ids": [],
+        "story_scope": {
+            "label": None,
+            "from_event_id": None,
+            "from_boundary": "unknown",
+            "to_event_id": None,
+            "to_boundary": "unknown",
+        },
+        "version": {"introduced_in": None, "valid_from": None, "valid_to": None, "verified_in": []},
+        "status": "candidate",
+        "evidence": [{"source_span_id": "span:test", "basis": "explicit_text", "authority": "non_authoritative"}],
+        "conflict_ids": [],
+        "player_choice_scope": ["aether"],
+        "observed_at": [
+            {"identity_version_id": None, "story_event_id": None, "position": "unknown", "player_choice": "aether"}
+        ],
+    }
+    data = _base_data(attribute_records=[record])
+    page = _page(tmp_path, data)
+    from app.canonical import CanonicalIndex
+
+    index = CanonicalIndex([page])
+    assert (
+        index.attribute_projection({"player_choice": "aether", "position": "unknown"})["char:traveler:element"][
+            "status"
+        ]
+        == "applicable"
+    )
+    assert (
+        index.attribute_projection({"player_choice": "lumine", "position": "unknown"})["char:traveler:element"][
+            "status"
+        ]
+        == "not_applicable"
+    )
+
+
+def test_player_choice_gap_not_hidden_by_topk(tmp_path):
+    data = _base_data(
+        events=[
+            {"event_id": "event:common", "title": "共同事件", "player_choice_scope": []},
+            {"event_id": "event:aether", "title": "空分支事件", "player_choice_scope": ["aether"]},
+        ]
+    )
+    page = _page(tmp_path, data)
+    from app.canonical import CanonicalIndex
+
+    text = CanonicalIndex([page]).answer("事件", top_k=1, snapshot={})
+    assert "选择缺口" in text
+
+
+def test_non_choice_entity_choice_parameter_has_no_effect(tmp_path):
+    data = _base_data(player_choice_options=[], events=[{"event_id": "event:x", "title": "普通事件"}])
+    page = _page(tmp_path, data)
+    from app.canonical import CanonicalIndex
+
+    fact = [item for item in page.facts if "普通事件" in item.text][0]
+    index = CanonicalIndex([page])
+    assert index._fact_applies(fact, {}) is True
+    assert index._fact_applies(fact, {"player_choice": "aether"}) is True
+    assert index._fact_applies(fact, {"player_choice": "lumine"}) is True

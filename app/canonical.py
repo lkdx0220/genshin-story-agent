@@ -587,6 +587,8 @@ class CanonicalIndex:
             return False
         if observation.get("position") not in (None, snapshot.get("position")):
             return False
+        if observation.get("player_choice") not in (None, snapshot.get("player_choice")):
+            return False
         obs_numeric = observation.get("game_version")
         obs_label = observation.get("game_version_label")
         snap_numeric = snapshot.get("game_version")
