@@ -113,7 +113,7 @@ def _validate_proof_structure(proofs: List[Dict[str, Any]], bundle: Dict[str, An
         anchor = paragraphs.get(proof.get("anchor_span_id"))
         if anchor is None or anchor.get("source_id") != proof.get("source_id"):
             raise ChoiceProofError("proof anchor span unresolved")
-        if anchor.get("quote_sha256") != proof.get("anchor_quote_sha256"):
+        if _sha_text(anchor.get("quote") or "") != proof.get("anchor_quote_sha256"):
             raise ChoiceProofError("proof anchor quote hash mismatch")
         covered = proof.get("covered_span_ids")
         if not isinstance(covered, list) or not covered or len(set(covered)) != len(covered):
