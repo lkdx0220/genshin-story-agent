@@ -45,6 +45,7 @@ from app.tools.search import (
     search_world,  # search_world 为碰壁后补充工具，初始不暴露
 )
 from app.tools.entity import entity_query_tool
+from app.tools.canonical import canonical_query_tool
 from app.tools.content import (
     load_book_content,
     load_quest_content,
@@ -59,7 +60,8 @@ from app.retrieval import hybrid_search
 
 # ====== 工具列表（顺序决定 LLM 看到的工具顺序）======
 tools = [
-    entity_query_tool,  # 实体/关系检索（第 35 个工具）
+    entity_query_tool,  # 实体/关系检索
+    canonical_query_tool,  # canonical Wiki 候选页检索
     query_character,
     query_voice_relation,
     query_region,
@@ -103,5 +105,3 @@ tools_by_name = {t.name: t for t in tools}
 # ====== 代码加固：熔断触发工具 ======
 # 这些工具一旦在本轮中成功返回内容，后续所有工具调用将被系统截断
 MELTDOWN_TRIGGER_TOOLS = {"load_book_content", "load_quest_content", "find_first_mention"}
-
-
