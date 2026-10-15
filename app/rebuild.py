@@ -13,8 +13,12 @@ from app import incremental as inc
 
 EXECUTION_PROTOCOL = "b4-02-commit-v1"
 REQUIRED_JOURNAL_FIELDS = (
+    "format_version",
+    "protocol",
+    "transaction_id",
     "state",
     "output",
+    "staging",
     "page_key",
     "plan_generation",
     "parent_generation",
@@ -26,6 +30,7 @@ REQUIRED_JOURNAL_FIELDS = (
     "backup",
     "provenance",
     "provenance_sha256",
+    "execution_sha256",
 )
 
 
@@ -160,10 +165,10 @@ def _acquire_lock(txid: str) -> Tuple[Optional[int], Optional[dict]]:
                 os.close(handle)
             except OSError:
                 pass
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
         return None, {"status": "lock_error", "errors": [f"lock_acquire:{exc}"]}
 
 
@@ -180,6 +185,21 @@ def _release_lock(handle: Optional[int]) -> Optional[str]:
     return None
 
 
+def _request_digest(plan_data: Dict[str, Any]) -> str:
+    dirty = sorted((plan_data.get("dirty") or {}).keys())
+    return _sha_json(
+        {
+            "generation": plan_data.get("generation"),
+            "observed": plan_data.get("observed"),
+            "dirty": dirty,
+            "full_required": plan_data.get("full_required"),
+            "blocked": plan_data.get("blocked"),
+            "unknown": plan_data.get("unknown"),
+            "affected_pages": plan_data.get("affected_pages"),
+        }
+    )
+
+
 def _transaction_id(
     plan_generation: str,
     parent_generation: str,
@@ -187,6 +207,7 @@ def _transaction_id(
     candidate_hash: str,
     response_path: str,
     output_path: str,
+    request_sha256: str,
 ) -> str:
     return _sha_json(
         {
@@ -198,6 +219,7 @@ def _transaction_id(
             "candidate_sha256": candidate_hash,
             "response": response_path,
             "output": output_path,
+            "request_sha256": request_sha256,
         }
     )
 
@@ -270,11 +292,13 @@ def _validate_request(paths):
 
 
 def _freeze_candidate(ctx, txid):
-    staging_dir = _staging_dir(txid)
+    staging_root = _staging_dir(txid)
+    staging_dir = staging_root / f"{os.getpid()}-{_sha_bytes(os.urandom(16))[:16]}"
     staging_dir.mkdir(parents=True, exist_ok=True)
     frozen = staging_dir / "candidate.md"
     shutil.copy2(ctx["candidate_path"], frozen)
     if _hash_bytes(frozen) != ctx["candidate_hash"]:
+        shutil.rmtree(staging_dir, ignore_errors=True)
         return None, {"status": "rejected", "errors": ["candidate_binding_mismatch"]}
     ctx["frozen_candidate"] = frozen
     ctx["staging_dir"] = staging_dir
@@ -338,6 +362,7 @@ def _prepare_commit(plan_path, state_path, inputs_path, candidate_manifest_path)
         ctx["candidate_hash"],
         _relative(ctx["candidate_path"]),
         _relative(ctx["output_path"]),
+        _request_digest(ctx["plan_data"]),
     )
     ctx["txid"] = txid
     ctx, error = _freeze_candidate(ctx, txid)
@@ -396,6 +421,15 @@ def _observed_with_output(observed, page_key, output_sha256):
     raise RebuildError("page not found in observed snapshot")
 
 
+def _frozen_inputs(ctx):
+    payload = json.loads(json.dumps(ctx["inputs"], ensure_ascii=False))
+    for item in payload["inputs"]:
+        for page in item["managed_pages"]:
+            if page["page_key"] == ctx["candidate"]["page_key"]:
+                page["response"] = _relative(ctx["frozen_candidate"])
+    return payload
+
+
 def _build_state(ctx, baseline, current_observed):
     new_state = inc.make_baseline(
         _observed_with_output(current_observed, ctx["candidate"]["page_key"], ctx["staged"]["output_sha256"]),
@@ -406,7 +440,7 @@ def _build_state(ctx, baseline, current_observed):
                 "output": ctx["staged"]["output_sha256"],
             }
         ),
-        graph=inc.collect_dependencies(ctx["inputs"]),
+        graph=inc.collect_dependencies(_frozen_inputs(ctx)),
     )
     entry = {
         "response": ctx["candidate_hash"],
@@ -415,6 +449,7 @@ def _build_state(ctx, baseline, current_observed):
         "output_path": _relative(ctx["output_path"]),
         "provenance": _relative(ctx["staged"]["provenance"]),
         "provenance_sha256": ctx["staged"]["provenance_sha256"],
+        "execution_sha256": _request_digest(ctx["plan_data"]),
     }
     new_state["build"] = {
         "parent_generation": baseline.get("generation"),
@@ -433,14 +468,17 @@ def _cleanup_transaction(txid, backup_path, staging_dir):
     _journal_path(txid).unlink(missing_ok=True)
     if backup_path is not None:
         backup_path.unlink(missing_ok=True)
-    shutil.rmtree(staging_dir, ignore_errors=True)
+    if staging_dir is not None:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
 
 def _prepared_payload(ctx, baseline, new_state, backup_path, old_exists):
     return {
+        "protocol": EXECUTION_PROTOCOL,
         "page_key": ctx["candidate"]["page_key"],
         "state": _relative(ctx["state_path"]),
         "output": _relative(ctx["output_path"]),
+        "staging": _relative(ctx["staging_dir"]),
         "plan_generation": ctx["plan_data"].get("generation"),
         "parent_generation": baseline.get("generation"),
         "old_state_sha256": _state_digest(ctx["state_path"]),
@@ -451,6 +489,7 @@ def _prepared_payload(ctx, baseline, new_state, backup_path, old_exists):
         "backup": _relative(backup_path) if old_exists else None,
         "provenance": _relative(ctx["staged"]["provenance"]),
         "provenance_sha256": ctx["staged"]["provenance_sha256"],
+        "execution_sha256": _request_digest(ctx["plan_data"]),
     }
 
 
@@ -502,50 +541,97 @@ def _publish(ctx, baseline, new_state):
         return _finalize_failure(ctx, payload, backup_path, old_exists, state_replaced, exc)
 
 
-def _finalize_failure(ctx, payload, backup_path, old_exists, state_replaced, exc):
-    output_path = ctx["output_path"]
-    state_path = ctx["state_path"]
-    actual_state = _state_digest(state_path)
-    actual_output = _hash_bytes(output_path)
-    if state_replaced or (
-        actual_state == payload["new_state_sha256"] and actual_output == payload["new_output_sha256"]
-    ):
+def _provenance_matches(payload):
+    return _provenance_digest(_root() / payload["provenance"]) == payload["provenance_sha256"]
+
+
+def _backup_valid(payload, backup_path):
+    if not payload["output_old_exists"]:
+        return True
+    if backup_path is None or not backup_path.is_file():
+        return False
+    return _hash_bytes(backup_path) == payload["old_output_sha256"]
+
+
+def _finalize_post_commit(ctx, payload, exc):
+    try:
+        _write_journal(ctx["txid"], "committed", error=str(exc))
+    except OSError:
+        pass
+    return {
+        "status": "committed_cleanup_pending",
+        "transaction_id": ctx["txid"],
+        "warnings": [f"post_commit:{exc}"],
+    }
+
+
+def _rollback_failed_transaction(ctx, payload, backup_path, old_exists, exc):
+    if not _backup_valid(payload, backup_path):
         try:
-            _write_journal(ctx["txid"], "committed", error=str(exc))
+            _write_journal(ctx["txid"], "recovery_required", error=str(exc), backup_invalid=True)
+        except OSError:
+            pass
+        return {"status": "recovery_required", "transaction_id": ctx["txid"], "errors": [str(exc), "backup_invalid"]}
+    try:
+        _restore_output(ctx["output_path"], backup_path, old_exists)
+    except OSError as rollback_error:
+        try:
+            _write_journal(ctx["txid"], "recovery_required", error=str(exc), rollback_error=str(rollback_error))
         except OSError:
             pass
         return {
-            "status": "committed_cleanup_pending",
+            "status": "recovery_required",
             "transaction_id": ctx["txid"],
-            "warnings": [f"post_commit:{exc}"],
+            "errors": [str(exc), f"rollback:{rollback_error}"],
         }
-    if actual_state == payload["old_state_sha256"] and actual_output == payload["new_output_sha256"]:
+    if _hash_bytes(ctx["output_path"]) != payload["old_output_sha256"]:
+        return {
+            "status": "recovery_required",
+            "transaction_id": ctx["txid"],
+            "errors": [str(exc), "rollback_hash_mismatch"],
+        }
+    provenance_dir = _root() / payload["provenance"]
+    if _provenance_matches(payload):
         try:
-            _restore_output(output_path, backup_path, old_exists)
-        except OSError as rollback_error:
-            try:
-                _write_journal(ctx["txid"], "recovery_required", error=str(exc), rollback_error=str(rollback_error))
-            except OSError:
-                pass
+            shutil.rmtree(provenance_dir, ignore_errors=False)
+        except OSError:
             return {
                 "status": "recovery_required",
                 "transaction_id": ctx["txid"],
-                "errors": [str(exc), f"rollback:{rollback_error}"],
+                "errors": [str(exc), "provenance_cleanup_failed"],
             }
-        try:
-            _cleanup_transaction(ctx["txid"], backup_path if old_exists else None, ctx["staging_dir"])
-        except OSError:
-            pass
-        return {"status": "failed", "transaction_id": ctx["txid"], "errors": [str(exc)], "recovery": "rolled_back"}
+    elif provenance_dir.exists():
+        return {
+            "status": "recovery_required",
+            "transaction_id": ctx["txid"],
+            "errors": [str(exc), "provenance_third_party"],
+        }
+    try:
+        _cleanup_transaction(ctx["txid"], backup_path if old_exists else None, ctx["staging_dir"])
+    except OSError:
+        return {"status": "recovery_required", "transaction_id": ctx["txid"], "errors": [str(exc), "cleanup_failed"]}
+    return {"status": "failed", "transaction_id": ctx["txid"], "errors": [str(exc)], "recovery": "rolled_back"}
+
+
+def _finalize_old_state(ctx, payload, backup_path, old_exists, exc):
+    try:
+        _cleanup_transaction(ctx["txid"], backup_path if old_exists else None, ctx["staging_dir"])
+    except OSError:
+        return {"status": "recovery_required", "transaction_id": ctx["txid"], "errors": [str(exc), "cleanup_failed"]}
+    return {"status": "failed", "transaction_id": ctx["txid"], "errors": [str(exc)]}
+
+
+def _finalize_failure(ctx, payload, backup_path, old_exists, state_replaced, exc):
+    actual_state = _state_digest(ctx["state_path"])
+    actual_output = _hash_bytes(ctx["output_path"])
+    if state_replaced or (
+        actual_state == payload["new_state_sha256"] and actual_output == payload["new_output_sha256"]
+    ):
+        return _finalize_post_commit(ctx, payload, exc)
+    if actual_state == payload["old_state_sha256"] and actual_output == payload["new_output_sha256"]:
+        return _rollback_failed_transaction(ctx, payload, backup_path, old_exists, exc)
     if actual_state == payload["old_state_sha256"] and actual_output == payload["old_output_sha256"]:
-        try:
-            _journal_path(ctx["txid"]).unlink(missing_ok=True)
-            _discard_staging(ctx)
-            if backup_path is not None:
-                backup_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return {"status": "failed", "transaction_id": ctx["txid"], "errors": [str(exc)]}
+        return _finalize_old_state(ctx, payload, backup_path, old_exists, exc)
     try:
         _write_journal(ctx["txid"], "recovery_required", error=str(exc))
     except OSError:
@@ -553,38 +639,117 @@ def _finalize_failure(ctx, payload, backup_path, old_exists, state_replaced, exc
     return {"status": "recovery_required", "transaction_id": ctx["txid"], "errors": [str(exc)]}
 
 
-def _resolve_one_journal(name: str) -> Optional[dict]:
+def _journal_path_inside(value, prefix):
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        path = inc._inside_root(_root() / value)
+    except inc.IncrementalError:
+        return None
+    if prefix and not str(path).startswith(str((_root() / prefix).resolve())):
+        return None
+    return path
+
+
+def _validate_journal_payload(name, payload):
+    if not isinstance(payload, dict):
+        return "journal_not_object"
+    if payload.get("format_version") != 1:
+        return "journal_bad_format"
+    if payload.get("protocol") != EXECUTION_PROTOCOL:
+        return "journal_bad_protocol"
+    if payload.get("transaction_id") != name[:-5]:
+        return "journal_txid_mismatch"
+    if not set(REQUIRED_JOURNAL_FIELDS) <= set(payload):
+        return "journal_incomplete"
+    state_path = _journal_path_inside(payload.get("state"), None)
+    output_path = _journal_path_inside(payload.get("output"), None)
+    staging_path = _journal_path_inside(payload.get("staging"), "reports/incremental/staging")
+    provenance_path = _journal_path_inside(payload.get("provenance"), "reports/incremental/provenance")
+    backup_path = None
+    if payload.get("backup") is not None:
+        backup_path = _journal_path_inside(payload.get("backup"), "reports/incremental/backups")
+    if state_path is None or output_path is None or staging_path is None or provenance_path is None:
+        return "journal_path_invalid"
+    if payload.get("backup") is not None and backup_path is None:
+        return "journal_backup_path_invalid"
+    if not isinstance(payload.get("output_old_exists"), bool):
+        return "journal_old_exists_invalid"
+    if not isinstance(payload.get("page_key"), str):
+        return "journal_page_key_invalid"
+    return None
+
+
+def _cleanup_resolved(payload):
+    staging_path = _journal_path_inside(payload.get("staging"), "reports/incremental/staging")
+    backup_path = None
+    if payload.get("backup") is not None:
+        backup_path = _journal_path_inside(payload.get("backup"), "reports/incremental/backups")
+    try:
+        _cleanup_transaction(payload["transaction_id"], backup_path, staging_path)
+    except OSError as exc:
+        return f"cleanup:{exc}"
+    return None
+
+
+def _resolve_new(ctx, payload, name):
+    if _provenance_digest(_root() / payload["provenance"]) != payload["provenance_sha256"]:
+        return {"status": "recovery_required", "errors": [f"journal_provenance_mismatch:{name}"]}
+    error = _cleanup_resolved(payload)
+    return {"status": "recovery_required", "errors": [f"{error}:{name}"]} if error else None
+
+
+def _resolve_rollback(ctx, payload, backup, name):
+    old_exists = payload["output_old_exists"]
+    if not _backup_valid(payload, backup):
+        return {"status": "recovery_required", "errors": [f"journal_backup_invalid:{name}"]}
+    try:
+        _restore_output(ctx["output_path"], backup, old_exists)
+    except OSError as exc:
+        return {"status": "recovery_required", "errors": [f"journal_rollback_failed:{name}:{exc}"]}
+    if old_exists and _hash_bytes(ctx["output_path"]) != payload["old_output_sha256"]:
+        return {"status": "recovery_required", "errors": [f"journal_rollback_hash_mismatch:{name}"]}
+    if not old_exists and ctx["output_path"].exists():
+        return {"status": "recovery_required", "errors": [f"journal_rollback_remove_failed:{name}"]}
+    provenance_dir = _root() / payload["provenance"]
+    if _provenance_matches(payload):
+        try:
+            shutil.rmtree(provenance_dir, ignore_errors=False)
+        except OSError:
+            return {"status": "recovery_required", "errors": [f"journal_provenance_cleanup:{name}"]}
+    elif provenance_dir.exists():
+        return {"status": "recovery_required", "errors": [f"journal_provenance_third_party:{name}"]}
+    error = _cleanup_resolved(payload)
+    return {"status": "recovery_required", "errors": [f"{error}:{name}"]} if error else None
+
+
+def _resolve_old(ctx, payload, name):
+    error = _cleanup_resolved(payload)
+    return {"status": "recovery_required", "errors": [f"{error}:{name}"]} if error else None
+
+
+def _resolve_one_journal(name: str):
     path = _journal_dir() / name
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {"status": "recovery_required", "errors": [f"journal_corrupt:{name}"]}
-    if not isinstance(payload, dict) or not set(REQUIRED_JOURNAL_FIELDS) <= set(payload):
-        return {"status": "recovery_required", "errors": [f"journal_incomplete:{name}"]}
-    state_path = _root() / payload["state"]
-    output_path = _root() / payload["output"]
+    invalid = _validate_journal_payload(name, payload)
+    if invalid:
+        return {"status": "recovery_required", "errors": [f"{invalid}:{name}"]}
+    ctx = {
+        "output_path": _root() / payload["output"],
+        "state_path": _root() / payload["state"],
+    }
+    actual_state = _state_digest(ctx["state_path"])
+    actual_output = _hash_bytes(ctx["output_path"])
     backup = _root() / payload["backup"] if payload.get("backup") else None
-    old_exists = bool(payload.get("output_old_exists"))
-    actual_state = _state_digest(state_path)
-    actual_output = _hash_bytes(output_path)
-    actual_provenance = _provenance_digest(_root() / payload["provenance"])
     if actual_state == payload["new_state_sha256"] and actual_output == payload["new_output_sha256"]:
-        if actual_provenance != payload["provenance_sha256"]:
-            return {"status": "recovery_required", "errors": [f"journal_provenance_mismatch:{name}"]}
-        _cleanup_transaction(payload["transaction_id"], None, _staging_dir(payload["transaction_id"]))
-        return None
+        return _resolve_new(ctx, payload, name)
     if actual_state == payload["old_state_sha256"] and actual_output == payload["new_output_sha256"]:
-        try:
-            _restore_output(output_path, backup, old_exists)
-        except OSError as exc:
-            return {"status": "recovery_required", "errors": [f"journal_rollback_failed:{name}:{exc}"]}
-        if actual_provenance == payload["provenance_sha256"]:
-            shutil.rmtree(_root() / payload["provenance"], ignore_errors=True)
-        _cleanup_transaction(payload["transaction_id"], None, _staging_dir(payload["transaction_id"]))
-        return None
+        return _resolve_rollback(ctx, payload, backup, name)
     if actual_state == payload["old_state_sha256"] and actual_output == payload["old_output_sha256"]:
-        _cleanup_transaction(payload["transaction_id"], None, _staging_dir(payload["transaction_id"]))
-        return None
+        return _resolve_old(ctx, payload, name)
     return {"status": "recovery_required", "errors": [f"journal_ambiguous:{name}"]}
 
 
@@ -620,6 +785,8 @@ def _replay_record(ctx):
     if entry.get("output_path") != _relative(ctx["output_path"]):
         return None
     if _hash_bytes(ctx["output_path"]) != entry.get("output"):
+        return None
+    if entry.get("execution_sha256") != _request_digest(ctx["plan_data"]):
         return None
     if _provenance_digest(_root() / entry.get("provenance", "")) != entry.get("provenance_sha256"):
         return None
@@ -673,13 +840,28 @@ def commit_rebuild(plan_path, state_path, inputs_path, candidate_manifest_path=N
 
 
 def recover_transaction(txid: Optional[str] = None):
-    if txid:
-        return _resolve_one_journal(f"{txid}.json")
-    names, error = _journal_list()
-    if error:
-        return {"status": "recovery_required", "errors": [f"journal_unreadable:{error}"]}
-    for name in names:
-        result = _resolve_one_journal(name)
-        if result is not None:
+    handle, lock_error = _acquire_lock(txid or "recovery")
+    if lock_error:
+        return lock_error
+    release_error = None
+    try:
+        names, error = _journal_list()
+        if error:
+            return {"status": "recovery_required", "errors": [f"journal_unreadable:{error}"]}
+        if txid:
+            result = _resolve_one_journal(f"{txid}.json")
+            if result is None:
+                return {"status": "ok", "resolved": 1}
             return result
-    return {"status": "ok", "resolved": len(names)}
+        for name in names:
+            result = _resolve_one_journal(name)
+            if result is not None:
+                return result
+        return {"status": "ok", "resolved": len(names)}
+    finally:
+        release_error = _release_lock(handle)
+    if release_error and isinstance(locals().get("result"), dict):
+        result = dict(result)
+        result.setdefault("warnings", [])
+        result["warnings"] = list(result["warnings"]) + [release_error]
+        return result
