@@ -859,8 +859,10 @@ def _add_flat_records(
         for index, record in enumerate(page_data.get(key) or []):
             if not isinstance(record, dict):
                 continue
-            owner = (page_node[1], record_type, str(record.get(business_key) or f"/{key}/{index}"))
+            business_id = str(record.get(business_key) or f"/{key}/{index}")
+            owner = (page_node[1], record_type, business_id)
             nodes.append({"key": owner, "type": record_type, "page_key": page_node[1], "business_id": owner[2]})
+            nodes.append({"key": (record_type, business_id), "type": record_type, "business_id": business_id})
             edges.append({"consumer": page_node, "dependency": owner})
             _add_evidence(nodes, edges, owner, record)
             _add_refs(nodes, edges, owner, record)
