@@ -256,3 +256,68 @@ def test_b202_prepare_failure_is_structured(tmp_path, monkeypatch):
     result = rebuild.commit_rebuild(plan, state, config, manifest)
     assert result["status"] == "failed", result
     assert "prepare:prepare exploded" in result["errors"]
+
+
+def _crash_after_status(root, config, state, plan, manifest, monkeypatch, status):
+    original = rebuild._write_journal
+
+    def crash(txid, journal_status, **fields):
+        original(txid, journal_status, **fields)
+        if journal_status == status:
+            raise _Crash()
+
+    monkeypatch.setattr(rebuild, "_write_journal", crash)
+    with pytest.raises(_Crash):
+        rebuild.commit_rebuild(plan, state, config, manifest)
+
+
+def test_b202_recovery_rejects_state_redirect_after_commit(tmp_path, monkeypatch):
+    root, config, state, plan, manifest = _setup_real_project(tmp_path, monkeypatch)
+    old_state = state.read_bytes()
+    old_copy = root / "old-state-copy.json"
+    old_copy.write_bytes(old_state)
+    _crash_after_status(root, config, state, plan, manifest, monkeypatch, "committed")
+    committed_state = state.read_bytes()
+    committed_output = (root / "traveler-output.md").read_bytes()
+    path, payload = _journal_payload(root)
+    payload["state"] = "old-state-copy.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = rebuild.recover_transaction()
+    assert result["status"] == "recovery_required", result
+    assert state.read_bytes() == committed_state
+    assert (root / "traveler-output.md").read_bytes() == committed_output
+    assert path.exists()
+
+
+def test_b202_recovery_rejects_staging_owner_root(tmp_path, monkeypatch):
+    root, config, state, plan, manifest = _setup_real_project(tmp_path, monkeypatch)
+    _crash_after_output(root, config, state, plan, manifest, monkeypatch)
+    path, payload = _journal_payload(root)
+    owner = rebuild._staging_dir(payload["transaction_id"])
+    sibling = owner / "other-active-invocation"
+    sibling.mkdir(parents=True, exist_ok=True)
+    sentinel = sibling / "keep.txt"
+    sentinel.write_bytes(b"keep")
+    payload["staging"] = str(owner.relative_to(root))
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = rebuild.recover_transaction()
+    assert result["status"] == "recovery_required", result
+    assert sentinel.exists()
+    assert path.exists()
+
+
+def test_b202_recovery_rejects_staging_sibling(tmp_path, monkeypatch):
+    root, config, state, plan, manifest = _setup_real_project(tmp_path, monkeypatch)
+    _crash_after_output(root, config, state, plan, manifest, monkeypatch)
+    path, payload = _journal_payload(root)
+    owner = rebuild._staging_dir(payload["transaction_id"])
+    sibling = owner / "other-active-invocation"
+    sibling.mkdir(parents=True, exist_ok=True)
+    sentinel = sibling / "keep.txt"
+    sentinel.write_bytes(b"keep")
+    payload["staging"] = str(sibling.relative_to(root))
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = rebuild.recover_transaction()
+    assert result["status"] == "recovery_required", result
+    assert sentinel.exists()
+    assert path.exists()

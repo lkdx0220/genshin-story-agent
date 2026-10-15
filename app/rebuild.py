@@ -19,6 +19,7 @@ REQUIRED_JOURNAL_FIELDS = (
     "state",
     "output",
     "staging",
+    "staging_token",
     "inputs",
     "page_key",
     "candidate_sha256",
@@ -211,6 +212,7 @@ def _transaction_id(
     response_path: str,
     output_path: str,
     request_sha256: str,
+    state_path: str,
 ) -> str:
     return _sha_json(
         {
@@ -223,6 +225,7 @@ def _transaction_id(
             "response": response_path,
             "output": output_path,
             "request_sha256": request_sha256,
+            "state": state_path,
         }
     )
 
@@ -296,7 +299,7 @@ def _validate_request(paths):
 
 def _freeze_candidate(ctx, txid):
     staging_root = _staging_dir(txid)
-    staging_dir = staging_root / f"{os.getpid()}-{_sha_bytes(os.urandom(16))[:16]}"
+    staging_dir = staging_root / ctx["staging_token"]
     staging_dir.mkdir(parents=True, exist_ok=True)
     frozen = staging_dir / "candidate.md"
     shutil.copy2(ctx["candidate_path"], frozen)
@@ -366,8 +369,10 @@ def _prepare_commit(plan_path, state_path, inputs_path, candidate_manifest_path)
         _relative(ctx["candidate_path"]),
         _relative(ctx["output_path"]),
         _request_digest(ctx["plan_data"]),
+        _relative(ctx["state_path"]),
     )
     ctx["txid"] = txid
+    ctx["staging_token"] = f"{os.getpid()}-{_sha_bytes(os.urandom(16))[:16]}"
     ctx, error = _freeze_candidate(ctx, txid)
     if error:
         return None, error
@@ -482,6 +487,7 @@ def _prepared_payload(ctx, baseline, new_state, backup_path, old_exists):
         "page_key": ctx["candidate"]["page_key"],
         "candidate_sha256": ctx["candidate_hash"],
         "response": _relative(ctx["candidate_path"]),
+        "staging_token": ctx["staging_token"],
         "inputs": _relative(ctx["inputs_path"]),
         "state": _relative(ctx["state_path"]),
         "output": _relative(ctx["output_path"]),
@@ -685,12 +691,15 @@ def _journal_owned_path(value, prefix, txid, require_child):
     if path is None:
         return None
     base = (_root() / prefix).resolve()
-    if require_child and (path == base or base not in path.parents):
-        return None
     if txid is not None:
         owner = base / txid
-        if path != owner and owner not in path.parents:
+        if require_child:
+            if path == owner or owner not in path.parents:
+                return None
+        elif path != owner and owner not in path.parents:
             return None
+    elif require_child and (path == base or base not in path.parents):
+        return None
     return path
 
 
@@ -727,8 +736,11 @@ def _validate_journal_payload(name, payload):
         return "journal_state_path_invalid"
     if _journal_path_inside(payload.get("output"), None) is None:
         return "journal_output_path_invalid"
-    if _journal_owned_path(payload.get("staging"), "reports/incremental/staging", txid, True) is None:
+    staging_path = _journal_owned_path(payload.get("staging"), "reports/incremental/staging", txid, True)
+    if staging_path is None:
         return "journal_staging_path_invalid"
+    if staging_path.name != payload.get("staging_token"):
+        return "journal_staging_token_mismatch"
     if _journal_owned_path(payload.get("provenance"), "reports/incremental/provenance", txid, False) is None:
         return "journal_provenance_path_invalid"
     if payload.get("backup") is not None:
@@ -749,6 +761,7 @@ def _validate_journal_payload(name, payload):
             payload["response"],
             payload["output"],
             payload["execution_sha256"],
+            payload["state"],
         )
     except (KeyError, TypeError):
         return "journal_identity_invalid"
@@ -845,18 +858,25 @@ def _resolve_pending_journals(txid: str):
 
 
 def _replay_record(ctx):
-    baseline, _errors = inc.load_baseline(ctx["state_path"])
-    if baseline is None:
+    try:
+        baseline = json.loads(Path(ctx["state_path"]).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(baseline, dict):
         return None
     build = baseline.get("build")
-    if not isinstance(build, dict) or build.get("transaction_id") != ctx["txid"]:
+    if not isinstance(build, dict):
+        return None
+    if build.get("transaction_id") != ctx["txid"]:
         return None
     page_key = ctx["candidate"]["page_key"]
     pages = build.get("pages") or {}
     if set(pages) != {page_key}:
+        print("RF pages", set(pages), {page_key})
         return None
     entry = pages[page_key]
     if baseline.get("generation") != entry.get("generation"):
+        print("RF gen", baseline.get("generation"), entry.get("generation"))
         return None
     if entry.get("response") != ctx["candidate_hash"]:
         return None
@@ -867,8 +887,10 @@ def _replay_record(ctx):
     if _hash_bytes(ctx["output_path"]) != entry.get("output"):
         return None
     if entry.get("execution_sha256") != _request_digest(ctx["plan_data"]):
+        print("RF exec", entry.get("execution_sha256"), _request_digest(ctx["plan_data"]))
         return None
     if _provenance_digest(_root() / entry.get("provenance", "")) != entry.get("provenance_sha256"):
+        print("RF prov", _provenance_digest(_root() / entry.get("provenance", "")), entry.get("provenance_sha256"))
         return None
     return build
 
