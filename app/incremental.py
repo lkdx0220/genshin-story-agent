@@ -1491,51 +1491,92 @@ def _ensure_file_inside(path, label):
     return resolved
 
 
-def _input_protected_paths(inputs, inputs_path):
-    protected = {Path(inputs_path).resolve()}
+def _manifest_structure_errors(item):
+    root = _inside_root(REPO_ROOT / item["root"])
+    manifest_path = root / "manifest.json"
+    if not manifest_path.exists():
+        return ["manifest_missing"]
+    try:
+        manifest = _read_json(manifest_path)
+    except IncrementalError as exc:
+        return [f"manifest_invalid:{exc}"]
+    if not isinstance(manifest, dict):
+        return ["manifest_invalid"]
+    sources = manifest.get("sources")
+    if not isinstance(sources, list) or not sources:
+        return ["manifest_invalid"]
+    for source in sources:
+        if not isinstance(source, dict):
+            return ["manifest_invalid"]
+    return []
+
+
+def _safe_manifest(root):
+    try:
+        manifest = _read_json(root / "manifest.json")
+    except IncrementalError:
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
+
+
+def _input_protected_paths(inputs, inputs_path, state_path, plan_path, candidate_manifest_path):
+    protected_files = {Path(inputs_path).resolve(), Path(state_path).resolve(), Path(plan_path).resolve()}
+    if candidate_manifest_path is not None:
+        protected_files.add(Path(candidate_manifest_path).resolve())
+    protected_dirs = {(REPO_ROOT / "reports" / "incremental").resolve()}
     for relative in (
         "wiki/__schema__/entity.schema.json",
         "wiki/__schema__/entity-template.md",
         "wiki/__schema__/source-span-format.md",
         "wiki/__schema__/version-registry.json",
         "docs/schema-lock.json",
-        "lint",
-        "wiki/__schema__/entities",
     ):
         path = REPO_ROOT / relative
         if path.exists():
-            protected.add(path.resolve())
-    protected.add((REPO_ROOT / "reports" / "incremental").resolve())
+            protected_files.add(path.resolve())
+    for relative in BUILD_FILES:
+        path = REPO_ROOT / relative
+        if path.exists():
+            protected_files.add(path.resolve())
+    for relative in ("lint", "wiki/__schema__/entities"):
+        path = REPO_ROOT / relative
+        if path.exists():
+            protected_dirs.add(path.resolve())
     for item in inputs["inputs"]:
         root = _inside_root(REPO_ROOT / item["root"])
-        protected.add(root)
-        manifest = root / "manifest.json"
-        protected.add(manifest.resolve())
-        try:
-            manifest_data = _read_json(manifest) if manifest.exists() else {}
-        except IncrementalError:
-            manifest_data = {}
-        for source_meta in _manifest_sources(manifest_data).values():
-            protected.add((root / source_meta["file"]).resolve())
-        proof = manifest_data.get("choice_proofs_file")
+        protected_dirs.add(root)
+        manifest = _safe_manifest(root)
+        protected_files.add((root / "manifest.json").resolve())
+        for source_meta in _manifest_sources(manifest).values():
+            protected_files.add((root / source_meta["file"]).resolve())
+        proof = manifest.get("choice_proofs_file")
         if isinstance(proof, str) and proof:
-            protected.add((root / proof).resolve())
+            protected_files.add((root / proof).resolve())
         if item.get("prompt"):
-            protected.add((REPO_ROOT / item["prompt"]).resolve())
+            protected_files.add((REPO_ROOT / item["prompt"]).resolve())
         for profile_id in item["profile_ids"]:
-            protected.add(
+            protected_files.add(
                 (REPO_ROOT / "wiki" / "__schema__" / "entities" / f"{profile_id.replace(':', '_')}.json").resolve()
             )
         for page in item["managed_pages"]:
-            protected.add((REPO_ROOT / page["response"]).resolve())
-    return protected
+            protected_files.add((REPO_ROOT / page["response"]).resolve())
+    return protected_files, protected_dirs
 
 
-def _validate_registered_outputs(inputs, inputs_path):
+def _is_protected(path, protected_files, protected_dirs):
+    if path in protected_files:
+        return True
+    return any(path == directory or directory in path.parents for directory in protected_dirs)
+
+
+def _validate_registered_outputs(inputs, inputs_path, state_path, plan_path, candidate_manifest_path):
     errors = []
-    protected = _input_protected_paths(inputs, inputs_path)
+    protected_files, protected_dirs = _input_protected_paths(
+        inputs, inputs_path, state_path, plan_path, candidate_manifest_path
+    )
     outputs = {}
     for item in inputs["inputs"]:
+        errors.extend(_manifest_structure_errors(item))
         for page in item["managed_pages"]:
             page_key = page["page_key"]
             response = page.get("response")
@@ -1557,7 +1598,7 @@ def _validate_registered_outputs(inputs, inputs_path):
                 errors.append(f"response_missing_or_not_file:{page_key}")
             if output_path.is_dir():
                 errors.append(f"output_not_file:{page_key}")
-            if output_path in protected:
+            if _is_protected(output_path, protected_files, protected_dirs):
                 errors.append(f"output_overlaps_protected_input:{page_key}")
             if output_path == response_path:
                 errors.append(f"output_overlaps_response:{page_key}")
@@ -1748,7 +1789,7 @@ def precheck_rebuild(plan_path, state_path, inputs_path, candidate_manifest_path
     inputs, errors = _load_inputs_report(inputs_path)
     if errors:
         return _precheck_reject(errors, inputs=inputs)
-    output_errors = _validate_registered_outputs(inputs, inputs_path)
+    output_errors = _validate_registered_outputs(inputs, inputs_path, state_path, plan_path, candidate_manifest_path)
     if output_errors:
         return _precheck_reject(output_errors, inputs=inputs)
     plan, plan_errors = _load_plan_report(plan_path)
