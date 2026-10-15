@@ -20,6 +20,14 @@ DEFAULT_STATE = REPO_ROOT / "reports" / "incremental" / "state.json"
 DEFAULT_PLAN = REPO_ROOT / "reports" / "incremental" / "plan.json"
 DEFAULT_GRAPH = REPO_ROOT / "reports" / "incremental" / "graph.json"
 PROTOCOL_VERSION = "b4-01-plan-v1"
+EXECUTION_PROTOCOL = "b4-02-execution-v1"
+CAPABILITY_DEFAULT = {
+    "single_page_commit": False,
+    "multi_page_commit": False,
+    "bootstrap": False,
+    "removal": False,
+    "runtime_stale": False,
+}
 SKIP_DIRS = {".git", "__pycache__", "reports", "audits", ".venv", "node_modules"}
 COMMON_KEYS = ("schema", "template", "schema_lock", "registry", "lint", "prompts", "inputs_registry", "build_code")
 
@@ -1250,6 +1258,9 @@ def _missing_baseline_plan(
     return {
         "format_version": 1,
         "generation": plan_generation(observed, None),
+        "baseline_generation": "",
+        "execution_protocol": EXECUTION_PROTOCOL,
+        "capability": dict(CAPABILITY_DEFAULT),
         "full_required": True,
         "full_required_reasons": sorted(set(baseline_errors or ["state_unavailable"]) | set(current_errors)),
         "affected_pages": managed_pages,
@@ -1283,6 +1294,9 @@ def _finalize_plan(
     result = {
         "format_version": 1,
         "generation": plan_generation(observed, baseline),
+        "baseline_generation": baseline.get("generation") or "",
+        "execution_protocol": EXECUTION_PROTOCOL,
+        "capability": dict(CAPABILITY_DEFAULT),
         "full_required": full_required,
         "unknown": unknown,
         "blocked": sorted(set(blocked)),
@@ -1411,17 +1425,238 @@ def _ensure_read_path(path: Path, label: str) -> Path:
     return resolved
 
 
+def _page_registry(inputs):
+    result = {}
+    for item in inputs["inputs"]:
+        for page in item["managed_pages"]:
+            result[page["page_key"]] = {
+                "bundle_key": item["bundle_key"],
+                "entity_id": page.get("entity_id"),
+                "response": page.get("response"),
+                "output": page.get("output"),
+                "prompt": item.get("prompt"),
+            }
+    return result
+
+
+def _load_candidate_manifest(path):
+    if path is None:
+        return [], []
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return [], [f"candidate_manifest_unreadable:{exc}"]
+    if not isinstance(payload, dict) or payload.get("format_version") != 1:
+        return [], ["candidate_manifest_invalid"]
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list):
+        return [], ["candidate_manifest_invalid"]
+    errors = []
+    seen = set()
+    result = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            errors.append("candidate_manifest_invalid")
+            continue
+        page_key = item.get("page_key")
+        response = item.get("response")
+        if not isinstance(page_key, str) or page_key in seen or not isinstance(response, str):
+            errors.append(f"candidate_manifest_invalid:{page_key}")
+            continue
+        seen.add(page_key)
+        result.append({"page_key": page_key, "response": response})
+    return result, errors
+
+
+def _unresolved_journals():
+    journal_dir = REPO_ROOT / "reports" / "incremental" / "journal"
+    if not journal_dir.exists():
+        return []
+    unresolved = []
+    for path in sorted(journal_dir.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            unresolved.append(path.name)
+            continue
+        status = payload.get("status") if isinstance(payload, dict) else None
+        if status not in ("committed", "cleaned"):
+            unresolved.append(path.name)
+    return unresolved
+
+
+def _plan_decision_fields(plan):
+    return {
+        "generation": plan.get("generation"),
+        "observed": plan.get("observed"),
+        "full_required": plan.get("full_required"),
+        "dirty": plan.get("dirty"),
+        "blocked": plan.get("blocked"),
+        "unknown": plan.get("unknown"),
+        "affected_pages": plan.get("affected_pages"),
+    }
+
+
+def _precheck_paths(plan_path, state_path, inputs_path):
+    return (
+        _ensure_read_path(Path(plan_path), "plan"),
+        _ensure_read_path(Path(state_path), "state"),
+        _ensure_read_path(Path(inputs_path), "inputs"),
+    )
+
+
+def _precheck_inputs_and_plan(plan_path, state_path, inputs_path):
+    errors = []
+    inputs = {"format_version": 1, "inputs": []}
+    plan = {}
+    try:
+        plan_path, state_path, inputs_path = _precheck_paths(plan_path, state_path, inputs_path)
+        inputs = load_inputs(inputs_path)
+    except IncrementalError as exc:
+        errors.append(f"inputs_invalid:{exc}")
+    try:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        errors.append(f"plan_unreadable:{exc}")
+    if not isinstance(plan, dict) or plan.get("format_version") != 1:
+        errors.append("plan_invalid")
+        plan = {}
+    for field in ("generation", "baseline_generation", "execution_protocol", "observed", "full_required"):
+        if field not in plan:
+            errors.append(f"plan_missing_field:{field}")
+    if plan.get("execution_protocol") != EXECUTION_PROTOCOL:
+        errors.append("plan_execution_protocol_mismatch")
+    unresolved = _unresolved_journals()
+    if unresolved:
+        errors.append("journal_unresolved:" + ",".join(unresolved))
+    try:
+        current = build_plan(inputs, state_path)
+    except IncrementalError as exc:
+        current = {
+            "generation": None,
+            "observed": None,
+            "full_required": True,
+            "dirty": {},
+            "blocked": [],
+            "unknown": [str(exc)],
+            "affected_pages": [],
+        }
+        errors.append(f"authoritative_plan_failed:{exc}")
+    return inputs, plan, current, errors
+
+
+def _precheck_scope(plan, current, errors):
+    if _plan_decision_fields(plan) != _plan_decision_fields(current):
+        errors.append("plan_mismatch")
+    if plan.get("baseline_generation") != current.get("baseline_generation"):
+        errors.append("plan_outdated")
+    if current.get("unknown"):
+        errors.extend(f"unknown:{item}" for item in current["unknown"])
+    if current.get("blocked"):
+        errors.extend(f"blocked:{item}" for item in current["blocked"])
+    plan_blocked = any(item.startswith(("plan_", "journal_", "inputs_", "authoritative_")) for item in errors)
+    if plan_blocked or current.get("full_required"):
+        if current.get("full_required"):
+            errors.append("full_required_not_supported")
+        build_set = list(current.get("affected_pages") or [page["page_key"] for item in [] for page in []])
+        return build_set, "reject", plan_blocked
+    build_set = sorted((current.get("dirty") or {}).keys())
+    if not build_set:
+        return build_set, "no_op", plan_blocked
+    if len(build_set) == 1:
+        return build_set, "single_page", plan_blocked
+    errors.append("multi_page_not_supported")
+    return build_set, "multi_page_not_supported", plan_blocked
+
+
+def _precheck_all_pages(inputs):
+    return [page["page_key"] for item in inputs["inputs"] for page in item["managed_pages"]]
+
+
+def _bind_candidates(action, build_set, candidates, manifest_errors, registry, errors):
+    errors.extend(manifest_errors)
+    candidate_keys = [item["page_key"] for item in candidates]
+    candidate_binding_passed = False
+    if action == "single_page":
+        expected = set(build_set)
+        if set(candidate_keys) != expected or len(candidate_keys) != len(set(candidate_keys)):
+            errors.append("candidate_set_mismatch")
+            return errors, False
+        candidate = candidates[0]
+        registered = registry.get(candidate["page_key"])
+        if registered is None:
+            errors.append(f"candidate_unknown_page:{candidate['page_key']}")
+            return errors, False
+        if _hash_if_exists(REPO_ROOT / candidate["response"]) != _hash_if_exists(REPO_ROOT / registered["response"]):
+            errors.append("candidate_binding_mismatch")
+            return errors, False
+        return errors, True
+    if action == "no_op" and candidate_keys:
+        errors.append("candidate_set_mismatch")
+    return errors, candidate_binding_passed
+
+
+def _precheck_report(inputs, plan, current, errors, warnings, action, build_set, candidates, binding, registry):
+    return {
+        "execution_protocol": EXECUTION_PROTOCOL,
+        "plan_generation": plan.get("generation"),
+        "baseline_generation": current.get("baseline_generation") or plan.get("baseline_generation"),
+        "authoritative_generation": current.get("generation"),
+        "action": action,
+        "executable": action == "single_page" and not errors,
+        "commit_supported": False,
+        "errors": sorted(set(errors)),
+        "warnings": sorted(set(warnings)),
+        "build_set": build_set,
+        "affected_pages": list(current.get("affected_pages") or []),
+        "candidates": candidates,
+        "candidate_binding_passed": binding,
+        "full_validation_passed": "not_run",
+        "capability": dict(CAPABILITY_DEFAULT),
+        "not_implemented": ["rebuild", "runtime_stale"],
+    }
+
+
+def precheck_rebuild(plan_path, state_path, inputs_path, candidate_manifest_path=None):
+    inputs, plan, current, errors = _precheck_inputs_and_plan(plan_path, state_path, inputs_path)
+    if not inputs.get("inputs"):
+        return _precheck_report(inputs, plan, current, errors, [], "reject", [], [], False, {})
+    build_set, action, plan_blocked = _precheck_scope(plan, current, errors)
+    if current.get("full_required"):
+        build_set = list(current.get("affected_pages") or _precheck_all_pages(inputs))
+    registry = _page_registry(inputs)
+    candidates, manifest_errors = _load_candidate_manifest(candidate_manifest_path)
+    errors, binding = _bind_candidates(action, build_set, candidates, manifest_errors, registry, errors)
+    if plan_blocked and candidates:
+        errors.append("candidates_ignored_by_reject")
+    return _precheck_report(inputs, plan, current, errors, [], action, build_set, candidates, binding, registry)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.incremental")
-    parser.add_argument("command", choices=["plan", "explain", "graph"])
+    parser.add_argument("command", choices=["plan", "explain", "graph", "rebuild"])
     parser.add_argument("--inputs", default=str(DEFAULT_INPUTS))
     parser.add_argument("--state", default=str(DEFAULT_STATE))
     parser.add_argument("--plan", default=str(DEFAULT_PLAN))
     parser.add_argument("--graph", default=str(DEFAULT_GRAPH))
     parser.add_argument("--page")
     parser.add_argument("--snapshot-only", action="store_true")
+    parser.add_argument("--candidate-manifest")
+    parser.add_argument("--commit", action="store_true")
     args = parser.parse_args(argv)
     try:
+        if args.command == "rebuild":
+            candidate_path = Path(args.candidate_manifest) if args.candidate_manifest else None
+            if candidate_path is not None:
+                _ensure_read_path(candidate_path, "candidate_manifest")
+            report = precheck_rebuild(Path(args.plan), Path(args.state), Path(args.inputs), candidate_path)
+            if args.commit:
+                report["commit_supported"] = False
+                report["commit_result"] = "not_implemented"
+                if "commit_not_implemented" not in report["errors"]:
+                    report["errors"] = sorted(set(report["errors"] + ["commit_not_implemented"]))
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return 3 if args.commit else 0
         inputs_path = _ensure_read_path(Path(args.inputs), "inputs")
         state_path = _ensure_read_path(Path(args.state), "state")
         inputs = load_inputs(inputs_path)

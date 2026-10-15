@@ -224,7 +224,10 @@ def test_cycle_and_depth_are_bounded(tmp_path, monkeypatch):
     assert set(plan) == {
         "blocked",
         "dirty",
+        "baseline_generation",
+        "capability",
         "events",
+        "execution_protocol",
         "field_impacts",
         "format_version",
         "freshness",
@@ -442,3 +445,122 @@ def test_direct_external_owner_is_not_a_change_seed():
     )
     assert full is False
     assert set(dirty) == {"a"}
+
+
+def _write_plan(root, plan, name="plan.json"):
+    path = root / "reports/incremental" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(plan, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_b201_missing_state_reports_bootstrap_and_scope(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    plan = incremental.build_plan(inputs, root / "reports/incremental/missing-state.json")
+    plan_path = _write_plan(root, plan)
+    report = incremental.precheck_rebuild(
+        plan_path,
+        root / "reports/incremental/missing-state.json",
+        root / "config/incremental-inputs.json",
+        None,
+    )
+    assert report["action"] == "reject"
+    assert report["executable"] is False
+    assert any("state_unavailable" in item for item in report["errors"])
+    assert any("full_required_not_supported" in item for item in report["errors"])
+    assert report["affected_pages"]
+
+
+def test_b201_single_page_candidate_binding(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    _write(root / "reports/mini.md", "changed-output")
+    plan = incremental.build_plan(inputs, state)
+    plan_path = _write_plan(root, plan)
+    manifest = root / "candidate.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "candidates": [
+                    {
+                        "page_key": "fixture-response.md|fixture|char:mini",
+                        "response": "fixture-response.md",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    report = incremental.precheck_rebuild(plan_path, state, root / "config/incremental-inputs.json", manifest)
+    assert report["action"] == "single_page"
+    assert report["executable"] is True
+    assert report["candidate_binding_passed"] is True
+    assert report["full_validation_passed"] == "not_run"
+
+
+def test_b201_candidate_binding_mismatch(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    _write(root / "reports/mini.md", "changed-output")
+    plan = incremental.build_plan(inputs, state)
+    plan_path = _write_plan(root, plan)
+    other = root / "other-response.md"
+    _write(other, "different bytes")
+    manifest = root / "candidate.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "candidates": [
+                    {
+                        "page_key": "fixture-response.md|fixture|char:mini",
+                        "response": "other-response.md",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    report = incremental.precheck_rebuild(plan_path, state, root / "config/incremental-inputs.json", manifest)
+    assert report["action"] == "single_page"
+    assert report["executable"] is False
+    assert "candidate_binding_mismatch" in report["errors"]
+
+
+def test_b201_tampered_plan_is_rejected(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    _write(root / "reports/mini.md", "changed-output")
+    plan = incremental.build_plan(inputs, state)
+    plan["dirty"] = {}
+    plan["affected_pages"] = []
+    plan_path = _write_plan(root, plan)
+    report = incremental.precheck_rebuild(plan_path, state, root / "config/incremental-inputs.json", None)
+    assert report["action"] == "reject"
+    assert "plan_mismatch" in report["errors"]
+
+
+def test_b201_commit_flag_is_not_implemented(tmp_path, monkeypatch, capsys):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    _write(root / "reports/mini.md", "changed-output")
+    plan = incremental.build_plan(inputs, state)
+    plan_path = _write_plan(root, plan)
+    rc = incremental.main(
+        [
+            "rebuild",
+            "--plan",
+            str(plan_path),
+            "--state",
+            str(state),
+            "--inputs",
+            str(root / "config/incremental-inputs.json"),
+            "--commit",
+        ]
+    )
+    assert rc == 3
+    out = capsys.readouterr().out
+    assert "commit_not_implemented" in out
