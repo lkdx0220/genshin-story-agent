@@ -544,7 +544,7 @@ def test_b201_tampered_plan_is_rejected(tmp_path, monkeypatch):
     assert "plan_mismatch" in report["errors"]
 
 
-def test_b201_commit_flag_is_not_implemented(tmp_path, monkeypatch, capsys):
+def test_b202_commit_cli_runs_transaction(tmp_path, monkeypatch, capsys):
     inputs, root = _setup_project(tmp_path, monkeypatch)
     state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
     _write(root / "reports/mini.md", "changed-output")
@@ -562,9 +562,10 @@ def test_b201_commit_flag_is_not_implemented(tmp_path, monkeypatch, capsys):
             "--commit",
         ]
     )
-    assert rc == 3
+    assert rc == 1
     out = capsys.readouterr().out
-    assert "commit_not_implemented" in out
+    assert "commit_not_implemented" not in out
+    assert '"status": "failed"' in out or '"status": "rejected"' in out
 
 
 def _swap_output(root, output):

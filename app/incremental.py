@@ -114,6 +114,7 @@ BUILD_FILES = (
     "app/choice_contract.py",
     "app/choice_proofs.py",
     "app/versioning.py",
+    "app/rebuild.py",
 )
 
 
@@ -1437,7 +1438,9 @@ def _page_registry(inputs):
         for page in item["managed_pages"]:
             result[page["page_key"]] = {
                 "bundle_key": item["bundle_key"],
+                "root": item["root"],
                 "entity_id": page.get("entity_id"),
+                "data_mode": item.get("data_mode"),
                 "response": page.get("response"),
                 "output": page.get("output"),
                 "prompt": item.get("prompt"),
@@ -1835,6 +1838,12 @@ def precheck_rebuild(plan_path, state_path, inputs_path, candidate_manifest_path
     return _precheck_report(inputs, plan, current, errors, [], action, build_set, candidates, binding, {})
 
 
+def commit_rebuild(plan_path, state_path, inputs_path, candidate_manifest_path=None):
+    from app.rebuild import commit_rebuild as _commit
+
+    return _commit(plan_path, state_path, inputs_path, candidate_manifest_path)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.incremental")
     parser.add_argument("command", choices=["plan", "explain", "graph", "rebuild"])
@@ -1854,14 +1863,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             candidate_path = Path(args.candidate_manifest) if args.candidate_manifest else None
             if candidate_path is not None:
                 _ensure_read_path(candidate_path, "candidate_manifest")
-            report = precheck_rebuild(Path(args.plan), Path(args.state), Path(args.inputs), candidate_path)
             if args.commit:
-                report["commit_supported"] = False
-                report["commit_result"] = "not_implemented"
-                if "commit_not_implemented" not in report["errors"]:
-                    report["errors"] = sorted(set(report["errors"] + ["commit_not_implemented"]))
+                report = commit_rebuild(Path(args.plan), Path(args.state), Path(args.inputs), candidate_path)
                 print(json.dumps(report, ensure_ascii=False, indent=2))
-                return 3
+                return (
+                    0 if report.get("status") in ("committed", "already_committed", "committed_cleanup_pending") else 1
+                )
+            report = precheck_rebuild(Path(args.plan), Path(args.state), Path(args.inputs), candidate_path)
             print(json.dumps(report, ensure_ascii=False, indent=2))
             return 0
         inputs_path = _ensure_read_path(Path(args.inputs), "inputs")
