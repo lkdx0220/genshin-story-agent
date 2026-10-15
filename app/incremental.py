@@ -51,6 +51,10 @@ def _read_json(path: Path) -> Any:
         raise IncrementalError(f"missing file: {path}") from exc
     except UnicodeDecodeError as exc:
         raise IncrementalError(f"invalid encoding: {path}") from exc
+    except PermissionError as exc:
+        raise IncrementalError(f"unreadable file: {path}") from exc
+    except OSError as exc:
+        raise IncrementalError(f"unreadable file: {path}") from exc
     except json.JSONDecodeError as exc:
         raise IncrementalError(f"invalid JSON: {path}") from exc
 
@@ -1491,35 +1495,40 @@ def _ensure_file_inside(path, label):
     return resolved
 
 
-def _manifest_structure_errors(item):
-    root = _inside_root(REPO_ROOT / item["root"])
-    manifest_path = root / "manifest.json"
-    if not manifest_path.exists():
-        return ["manifest_missing"]
-    try:
-        manifest = _read_json(manifest_path)
-    except IncrementalError as exc:
-        return [f"manifest_invalid:{exc}"]
-    if not isinstance(manifest, dict):
-        return ["manifest_invalid"]
-    sources = manifest.get("sources")
-    if not isinstance(sources, list) or not sources:
-        return ["manifest_invalid"]
-    for source in sources:
-        if not isinstance(source, dict):
-            return ["manifest_invalid"]
-    return []
+def _load_manifests(inputs):
+    manifests = []
+    errors = []
+    for item in inputs["inputs"]:
+        root = _inside_root(REPO_ROOT / item["root"])
+        manifest_path = root / "manifest.json"
+        if not manifest_path.exists():
+            errors.append(f"manifest_missing:{item['bundle_key']}")
+            manifests.append({})
+            continue
+        if not manifest_path.is_file():
+            errors.append(f"manifest_not_file:{item['bundle_key']}")
+            manifests.append({})
+            continue
+        try:
+            manifest = _read_json(manifest_path)
+        except IncrementalError as exc:
+            errors.append(f"manifest_invalid:{item['bundle_key']}:{exc}")
+            manifests.append({})
+            continue
+        if not isinstance(manifest, dict):
+            errors.append(f"manifest_invalid:{item['bundle_key']}")
+            manifests.append({})
+            continue
+        sources = manifest.get("sources")
+        if not isinstance(sources, list) or not sources or not all(isinstance(source, dict) for source in sources):
+            errors.append(f"manifest_invalid:{item['bundle_key']}")
+            manifests.append({})
+            continue
+        manifests.append(manifest)
+    return manifests, errors
 
 
-def _safe_manifest(root):
-    try:
-        manifest = _read_json(root / "manifest.json")
-    except IncrementalError:
-        return {}
-    return manifest if isinstance(manifest, dict) else {}
-
-
-def _input_protected_paths(inputs, inputs_path, state_path, plan_path, candidate_manifest_path):
+def _input_protected_paths(inputs, inputs_path, state_path, plan_path, candidate_manifest_path, manifests):
     protected_files = {Path(inputs_path).resolve(), Path(state_path).resolve(), Path(plan_path).resolve()}
     if candidate_manifest_path is not None:
         protected_files.add(Path(candidate_manifest_path).resolve())
@@ -1542,10 +1551,9 @@ def _input_protected_paths(inputs, inputs_path, state_path, plan_path, candidate
         path = REPO_ROOT / relative
         if path.exists():
             protected_dirs.add(path.resolve())
-    for item in inputs["inputs"]:
+    for item, manifest in zip(inputs["inputs"], manifests, strict=True):
         root = _inside_root(REPO_ROOT / item["root"])
         protected_dirs.add(root)
-        manifest = _safe_manifest(root)
         protected_files.add((root / "manifest.json").resolve())
         for source_meta in _manifest_sources(manifest).values():
             protected_files.add((root / source_meta["file"]).resolve())
@@ -1570,13 +1578,15 @@ def _is_protected(path, protected_files, protected_dirs):
 
 
 def _validate_registered_outputs(inputs, inputs_path, state_path, plan_path, candidate_manifest_path):
-    errors = []
+    manifests, manifest_errors = _load_manifests(inputs)
+    if manifest_errors:
+        return manifest_errors
     protected_files, protected_dirs = _input_protected_paths(
-        inputs, inputs_path, state_path, plan_path, candidate_manifest_path
+        inputs, inputs_path, state_path, plan_path, candidate_manifest_path, manifests
     )
+    errors = []
     outputs = {}
     for item in inputs["inputs"]:
-        errors.extend(_manifest_structure_errors(item))
         for page in item["managed_pages"]:
             page_key = page["page_key"]
             response = page.get("response")

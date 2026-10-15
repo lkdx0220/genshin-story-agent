@@ -633,3 +633,33 @@ def test_b201_dry_run_commit_are_mutually_exclusive(tmp_path, monkeypatch):
             ]
         )
     assert exc.value.code == 2
+
+
+def _write_bad_manifest(root, payload):
+    (root / "fixture/raw/manifest.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_b201_manifest_sources_structure_is_prechecked(tmp_path, monkeypatch):
+    _inputs, root = _setup_project(tmp_path, monkeypatch)
+    config = root / "config/incremental-inputs.json"
+    plan = root / "reports/incremental/plan.json"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("{}", encoding="utf-8")
+    _write_bad_manifest(root, {"sources": [None]})
+    report = incremental.precheck_rebuild(plan, root / "reports/incremental/state.json", config, None)
+    assert report["action"] == "reject"
+    assert any("manifest_invalid" in item for item in report["errors"])
+
+
+def test_b201_manifest_directory_is_typed_reject(tmp_path, monkeypatch):
+    _inputs, root = _setup_project(tmp_path, monkeypatch)
+    config = root / "config/incremental-inputs.json"
+    plan = root / "reports/incremental/plan.json"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("{}", encoding="utf-8")
+    manifest = root / "fixture/raw/manifest.json"
+    manifest.unlink()
+    manifest.mkdir()
+    report = incremental.precheck_rebuild(plan, root / "reports/incremental/state.json", config, None)
+    assert report["action"] == "reject"
+    assert any("manifest_not_file" in item for item in report["errors"])
