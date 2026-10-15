@@ -19,7 +19,10 @@ REQUIRED_JOURNAL_FIELDS = (
     "state",
     "output",
     "staging",
+    "inputs",
     "page_key",
+    "candidate_sha256",
+    "response",
     "plan_generation",
     "parent_generation",
     "old_state_sha256",
@@ -377,6 +380,7 @@ def _prepare_commit(plan_path, state_path, inputs_path, candidate_manifest_path)
             txid,
         )
     except (RebuildError, inc.IncrementalError, OSError) as exc:
+        _discard_staging(ctx)
         return None, {"status": "failed", "transaction_id": txid, "errors": [f"staging:{exc}"]}
     return ctx, None
 
@@ -465,17 +469,20 @@ def _build_state(ctx, baseline, current_observed):
 
 
 def _cleanup_transaction(txid, backup_path, staging_dir):
-    _journal_path(txid).unlink(missing_ok=True)
     if backup_path is not None:
         backup_path.unlink(missing_ok=True)
-    if staging_dir is not None:
-        shutil.rmtree(staging_dir, ignore_errors=True)
+    if staging_dir is not None and Path(staging_dir).exists():
+        shutil.rmtree(staging_dir)
+    _journal_path(txid).unlink(missing_ok=True)
 
 
 def _prepared_payload(ctx, baseline, new_state, backup_path, old_exists):
     return {
         "protocol": EXECUTION_PROTOCOL,
         "page_key": ctx["candidate"]["page_key"],
+        "candidate_sha256": ctx["candidate_hash"],
+        "response": _relative(ctx["candidate_path"]),
+        "inputs": _relative(ctx["inputs_path"]),
         "state": _relative(ctx["state_path"]),
         "output": _relative(ctx["output_path"]),
         "staging": _relative(ctx["staging_dir"]),
@@ -613,7 +620,27 @@ def _rollback_failed_transaction(ctx, payload, backup_path, old_exists, exc):
     return {"status": "failed", "transaction_id": ctx["txid"], "errors": [str(exc)], "recovery": "rolled_back"}
 
 
+def _cleanup_owned_provenance(payload):
+    provenance_dir = _root() / payload["provenance"]
+    if not provenance_dir.exists():
+        return None
+    if _provenance_matches(payload):
+        try:
+            shutil.rmtree(provenance_dir)
+        except OSError as exc:
+            return f"provenance_cleanup:{exc}"
+        return None
+    return "provenance_third_party"
+
+
 def _finalize_old_state(ctx, payload, backup_path, old_exists, exc):
+    provenance_error = _cleanup_owned_provenance(payload)
+    if provenance_error:
+        try:
+            _write_journal(ctx["txid"], "recovery_required", error=str(exc), provenance_error=provenance_error)
+        except OSError:
+            pass
+        return {"status": "recovery_required", "transaction_id": ctx["txid"], "errors": [str(exc), provenance_error]}
     try:
         _cleanup_transaction(ctx["txid"], backup_path if old_exists else None, ctx["staging_dir"])
     except OSError:
@@ -646,9 +673,42 @@ def _journal_path_inside(value, prefix):
         path = inc._inside_root(_root() / value)
     except inc.IncrementalError:
         return None
-    if prefix and not str(path).startswith(str((_root() / prefix).resolve())):
-        return None
+    if prefix:
+        base = (_root() / prefix).resolve()
+        if path != base and base not in path.parents:
+            return None
     return path
+
+
+def _journal_owned_path(value, prefix, txid, require_child):
+    path = _journal_path_inside(value, prefix)
+    if path is None:
+        return None
+    base = (_root() / prefix).resolve()
+    if require_child and (path == base or base not in path.parents):
+        return None
+    if txid is not None:
+        owner = base / txid
+        if path != owner and owner not in path.parents:
+            return None
+    return path
+
+
+def _registered_output(payload):
+    inputs_path = _journal_path_inside(payload.get("inputs"), None)
+    if inputs_path is None or not inputs_path.is_file():
+        return None
+    try:
+        inputs = inc.load_inputs(inputs_path)
+    except inc.IncrementalError:
+        return None
+    entry = inc._page_registry(inputs).get(payload.get("page_key"))
+    if entry is None:
+        return None
+    try:
+        return _relative(_root() / entry["output"])
+    except (inc.IncrementalError, ValueError):
+        return None
 
 
 def _validate_journal_payload(name, payload):
@@ -658,25 +718,42 @@ def _validate_journal_payload(name, payload):
         return "journal_bad_format"
     if payload.get("protocol") != EXECUTION_PROTOCOL:
         return "journal_bad_protocol"
-    if payload.get("transaction_id") != name[:-5]:
+    txid = name[:-5]
+    if payload.get("transaction_id") != txid:
         return "journal_txid_mismatch"
     if not set(REQUIRED_JOURNAL_FIELDS) <= set(payload):
         return "journal_incomplete"
-    state_path = _journal_path_inside(payload.get("state"), None)
-    output_path = _journal_path_inside(payload.get("output"), None)
-    staging_path = _journal_path_inside(payload.get("staging"), "reports/incremental/staging")
-    provenance_path = _journal_path_inside(payload.get("provenance"), "reports/incremental/provenance")
-    backup_path = None
+    if _journal_path_inside(payload.get("state"), None) is None:
+        return "journal_state_path_invalid"
+    if _journal_path_inside(payload.get("output"), None) is None:
+        return "journal_output_path_invalid"
+    if _journal_owned_path(payload.get("staging"), "reports/incremental/staging", txid, True) is None:
+        return "journal_staging_path_invalid"
+    if _journal_owned_path(payload.get("provenance"), "reports/incremental/provenance", txid, False) is None:
+        return "journal_provenance_path_invalid"
     if payload.get("backup") is not None:
-        backup_path = _journal_path_inside(payload.get("backup"), "reports/incremental/backups")
-    if state_path is None or output_path is None or staging_path is None or provenance_path is None:
-        return "journal_path_invalid"
-    if payload.get("backup") is not None and backup_path is None:
-        return "journal_backup_path_invalid"
+        if _journal_owned_path(payload.get("backup"), "reports/incremental/backups", txid, False) is None:
+            return "journal_backup_path_invalid"
     if not isinstance(payload.get("output_old_exists"), bool):
         return "journal_old_exists_invalid"
     if not isinstance(payload.get("page_key"), str):
         return "journal_page_key_invalid"
+    if _registered_output(payload) != payload.get("output"):
+        return "journal_output_unregistered"
+    try:
+        expected_txid = _transaction_id(
+            payload["plan_generation"],
+            payload["parent_generation"],
+            payload["page_key"],
+            payload["candidate_sha256"],
+            payload["response"],
+            payload["output"],
+            payload["execution_sha256"],
+        )
+    except (KeyError, TypeError):
+        return "journal_identity_invalid"
+    if expected_txid != payload.get("transaction_id"):
+        return "journal_txid_mismatch"
     return None
 
 
@@ -724,6 +801,9 @@ def _resolve_rollback(ctx, payload, backup, name):
 
 
 def _resolve_old(ctx, payload, name):
+    provenance_error = _cleanup_owned_provenance(payload)
+    if provenance_error:
+        return {"status": "recovery_required", "errors": [f"{provenance_error}:{name}"]}
     error = _cleanup_resolved(payload)
     return {"status": "recovery_required", "errors": [f"{error}:{name}"]} if error else None
 
@@ -795,6 +875,11 @@ def _replay_record(ctx):
 
 def _discard_staging(ctx):
     shutil.rmtree(ctx.get("staging_dir"), ignore_errors=True)
+    parent = _staging_dir(ctx.get("txid", ""))
+    try:
+        parent.rmdir()
+    except OSError:
+        pass
 
 
 def _run_locked(ctx):
@@ -821,7 +906,10 @@ def _run_locked(ctx):
 
 
 def commit_rebuild(plan_path, state_path, inputs_path, candidate_manifest_path=None):
-    ctx, error = _prepare_commit(plan_path, state_path, inputs_path, candidate_manifest_path)
+    try:
+        ctx, error = _prepare_commit(plan_path, state_path, inputs_path, candidate_manifest_path)
+    except Exception as exc:  # noqa: BLE001 - public transaction boundary
+        return {"status": "failed", "errors": [f"prepare:{exc}"]}
     if error:
         return error
     handle, lock_error = _acquire_lock(ctx["txid"])
@@ -829,7 +917,11 @@ def commit_rebuild(plan_path, state_path, inputs_path, candidate_manifest_path=N
         _discard_staging(ctx)
         return lock_error
     try:
-        result = _run_locked(ctx)
+        try:
+            result = _run_locked(ctx)
+        except Exception as exc:  # noqa: BLE001 - public transaction boundary
+            _discard_staging(ctx)
+            result = {"status": "failed", "transaction_id": ctx["txid"], "errors": [f"internal:{exc}"]}
     finally:
         release_error = _release_lock(handle)
     if release_error:

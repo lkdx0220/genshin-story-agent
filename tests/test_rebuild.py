@@ -2,6 +2,7 @@
 """B4-02 B202：单页提交事务回归。"""
 
 import json
+import pytest
 import shutil
 from pathlib import Path
 
@@ -154,3 +155,104 @@ def test_b202_state_replace_failure_rolls_back_output(tmp_path, monkeypatch):
     assert result["status"] == "failed", result
     assert state.read_bytes() == before_state
     assert (root / "traveler-output.md").read_bytes() == before_output
+
+
+class _Crash(BaseException):
+    pass
+
+
+def _crash_after_output(root, config, state, plan, manifest, monkeypatch):
+    original = rebuild._write_journal
+
+    def crash(txid, status, **fields):
+        original(txid, status, **fields)
+        if status == "output_replaced":
+            raise _Crash()
+
+    monkeypatch.setattr(rebuild, "_write_journal", crash)
+    with pytest.raises(_Crash):
+        rebuild.commit_rebuild(plan, state, config, manifest)
+
+
+def _journal_payload(root):
+    path = next((root / "reports/incremental/journal").glob("*.json"))
+    return path, json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_b202_staging_failure_leaves_no_staging(tmp_path, monkeypatch):
+    root, config, state, plan, manifest = _setup_real_project(tmp_path, monkeypatch)
+
+    def boom(*args, **kwargs):
+        raise rebuild.RebuildError("staged schema failed")
+
+    monkeypatch.setattr(rebuild, "_stage_candidate", boom)
+    result = rebuild.commit_rebuild(plan, state, config, manifest)
+    assert result["status"] == "failed"
+    staging = root / "reports/incremental/staging"
+    assert not staging.exists() or not any(staging.rglob("*"))
+
+
+def test_b202_journal_txid_recompute_rejects_tampered_page_key(tmp_path, monkeypatch):
+    case = _setup_real_project(tmp_path, monkeypatch)
+    _crash_after_output(*case, monkeypatch)
+    path, payload = _jurnal = _journal_payload(case[0])
+    payload["page_key"] = "other.md|fixture|char:other"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = rebuild.recover_transaction()
+    assert result["status"] == "recovery_required", result
+    assert path.exists()
+
+
+def test_b202_journal_rejects_inputs_outside_project(tmp_path, monkeypatch):
+    case = _setup_real_project(tmp_path, monkeypatch)
+    _crash_after_output(*case, monkeypatch)
+    path, payload = _journal_payload(case[0])
+    payload["inputs"] = "../outside-config.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = rebuild.recover_transaction()
+    assert result["status"] == "recovery_required", result
+    assert path.exists()
+
+
+def test_b202_journal_staging_requires_txid_owner(tmp_path, monkeypatch):
+    case = _setup_real_project(tmp_path, monkeypatch)
+    _crash_after_output(*case, monkeypatch)
+    path, payload = _journal_payload(case[0])
+    unrelated = case[0] / "reports/incremental/staging/other-transaction"
+    unrelated.mkdir(parents=True, exist_ok=True)
+    sentinel = unrelated / "keep.txt"
+    sentinel.write_bytes(b"keep")
+    payload["staging"] = str(unrelated.relative_to(case[0]))
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = rebuild.recover_transaction()
+    assert result["status"] == "recovery_required", result
+    assert sentinel.exists()
+    assert path.exists()
+
+
+def test_b202_internal_build_failure_is_structured(tmp_path, monkeypatch):
+    root, config, state, plan, manifest = _setup_real_project(tmp_path, monkeypatch)
+    before_state = state.read_bytes()
+    before_output = (root / "traveler-output.md").read_bytes()
+
+    def boom(*args, **kwargs):
+        raise OSError("internal graph failure")
+
+    monkeypatch.setattr(rebuild, "_build_state", boom)
+    result = rebuild.commit_rebuild(plan, state, config, manifest)
+    assert result["status"] == "failed", result
+    assert "internal:internal graph failure" in result["errors"]
+    assert state.read_bytes() == before_state
+    assert (root / "traveler-output.md").read_bytes() == before_output
+
+
+def test_b202_prepare_failure_is_structured(tmp_path, monkeypatch):
+    _root, config, state, plan, manifest = _setup_real_project(tmp_path, monkeypatch)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("prepare exploded")
+
+    monkeypatch.setattr(rebuild, "_prepare_commit", boom)
+    result = rebuild.commit_rebuild(plan, state, config, manifest)
+    assert result["status"] == "failed", result
+    assert "prepare:prepare exploded" in result["errors"]
