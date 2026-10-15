@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import pytest
 from pathlib import Path
 
 from app import incremental
@@ -564,3 +565,71 @@ def test_b201_commit_flag_is_not_implemented(tmp_path, monkeypatch, capsys):
     assert rc == 3
     out = capsys.readouterr().out
     assert "commit_not_implemented" in out
+
+
+def _swap_output(root, output):
+    config = root / "config/incremental-inputs.json"
+    data = json.loads(config.read_text(encoding="utf-8"))
+    data["inputs"][0]["managed_pages"][0]["output"] = output
+    config.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return config
+
+
+def _default_case(tmp_path, monkeypatch):
+    inputs, root = _setup_project(tmp_path, monkeypatch)
+    config = root / "config/incremental-inputs.json"
+    state = _write_baseline(root, incremental.fingerprint_inputs(inputs))
+    plan = incremental.build_plan(inputs, state)
+    plan_path = _write_plan(root, plan)
+    return inputs, root, config, state, plan_path
+
+
+def test_b201_output_cannot_overlap_protected_inputs(tmp_path, monkeypatch):
+    _inputs, root, config, state, plan_path = _default_case(tmp_path, monkeypatch)
+    _swap_output(root, "fixture/raw/manifest.json")
+    report = incremental.precheck_rebuild(plan_path, state, config, None)
+    assert report["action"] == "reject"
+    assert any("output_overlaps_protected_input" in item for item in report["errors"])
+
+
+def test_b201_directory_output_is_rejected(tmp_path, monkeypatch):
+    _inputs, root, config, state, plan_path = _default_case(tmp_path, monkeypatch)
+    _swap_output(root, "reports")
+    report = incremental.precheck_rebuild(plan_path, state, config, None)
+    assert report["action"] == "reject"
+    assert any("output_not_file" in item for item in report["errors"])
+
+
+def test_b201_non_utf8_inputs_is_typed_reject(tmp_path, monkeypatch):
+    _inputs, root, config, state, plan_path = _default_case(tmp_path, monkeypatch)
+    config.write_bytes(b"\xff\xfe\x00invalid")
+    report = incremental.precheck_rebuild(plan_path, state, config, None)
+    assert report["action"] == "reject"
+    assert report["errors"]
+
+
+def test_b201_journal_path_as_file_is_typed_reject(tmp_path, monkeypatch):
+    _inputs, root, config, state, plan_path = _default_case(tmp_path, monkeypatch)
+    (root / "reports/incremental/journal").write_text("broken journal path", encoding="utf-8")
+    report = incremental.precheck_rebuild(plan_path, state, config, None)
+    assert report["action"] == "reject"
+    assert any("journal_unresolved" in item for item in report["errors"])
+
+
+def test_b201_dry_run_commit_are_mutually_exclusive(tmp_path, monkeypatch):
+    _inputs, root, config, state, _plan_path = _default_case(tmp_path, monkeypatch)
+    with pytest.raises(SystemExit) as exc:
+        incremental.main(
+            [
+                "rebuild",
+                "--inputs",
+                str(config),
+                "--state",
+                str(state),
+                "--plan",
+                str(root / "reports/incremental/plan.json"),
+                "--dry-run",
+                "--commit",
+            ]
+        )
+    assert exc.value.code == 2

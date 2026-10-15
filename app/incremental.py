@@ -49,6 +49,8 @@ def _read_json(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise IncrementalError(f"missing file: {path}") from exc
+    except UnicodeDecodeError as exc:
+        raise IncrementalError(f"invalid encoding: {path}") from exc
     except json.JSONDecodeError as exc:
         raise IncrementalError(f"invalid JSON: {path}") from exc
 
@@ -1468,13 +1470,6 @@ def _load_candidate_manifest(path):
     return result, errors
 
 
-def _unresolved_journals():
-    journal_dir = REPO_ROOT / "reports" / "incremental" / "journal"
-    if not journal_dir.exists():
-        return []
-    return sorted(path.name for path in journal_dir.iterdir() if path.is_file())
-
-
 def _plan_decision_fields(plan):
     return {
         "generation": plan.get("generation"),
@@ -1494,6 +1489,117 @@ def _ensure_file_inside(path, label):
     if not resolved.is_file():
         raise IncrementalError(f"{label}_not_file")
     return resolved
+
+
+def _input_protected_paths(inputs, inputs_path):
+    protected = {Path(inputs_path).resolve()}
+    for relative in (
+        "wiki/__schema__/entity.schema.json",
+        "wiki/__schema__/entity-template.md",
+        "wiki/__schema__/source-span-format.md",
+        "wiki/__schema__/version-registry.json",
+        "docs/schema-lock.json",
+        "lint",
+        "wiki/__schema__/entities",
+    ):
+        path = REPO_ROOT / relative
+        if path.exists():
+            protected.add(path.resolve())
+    protected.add((REPO_ROOT / "reports" / "incremental").resolve())
+    for item in inputs["inputs"]:
+        root = _inside_root(REPO_ROOT / item["root"])
+        protected.add(root)
+        manifest = root / "manifest.json"
+        protected.add(manifest.resolve())
+        try:
+            manifest_data = _read_json(manifest) if manifest.exists() else {}
+        except IncrementalError:
+            manifest_data = {}
+        for source_meta in _manifest_sources(manifest_data).values():
+            protected.add((root / source_meta["file"]).resolve())
+        proof = manifest_data.get("choice_proofs_file")
+        if isinstance(proof, str) and proof:
+            protected.add((root / proof).resolve())
+        if item.get("prompt"):
+            protected.add((REPO_ROOT / item["prompt"]).resolve())
+        for profile_id in item["profile_ids"]:
+            protected.add(
+                (REPO_ROOT / "wiki" / "__schema__" / "entities" / f"{profile_id.replace(':', '_')}.json").resolve()
+            )
+        for page in item["managed_pages"]:
+            protected.add((REPO_ROOT / page["response"]).resolve())
+    return protected
+
+
+def _validate_registered_outputs(inputs, inputs_path):
+    errors = []
+    protected = _input_protected_paths(inputs, inputs_path)
+    outputs = {}
+    for item in inputs["inputs"]:
+        for page in item["managed_pages"]:
+            page_key = page["page_key"]
+            response = page.get("response")
+            output = page.get("output")
+            if not output:
+                errors.append(f"output_missing:{page_key}")
+                continue
+            try:
+                response_path = _inside_root(REPO_ROOT / response)
+            except IncrementalError:
+                errors.append(f"response_outside_project:{page_key}")
+                continue
+            try:
+                output_path = _inside_root(REPO_ROOT / output)
+            except IncrementalError:
+                errors.append(f"output_outside_project:{page_key}")
+                continue
+            if not response_path.is_file():
+                errors.append(f"response_missing_or_not_file:{page_key}")
+            if output_path.is_dir():
+                errors.append(f"output_not_file:{page_key}")
+            if output_path in protected:
+                errors.append(f"output_overlaps_protected_input:{page_key}")
+            if output_path == response_path:
+                errors.append(f"output_overlaps_response:{page_key}")
+            if output_path in outputs:
+                errors.append(f"duplicate_output:{page_key}")
+            outputs[output_path] = page_key
+    return errors
+
+
+def _load_inputs_report(inputs_path):
+    try:
+        return load_inputs(inputs_path), []
+    except IncrementalError as exc:
+        return {"format_version": 1, "inputs": []}, [f"inputs_invalid:{exc}"]
+    except (OSError, UnicodeDecodeError) as exc:
+        return {"format_version": 1, "inputs": []}, [f"inputs_unreadable:{exc}"]
+
+
+def _load_plan_report(plan_path):
+    try:
+        plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return {}, [f"plan_unreadable:{exc}"]
+    if not isinstance(plan, dict) or plan.get("format_version") != 1:
+        return {}, ["plan_invalid"]
+    errors = []
+    for field in ("generation", "baseline_generation", "execution_protocol", "observed", "full_required"):
+        if field not in plan:
+            errors.append(f"plan_missing_field:{field}")
+    if plan.get("execution_protocol") != EXECUTION_PROTOCOL:
+        errors.append("plan_execution_protocol_mismatch")
+    return plan, errors
+
+
+def _unresolved_journals():
+    journal_dir = REPO_ROOT / "reports" / "incremental" / "journal"
+    if not journal_dir.exists():
+        return []
+    try:
+        return sorted(path.name for path in journal_dir.iterdir() if path.is_file())
+    except (OSError, NotADirectoryError, PermissionError):
+        return ["__journal_path_invalid__"]
 
 
 def _precheck_report(inputs, plan, current, errors, warnings, action, build_set, candidates, binding, registry):
@@ -1532,45 +1638,6 @@ def _precheck_reject(errors, inputs=None, plan=None, current=None, build_set=Non
     )
 
 
-def _precheck_context(plan_path, state_path, inputs_path):
-    errors = []
-    inputs = {"format_version": 1, "inputs": []}
-    plan = {}
-    try:
-        inputs = load_inputs(inputs_path)
-    except IncrementalError as exc:
-        errors.append(f"inputs_invalid:{exc}")
-    try:
-        plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        errors.append(f"plan_unreadable:{exc}")
-    if not isinstance(plan, dict) or plan.get("format_version") != 1:
-        errors.append("plan_invalid")
-        plan = {}
-    for field in ("generation", "baseline_generation", "execution_protocol", "observed", "full_required"):
-        if field not in plan:
-            errors.append(f"plan_missing_field:{field}")
-    if plan.get("execution_protocol") != EXECUTION_PROTOCOL:
-        errors.append("plan_execution_protocol_mismatch")
-    unresolved = _unresolved_journals()
-    if unresolved:
-        errors.append("journal_unresolved:" + ",".join(unresolved))
-    try:
-        current = build_plan(inputs, state_path)
-    except IncrementalError as exc:
-        current = {
-            "generation": None,
-            "observed": None,
-            "full_required": True,
-            "dirty": {},
-            "blocked": [],
-            "unknown": [str(exc)],
-            "affected_pages": [],
-        }
-        errors.append(f"authoritative_plan_failed:{exc}")
-    return inputs, plan, current, errors
-
-
 def _all_managed_pages(inputs):
     return [page["page_key"] for item in inputs["inputs"] for page in item["managed_pages"]]
 
@@ -1583,33 +1650,16 @@ def _authoritative_scope(current, inputs):
     return dirty or list(current.get("affected_pages") or [])
 
 
-def _validate_registered_outputs(inputs):
-    errors = []
-    outputs = {}
-    for item in inputs["inputs"]:
-        for page in item["managed_pages"]:
-            page_key = page["page_key"]
-            response = page.get("response")
-            output = page.get("output")
-            if not output:
-                errors.append(f"output_missing:{page_key}")
-                continue
-            try:
-                output_path = _inside_root(REPO_ROOT / output)
-            except IncrementalError:
-                errors.append(f"output_outside_project:{page_key}")
-                continue
-            try:
-                response_path = _inside_root(REPO_ROOT / response)
-            except IncrementalError:
-                errors.append(f"response_outside_project:{page_key}")
-                continue
-            if output_path == response_path:
-                errors.append(f"output_overlaps_response:{page_key}")
-            if output_path in outputs:
-                errors.append(f"duplicate_output:{page_key}")
-            outputs[output_path] = page_key
-    return errors
+def _removed_pages(state_path, inputs):
+    baseline, errors = load_baseline(state_path)
+    if baseline is None:
+        return []
+    current_keys = set(_all_managed_pages(inputs))
+    baseline_keys = set()
+    for entry in ((baseline.get("inputs") or {}).get("inputs") or {}).values():
+        if isinstance(entry, dict) and isinstance(entry.get("pages"), dict):
+            baseline_keys.update(entry["pages"].keys())
+    return sorted(baseline_keys - current_keys)
 
 
 def _precheck_scope(plan, current, inputs, errors):
@@ -1677,43 +1727,58 @@ def _bind_candidates(action, build_set, candidates, manifest_errors, registry, c
     if not observed_hash:
         errors.append("authoritative_response_missing")
         return errors, False
-    actual_registered_hash = _hash_if_exists(registered_path)
-    if actual_registered_hash != observed_hash:
+    if _hash_if_exists(registered_path) != observed_hash:
         errors.append("authoritative_input_changed")
         return errors, False
-    candidate_hash = _hash_if_exists(candidate_path)
-    if candidate_hash != observed_hash:
+    if _hash_if_exists(candidate_path) != observed_hash:
         errors.append("candidate_binding_mismatch")
         return errors, False
     return errors, True
 
 
 def precheck_rebuild(plan_path, state_path, inputs_path, candidate_manifest_path=None):
-    errors = []
     try:
         plan_path = _ensure_file_inside(plan_path, "plan")
-    except IncrementalError as exc:
-        return _precheck_reject([str(exc)])
-    try:
         inputs_path = _ensure_file_inside(inputs_path, "inputs")
-    except IncrementalError as exc:
-        return _precheck_reject([str(exc)])
-    try:
         state_path = _ensure_read_path(Path(state_path), "state")
+        if candidate_manifest_path is not None:
+            candidate_manifest_path = _ensure_file_inside(candidate_manifest_path, "candidate_manifest")
     except IncrementalError as exc:
         return _precheck_reject([str(exc)])
-    if candidate_manifest_path is not None:
-        try:
-            candidate_manifest_path = _ensure_file_inside(candidate_manifest_path, "candidate_manifest")
-        except IncrementalError as exc:
-            return _precheck_reject([str(exc)])
-    inputs, plan, current, errors = _precheck_context(plan_path, state_path, inputs_path)
-    errors.extend(_validate_registered_outputs(inputs))
+    inputs, errors = _load_inputs_report(inputs_path)
+    if errors:
+        return _precheck_reject(errors, inputs=inputs)
+    output_errors = _validate_registered_outputs(inputs, inputs_path)
+    if output_errors:
+        return _precheck_reject(output_errors, inputs=inputs)
+    plan, plan_errors = _load_plan_report(plan_path)
+    errors.extend(plan_errors)
+    unresolved = _unresolved_journals()
+    if unresolved:
+        errors.append("journal_unresolved:" + ",".join(unresolved))
+    try:
+        current = build_plan(inputs, state_path)
+    except IncrementalError as exc:
+        current = {
+            "generation": None,
+            "observed": None,
+            "full_required": True,
+            "dirty": {},
+            "blocked": [],
+            "unknown": [str(exc)],
+            "affected_pages": [],
+        }
+        errors.append(f"authoritative_plan_failed:{exc}")
     build_set, action = _precheck_scope(plan, current, inputs, errors)
+    removed = _removed_pages(state_path, inputs)
+    if removed:
+        errors.append("removal_not_supported")
+        build_set = sorted(set(build_set) | set(removed))
+        action = "reject"
     registry = _page_registry(inputs)
     candidates, manifest_errors = _load_candidate_manifest(candidate_manifest_path)
     errors, binding = _bind_candidates(action, build_set, candidates, manifest_errors, registry, current, errors)
-    if errors and action == "single_page":
+    if errors and action in ("single_page", "no_op", "multi_page_not_supported"):
         action = "reject"
         binding = False
     return _precheck_report(inputs, plan, current, errors, [], action, build_set, candidates, binding, {})
@@ -1729,8 +1794,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--page")
     parser.add_argument("--snapshot-only", action="store_true")
     parser.add_argument("--candidate-manifest")
-    parser.add_argument("--commit", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--commit", action="store_true")
+    mode.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.command == "rebuild":
