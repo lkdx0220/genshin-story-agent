@@ -1472,17 +1472,7 @@ def _unresolved_journals():
     journal_dir = REPO_ROOT / "reports" / "incremental" / "journal"
     if not journal_dir.exists():
         return []
-    unresolved = []
-    for path in sorted(journal_dir.glob("*.json")):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            unresolved.append(path.name)
-            continue
-        status = payload.get("status") if isinstance(payload, dict) else None
-        if status not in ("committed", "cleaned"):
-            unresolved.append(path.name)
-    return unresolved
+    return sorted(path.name for path in journal_dir.iterdir() if path.is_file())
 
 
 def _plan_decision_fields(plan):
@@ -1497,25 +1487,61 @@ def _plan_decision_fields(plan):
     }
 
 
-def _precheck_paths(plan_path, state_path, inputs_path):
-    return (
-        _ensure_read_path(Path(plan_path), "plan"),
-        _ensure_read_path(Path(state_path), "state"),
-        _ensure_read_path(Path(inputs_path), "inputs"),
+def _ensure_file_inside(path, label):
+    resolved = _ensure_read_path(Path(path), label)
+    if not resolved.exists():
+        raise IncrementalError(f"{label}_missing")
+    if not resolved.is_file():
+        raise IncrementalError(f"{label}_not_file")
+    return resolved
+
+
+def _precheck_report(inputs, plan, current, errors, warnings, action, build_set, candidates, binding, registry):
+    return {
+        "execution_protocol": EXECUTION_PROTOCOL,
+        "plan_generation": plan.get("generation"),
+        "baseline_generation": current.get("baseline_generation") or plan.get("baseline_generation"),
+        "authoritative_generation": current.get("generation"),
+        "action": action,
+        "executable": action == "single_page" and not errors,
+        "commit_supported": False,
+        "errors": sorted(set(errors)),
+        "warnings": sorted(set(warnings)),
+        "build_set": build_set,
+        "affected_pages": list(current.get("affected_pages") or []),
+        "candidates": candidates,
+        "candidate_binding_passed": binding,
+        "full_validation_passed": "not_run",
+        "capability": dict(CAPABILITY_DEFAULT),
+        "not_implemented": ["rebuild", "runtime_stale"],
+    }
+
+
+def _precheck_reject(errors, inputs=None, plan=None, current=None, build_set=None):
+    return _precheck_report(
+        inputs or {"format_version": 1, "inputs": []},
+        plan or {},
+        current or {},
+        list(errors),
+        [],
+        "reject",
+        list(build_set or []),
+        [],
+        False,
+        {},
     )
 
 
-def _precheck_inputs_and_plan(plan_path, state_path, inputs_path):
+def _precheck_context(plan_path, state_path, inputs_path):
     errors = []
     inputs = {"format_version": 1, "inputs": []}
     plan = {}
     try:
-        plan_path, state_path, inputs_path = _precheck_paths(plan_path, state_path, inputs_path)
         inputs = load_inputs(inputs_path)
     except IncrementalError as exc:
         errors.append(f"inputs_invalid:{exc}")
     try:
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan = json.loads(Path(plan_path).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         errors.append(f"plan_unreadable:{exc}")
     if not isinstance(plan, dict) or plan.get("format_version") != 1:
@@ -1545,91 +1571,152 @@ def _precheck_inputs_and_plan(plan_path, state_path, inputs_path):
     return inputs, plan, current, errors
 
 
-def _precheck_scope(plan, current, errors):
+def _all_managed_pages(inputs):
+    return [page["page_key"] for item in inputs["inputs"] for page in item["managed_pages"]]
+
+
+def _authoritative_scope(current, inputs):
+    all_pages = _all_managed_pages(inputs)
+    if current.get("full_required"):
+        return list(current.get("affected_pages") or all_pages)
+    dirty = sorted((current.get("dirty") or {}).keys())
+    return dirty or list(current.get("affected_pages") or [])
+
+
+def _validate_registered_outputs(inputs):
+    errors = []
+    outputs = {}
+    for item in inputs["inputs"]:
+        for page in item["managed_pages"]:
+            page_key = page["page_key"]
+            response = page.get("response")
+            output = page.get("output")
+            if not output:
+                errors.append(f"output_missing:{page_key}")
+                continue
+            try:
+                output_path = _inside_root(REPO_ROOT / output)
+            except IncrementalError:
+                errors.append(f"output_outside_project:{page_key}")
+                continue
+            try:
+                response_path = _inside_root(REPO_ROOT / response)
+            except IncrementalError:
+                errors.append(f"response_outside_project:{page_key}")
+                continue
+            if output_path == response_path:
+                errors.append(f"output_overlaps_response:{page_key}")
+            if output_path in outputs:
+                errors.append(f"duplicate_output:{page_key}")
+            outputs[output_path] = page_key
+    return errors
+
+
+def _precheck_scope(plan, current, inputs, errors):
     if _plan_decision_fields(plan) != _plan_decision_fields(current):
         errors.append("plan_mismatch")
     if plan.get("baseline_generation") != current.get("baseline_generation"):
         errors.append("plan_outdated")
     if current.get("unknown"):
         errors.extend(f"unknown:{item}" for item in current["unknown"])
+    for item in current.get("unknown") or []:
+        if any(token in item for token in ("state_unavailable", "state_corrupt", "state_not_validated")):
+            errors.append("bootstrap_not_supported")
     if current.get("blocked"):
         errors.extend(f"blocked:{item}" for item in current["blocked"])
-    plan_blocked = any(item.startswith(("plan_", "journal_", "inputs_", "authoritative_")) for item in errors)
-    if plan_blocked or current.get("full_required"):
-        if current.get("full_required"):
-            errors.append("full_required_not_supported")
-        build_set = list(current.get("affected_pages") or [page["page_key"] for item in [] for page in []])
-        return build_set, "reject", plan_blocked
-    build_set = sorted((current.get("dirty") or {}).keys())
-    if not build_set:
-        return build_set, "no_op", plan_blocked
-    if len(build_set) == 1:
-        return build_set, "single_page", plan_blocked
+    scope = _authoritative_scope(current, inputs)
+    if current.get("full_required"):
+        errors.append("full_required_not_supported")
+        return scope, "reject"
+    if errors:
+        return scope, "reject"
+    if not scope:
+        return [], "no_op"
+    if len(scope) == 1:
+        return scope, "single_page"
     errors.append("multi_page_not_supported")
-    return build_set, "multi_page_not_supported", plan_blocked
+    return scope, "multi_page_not_supported"
 
 
-def _precheck_all_pages(inputs):
-    return [page["page_key"] for item in inputs["inputs"] for page in item["managed_pages"]]
+def _observed_response_hash(current, bundle_key, page_key):
+    entry = ((current.get("observed") or {}).get("inputs") or {}).get(bundle_key) or {}
+    return ((entry.get("pages") or {}).get(page_key) or {}).get("response")
 
 
-def _bind_candidates(action, build_set, candidates, manifest_errors, registry, errors):
-    errors.extend(manifest_errors)
+def _bind_candidates(action, build_set, candidates, manifest_errors, registry, current, errors):
+    if manifest_errors:
+        errors.extend(manifest_errors)
+        return errors, False
     candidate_keys = [item["page_key"] for item in candidates]
-    candidate_binding_passed = False
-    if action == "single_page":
-        expected = set(build_set)
-        if set(candidate_keys) != expected or len(candidate_keys) != len(set(candidate_keys)):
+    expected = set(build_set)
+    if action == "no_op":
+        if candidate_keys:
             errors.append("candidate_set_mismatch")
-            return errors, False
-        candidate = candidates[0]
-        registered = registry.get(candidate["page_key"])
-        if registered is None:
-            errors.append(f"candidate_unknown_page:{candidate['page_key']}")
-            return errors, False
-        if _hash_if_exists(REPO_ROOT / candidate["response"]) != _hash_if_exists(REPO_ROOT / registered["response"]):
-            errors.append("candidate_binding_mismatch")
-            return errors, False
-        return errors, True
-    if action == "no_op" and candidate_keys:
+        return errors, False
+    if action != "single_page":
+        return errors, False
+    if set(candidate_keys) != expected or len(candidate_keys) != len(set(candidate_keys)):
         errors.append("candidate_set_mismatch")
-    return errors, candidate_binding_passed
-
-
-def _precheck_report(inputs, plan, current, errors, warnings, action, build_set, candidates, binding, registry):
-    return {
-        "execution_protocol": EXECUTION_PROTOCOL,
-        "plan_generation": plan.get("generation"),
-        "baseline_generation": current.get("baseline_generation") or plan.get("baseline_generation"),
-        "authoritative_generation": current.get("generation"),
-        "action": action,
-        "executable": action == "single_page" and not errors,
-        "commit_supported": False,
-        "errors": sorted(set(errors)),
-        "warnings": sorted(set(warnings)),
-        "build_set": build_set,
-        "affected_pages": list(current.get("affected_pages") or []),
-        "candidates": candidates,
-        "candidate_binding_passed": binding,
-        "full_validation_passed": "not_run",
-        "capability": dict(CAPABILITY_DEFAULT),
-        "not_implemented": ["rebuild", "runtime_stale"],
-    }
+        return errors, False
+    candidate = candidates[0]
+    registered = registry.get(candidate["page_key"])
+    if registered is None:
+        errors.append(f"candidate_unknown_page:{candidate['page_key']}")
+        return errors, False
+    try:
+        candidate_path = _ensure_file_inside(REPO_ROOT / candidate["response"], "candidate")
+    except IncrementalError as exc:
+        errors.append(str(exc))
+        return errors, False
+    try:
+        registered_path = _ensure_file_inside(REPO_ROOT / registered["response"], "registered_response")
+    except IncrementalError as exc:
+        errors.append(str(exc))
+        return errors, False
+    observed_hash = _observed_response_hash(current, registered["bundle_key"], candidate["page_key"])
+    if not observed_hash:
+        errors.append("authoritative_response_missing")
+        return errors, False
+    actual_registered_hash = _hash_if_exists(registered_path)
+    if actual_registered_hash != observed_hash:
+        errors.append("authoritative_input_changed")
+        return errors, False
+    candidate_hash = _hash_if_exists(candidate_path)
+    if candidate_hash != observed_hash:
+        errors.append("candidate_binding_mismatch")
+        return errors, False
+    return errors, True
 
 
 def precheck_rebuild(plan_path, state_path, inputs_path, candidate_manifest_path=None):
-    inputs, plan, current, errors = _precheck_inputs_and_plan(plan_path, state_path, inputs_path)
-    if not inputs.get("inputs"):
-        return _precheck_report(inputs, plan, current, errors, [], "reject", [], [], False, {})
-    build_set, action, plan_blocked = _precheck_scope(plan, current, errors)
-    if current.get("full_required"):
-        build_set = list(current.get("affected_pages") or _precheck_all_pages(inputs))
+    errors = []
+    try:
+        plan_path = _ensure_file_inside(plan_path, "plan")
+    except IncrementalError as exc:
+        return _precheck_reject([str(exc)])
+    try:
+        inputs_path = _ensure_file_inside(inputs_path, "inputs")
+    except IncrementalError as exc:
+        return _precheck_reject([str(exc)])
+    try:
+        state_path = _ensure_read_path(Path(state_path), "state")
+    except IncrementalError as exc:
+        return _precheck_reject([str(exc)])
+    if candidate_manifest_path is not None:
+        try:
+            candidate_manifest_path = _ensure_file_inside(candidate_manifest_path, "candidate_manifest")
+        except IncrementalError as exc:
+            return _precheck_reject([str(exc)])
+    inputs, plan, current, errors = _precheck_context(plan_path, state_path, inputs_path)
+    errors.extend(_validate_registered_outputs(inputs))
+    build_set, action = _precheck_scope(plan, current, inputs, errors)
     registry = _page_registry(inputs)
     candidates, manifest_errors = _load_candidate_manifest(candidate_manifest_path)
-    errors, binding = _bind_candidates(action, build_set, candidates, manifest_errors, registry, errors)
-    if plan_blocked and candidates:
-        errors.append("candidates_ignored_by_reject")
-    return _precheck_report(inputs, plan, current, errors, [], action, build_set, candidates, binding, registry)
+    errors, binding = _bind_candidates(action, build_set, candidates, manifest_errors, registry, current, errors)
+    if errors and action == "single_page":
+        action = "reject"
+        binding = False
+    return _precheck_report(inputs, plan, current, errors, [], action, build_set, candidates, binding, {})
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1643,6 +1730,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--snapshot-only", action="store_true")
     parser.add_argument("--candidate-manifest")
     parser.add_argument("--commit", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     try:
         if args.command == "rebuild":
@@ -1655,8 +1743,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 report["commit_result"] = "not_implemented"
                 if "commit_not_implemented" not in report["errors"]:
                     report["errors"] = sorted(set(report["errors"] + ["commit_not_implemented"]))
+                print(json.dumps(report, ensure_ascii=False, indent=2))
+                return 3
             print(json.dumps(report, ensure_ascii=False, indent=2))
-            return 3 if args.commit else 0
+            return 0
         inputs_path = _ensure_read_path(Path(args.inputs), "inputs")
         state_path = _ensure_read_path(Path(args.state), "state")
         inputs = load_inputs(inputs_path)

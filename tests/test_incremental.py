@@ -525,7 +525,7 @@ def test_b201_candidate_binding_mismatch(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     report = incremental.precheck_rebuild(plan_path, state, root / "config/incremental-inputs.json", manifest)
-    assert report["action"] == "single_page"
+    assert report["action"] == "reject"
     assert report["executable"] is False
     assert "candidate_binding_mismatch" in report["errors"]
 
