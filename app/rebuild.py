@@ -839,29 +839,32 @@ def commit_rebuild(plan_path, state_path, inputs_path, candidate_manifest_path=N
     return result
 
 
+def _recover_locked(txid):
+    names, error = _journal_list()
+    if error:
+        return {"status": "recovery_required", "errors": [f"journal_unreadable:{error}"]}
+    if txid:
+        result = _resolve_one_journal(f"{txid}.json")
+        if result is None:
+            return {"status": "ok", "resolved": 1}
+        return result
+    for name in names:
+        result = _resolve_one_journal(name)
+        if result is not None:
+            return result
+    return {"status": "ok", "resolved": len(names)}
+
+
 def recover_transaction(txid: Optional[str] = None):
     handle, lock_error = _acquire_lock(txid or "recovery")
     if lock_error:
         return lock_error
-    release_error = None
     try:
-        names, error = _journal_list()
-        if error:
-            return {"status": "recovery_required", "errors": [f"journal_unreadable:{error}"]}
-        if txid:
-            result = _resolve_one_journal(f"{txid}.json")
-            if result is None:
-                return {"status": "ok", "resolved": 1}
-            return result
-        for name in names:
-            result = _resolve_one_journal(name)
-            if result is not None:
-                return result
-        return {"status": "ok", "resolved": len(names)}
+        result = _recover_locked(txid)
     finally:
         release_error = _release_lock(handle)
-    if release_error and isinstance(locals().get("result"), dict):
+    if release_error:
         result = dict(result)
         result.setdefault("warnings", [])
         result["warnings"] = list(result["warnings"]) + [release_error]
-        return result
+    return result
