@@ -858,11 +858,8 @@ def _resolve_pending_journals(txid: str):
 
 
 def _replay_record(ctx):
-    try:
-        baseline = json.loads(Path(ctx["state_path"]).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(baseline, dict):
+    baseline, _errors = inc.load_baseline(ctx["state_path"])
+    if baseline is None:
         return None
     build = baseline.get("build")
     if not isinstance(build, dict):
@@ -872,11 +869,9 @@ def _replay_record(ctx):
     page_key = ctx["candidate"]["page_key"]
     pages = build.get("pages") or {}
     if set(pages) != {page_key}:
-        print("RF pages", set(pages), {page_key})
         return None
     entry = pages[page_key]
     if baseline.get("generation") != entry.get("generation"):
-        print("RF gen", baseline.get("generation"), entry.get("generation"))
         return None
     if entry.get("response") != ctx["candidate_hash"]:
         return None
@@ -887,10 +882,8 @@ def _replay_record(ctx):
     if _hash_bytes(ctx["output_path"]) != entry.get("output"):
         return None
     if entry.get("execution_sha256") != _request_digest(ctx["plan_data"]):
-        print("RF exec", entry.get("execution_sha256"), _request_digest(ctx["plan_data"]))
         return None
     if _provenance_digest(_root() / entry.get("provenance", "")) != entry.get("provenance_sha256"):
-        print("RF prov", _provenance_digest(_root() / entry.get("provenance", "")), entry.get("provenance_sha256"))
         return None
     return build
 

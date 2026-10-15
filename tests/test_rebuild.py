@@ -321,3 +321,13 @@ def test_b202_recovery_rejects_staging_sibling(tmp_path, monkeypatch):
     assert result["status"] == "recovery_required", result
     assert sentinel.exists()
     assert path.exists()
+
+
+def test_b202_replay_rejects_invalid_state(tmp_path, monkeypatch):
+    root, config, state, plan, manifest = _setup_real_project(tmp_path, monkeypatch)
+    assert rebuild.commit_rebuild(plan, state, config, manifest)["status"] == "committed"
+    data = json.loads(state.read_text(encoding="utf-8"))
+    data["format_version"] = 999
+    state.write_text(json.dumps(data), encoding="utf-8")
+    result = rebuild.commit_rebuild(plan, state, config, manifest)
+    assert result["status"] != "already_committed", result
