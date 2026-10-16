@@ -66,11 +66,7 @@ def _register_before(case):
     case["_before_dirs"] = support.snapshot_dirs(case["root"])
 
 
-def test_multi_happy_two_pages(tmp_path, monkeypatch):
-    case = support.make_multi_case(tmp_path, monkeypatch)
-    api = load_multi_api()
-    _prepare_before(case)
-    report = _precheck(api, case)
+def _assert_happy_precheck(case, report):
     assert report["action"] == "multi_page", report
     assert report["executable"] is True
     assert report["build_set"] == sorted((case["page_keys"]["a"], case["page_keys"]["b"]))
@@ -79,13 +75,11 @@ def test_multi_happy_two_pages(tmp_path, monkeypatch):
     assert report["full_validation_passed"] == "not_run"
     _assert_files_and_dirs_unchanged(case, case["_before_files"], case["_before_dirs"])
 
-    result = _commit(api, case)
-    assert result["status"] == "committed", result
-    assert result["request_id"] and result["transaction_id"]
 
+def _assert_happy_state(case, result):
     state = json.loads(case["state"].read_text(encoding="utf-8"))
-    assert state["format_version"] == 1
     build = state["build"]
+    assert state["format_version"] == 1
     assert build["version"] == 2
     assert set(build["pages"]) == {case["page_keys"]["a"], case["page_keys"]["b"]}
     assert build["parent_generation"] == case["parent_generation"]
@@ -97,13 +91,15 @@ def test_multi_happy_two_pages(tmp_path, monkeypatch):
     assert state["generation"] != case["parent_generation"]
     loaded, errors = support.inc.load_baseline(case["state"])
     assert loaded is not None, errors
-
     candidates = _read_manifest(case)["candidates"]
     expected_request = support.expected_request_id(case, case["plan_data"], candidates)
     expected_transaction = support.expected_transaction_id(expected_request, build["execution_token"])
     assert build["request_id"] == result["request_id"] == expected_request
     assert build["transaction_id"] == result["transaction_id"] == expected_transaction
+    return state, build
 
+
+def _assert_happy_pages(case, result, build):
     expected_provenance_dirs = set()
     for page_key, entry in build["pages"].items():
         managed = case["registry"][page_key]
@@ -115,17 +111,13 @@ def test_multi_happy_two_pages(tmp_path, monkeypatch):
         assert entry["provenance"]["dir"] == expected_dir
         expected_provenance_dirs.add(expected_dir)
         support.verify_provenance(case["root"], entry, case["snapshots"][page_key])
+    for key in ("a", "b", "c"):
+        actual = (case["root"] / f"reports/fixtures/{key}.md").read_bytes()
+        assert actual == case["expected_outputs"][case["page_keys"][key]]
+    return expected_provenance_dirs
 
-    assert (case["root"] / "reports/fixtures/a.md").read_bytes() == case["expected_outputs"][
-        case["page_keys"]["a"]
-    ]
-    assert (case["root"] / "reports/fixtures/b.md").read_bytes() == case["expected_outputs"][
-        case["page_keys"]["b"]
-    ]
-    assert (case["root"] / "reports/fixtures/c.md").read_bytes() == case["expected_outputs"][
-        case["page_keys"]["c"]
-    ]
 
+def _assert_happy_cleanup(case, state, expected_provenance_dirs):
     allowed = {
         "reports/fixtures/a.md",
         "reports/fixtures/b.md",
@@ -137,22 +129,33 @@ def test_multi_happy_two_pages(tmp_path, monkeypatch):
         allowed,
         expected_provenance_dirs,
     )
-
     assert not (case["root"] / "reports/incremental/commit.lock").exists()
     assert not list((case["root"] / "reports/incremental/journal").glob("*"))
     staging = case["root"] / "reports/incremental/staging"
     assert not staging.exists() or not any(staging.rglob("*"))
     backups = case["root"] / "reports/incremental/backups"
     assert not backups.exists() or not any(backups.rglob("*"))
-
     graph = state["graph"].copy()
     graph.pop("generation", None)
     original = copy.deepcopy(case["original_graph"])
     original.pop("generation", None)
     assert support.C(graph) == support.C(original)
-
     current = support.inc.build_plan(case["inputs"], case["state"])
     assert not current["dirty"] and not current["full_required"] and not current["blocked"] and not current["unknown"]
+
+
+def test_multi_happy_two_pages(tmp_path, monkeypatch):
+    case = support.make_multi_case(tmp_path, monkeypatch)
+    api = load_multi_api()
+    _prepare_before(case)
+    report = _precheck(api, case)
+    _assert_happy_precheck(case, report)
+    result = _commit(api, case)
+    assert result["status"] == "committed", result
+    assert result["request_id"] and result["transaction_id"]
+    state, build = _assert_happy_state(case, result)
+    expected_provenance_dirs = _assert_happy_pages(case, result, build)
+    _assert_happy_cleanup(case, state, expected_provenance_dirs)
 
 
 @pytest.mark.parametrize("mutation", ["missing", "extra", "duplicate", "unknown"])

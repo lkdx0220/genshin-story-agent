@@ -147,36 +147,37 @@ def _prepare(scenario, tmp_path, monkeypatch):
     return case
 
 
-def _assert_prepared(case, scenario):
-    root = case["root"]
-    committed = scenario in ("RC03", "RC10", "RC11", "RC14", "RC15")
-    expected_state = case["new_state_bytes"] if committed else case["old_state_bytes"]
-    assert case["state"].read_bytes() == expected_state
-
-    expected_outputs = {key: case["old_outputs"][key] for key in case["keys"]}
-    if scenario in ("RC02", "RC03", "RC05", "RC06", "RC10", "RC11", "RC12", "RC13", "RC14", "RC15"):
-        expected_outputs = {key: case["new_outputs"][key] for key in case["keys"]}
-    elif scenario == "RC01":
+def _expected_prepared_outputs(case, scenario):
+    expected = {key: case["old_outputs"][key] for key in case["keys"]}
+    all_new = ("RC02", "RC03", "RC05", "RC06", "RC10", "RC11", "RC12", "RC13", "RC14", "RC15")
+    if scenario in all_new:
+        expected = {key: case["new_outputs"][key] for key in case["keys"]}
+    elif scenario in ("RC01", "RC07"):
         for key in (case["page_keys"]["a"], case["page_keys"]["b"]):
-            expected_outputs[key] = case["new_outputs"][key]
-    elif scenario == "RC07":
-        for key in (case["page_keys"]["a"], case["page_keys"]["b"]):
-            expected_outputs[key] = case["new_outputs"][key]
+            expected[key] = case["new_outputs"][key]
     elif scenario == "RC08":
-        expected_outputs[case["page_keys"]["c"]] = case["new_outputs"][case["page_keys"]["c"]]
+        key = case["page_keys"]["c"]
+        expected[key] = case["new_outputs"][key]
     if scenario == "RC06":
-        expected_outputs[case["page_keys"]["c"]] = b"third-party"
-    for key, payload in expected_outputs.items():
+        expected[case["page_keys"]["c"]] = b"third-party"
+    return expected
+
+
+def _assert_prepared_outputs(case, scenario):
+    root = case["root"]
+    for key, payload in _expected_prepared_outputs(case, scenario).items():
         output = root / case["registry"][key]["output"]
         assert (output.read_bytes() if output.exists() else None) == payload
 
-    journal_path = root / "reports/incremental/journal" / case["journal_name"]
+
+def _assert_prepared_journal(case, scenario):
+    journal_path = case["root"] / "reports/incremental/journal" / case["journal_name"]
     disk = json.loads(journal_path.read_text(encoding="utf-8"))
     if scenario == "RC10":
         assert disk["status"] == "committed"
-        expected_journal = dict(case["journal"])
-        expected_journal["status"] = "committed"
-        assert disk == expected_journal
+        expected = dict(case["journal"])
+        expected["status"] = "committed"
+        assert disk == expected
     elif scenario == "RC12":
         expected = json.loads(json.dumps(case["journal"]))
         expected["pages"][0]["response"]["sha256"] = "0" * 64
@@ -194,6 +195,9 @@ def _assert_prepared(case, scenario):
     else:
         assert disk == case["journal"]
 
+
+def _assert_prepared_backups(case, scenario):
+    root = case["root"]
     for index, key in enumerate(case["keys"]):
         backup = root / case["backups"][key]["path"]
         if case["old_outputs"][key] is None:
@@ -203,6 +207,9 @@ def _assert_prepared(case, scenario):
         else:
             assert backup.read_bytes() == case["old_outputs"][key]
 
+
+def _assert_prepared_provenance(case, scenario):
+    root = case["root"]
     if scenario == "RC04":
         for key in case["scope"]:
             missing = rs.assert_provenance_subset(root, _journal_page(case, key), case["provenance"][key]["members"])
@@ -214,6 +221,9 @@ def _assert_prepared(case, scenario):
         for key in case["scope"]:
             support.verify_provenance(root, _journal_page(case, key), case["snapshots"][key])
 
+
+def _assert_prepared_sentinels(case):
+    root = case["root"]
     owned = root / case["journal"]["staging_root"]
     assert owned.is_dir() and any(path.is_file() for path in owned.rglob("*"))
     sentinels = [
@@ -225,6 +235,9 @@ def _assert_prepared(case, scenario):
     ]
     for relative in sentinels:
         assert (root / relative).read_bytes() == b"must remain unchanged"
+
+
+def _assert_prepared_plan(case, scenario):
     if scenario == "RC07":
         assert case["plan_data"]["full_required"] is True
         key = case["page_keys"]["a"]
@@ -233,6 +246,18 @@ def _assert_prepared(case, scenario):
         assert case["old_outputs"][case["page_keys"]["c"]] is None
     if scenario == "RC14":
         assert not case["plan"].exists()
+
+
+def _assert_prepared(case, scenario):
+    committed = scenario in ("RC03", "RC10", "RC11", "RC14", "RC15")
+    expected_state = case["new_state_bytes"] if committed else case["old_state_bytes"]
+    assert case["state"].read_bytes() == expected_state
+    _assert_prepared_outputs(case, scenario)
+    _assert_prepared_journal(case, scenario)
+    _assert_prepared_backups(case, scenario)
+    _assert_prepared_provenance(case, scenario)
+    _assert_prepared_sentinels(case)
+    _assert_prepared_plan(case, scenario)
 
 
 def _assert_recovery_required(case, result, before):

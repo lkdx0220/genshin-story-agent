@@ -475,6 +475,103 @@ def clone_with_token(case, token):
     return variant
 
 
+def _validate_journal_header(case, journal):
+    if journal.get("format_version") != 2 or journal.get("protocol") != "b4-02-multi-commit-v1":
+        raise AssertionError("journal version/protocol mismatch")
+    if journal.get("project_root_id") != support.project_root_id(case["root"]):
+        raise AssertionError("project_root_id mismatch")
+    if journal["request_id"] != support.sha256_bytes(support.C(journal["request_payload"])):
+        raise AssertionError("request_id mismatch")
+    if journal["transaction_id"] != support.expected_transaction_id(journal["request_id"], journal["execution_token"]):
+        raise AssertionError("transaction_id mismatch")
+
+
+def _validate_journal_projection_fields(case, journal):
+    payload = journal["request_payload"]
+    if payload["state"] != journal["state"]["path"]:
+        raise AssertionError("state projection mismatch")
+    if payload["inputs"] != journal["inputs"]:
+        raise AssertionError("inputs projection mismatch")
+    if payload["plan_generation"] != journal["plan_generation"]:
+        raise AssertionError("plan generation projection mismatch")
+    if payload["parent_generation"] != journal["parent_generation"]:
+        raise AssertionError("parent generation projection mismatch")
+    if payload["page_keys"] != [page["page_key"] for page in journal["pages"]]:
+        raise AssertionError("page projection mismatch")
+    if journal["plan_generation"] != case["plan_data"]["generation"]:
+        raise AssertionError("plan_generation mismatch")
+    if journal["parent_generation"] != case["parent_generation"]:
+        raise AssertionError("parent_generation mismatch")
+    if journal["staging_root"] != derive_staging_root(case):
+        raise AssertionError("staging owner mismatch")
+
+
+def _validate_state_summary(case, journal):
+    if journal["state"]["path"] != "reports/incremental/state.json":
+        raise AssertionError("state path mismatch")
+    if journal["state"]["old_sha256"] != state_digest(json.loads(case["old_state_bytes"])):
+        raise AssertionError("old state digest mismatch")
+    actual_new_state = json.loads(case["new_state_bytes"])
+    if journal["state"]["new_sha256"] != state_digest(actual_new_state):
+        raise AssertionError("new state digest mismatch")
+    if actual_new_state.get("build", {}).get("pages", {}).keys() != {page["page_key"] for page in journal["pages"]}:
+        raise AssertionError("new state build pages mismatch")
+
+
+def _validate_journal_page(case, page, expected_payload, payload):
+    key = page["page_key"]
+    managed = case["registry"][key]
+    if expected_payload is None:
+        raise AssertionError("payload page missing")
+    if page["response"]["path"] != managed["response"]:
+        raise AssertionError("response path mismatch")
+    if page["response"]["sha256"] != support.sha256_file(Path(case["root"]) / managed["response"]):
+        raise AssertionError("response sha256 mismatch")
+    if expected_payload["output"] != page["output"]["path"]:
+        raise AssertionError("payload output projection mismatch")
+    if page["output"]["path"] != managed["output"]:
+        raise AssertionError("output path mismatch")
+    old_bytes = case["old_outputs"][key]
+    if not isinstance(page["output"]["old_exists"], bool):
+        raise AssertionError("old_exists type mismatch")
+    if page["output"]["old_exists"] != (old_bytes is not None):
+        raise AssertionError("old_exists mismatch")
+    if page["output"]["old_sha256"] != (None if old_bytes is None else sha256_bytes(old_bytes)):
+        raise AssertionError("old output sha mismatch")
+    if page["output"]["new_sha256"] != sha256_bytes(case["new_outputs"][key]):
+        raise AssertionError("new output sha mismatch")
+    if page["backup"]["path"] != case["backups"][key]["path"]:
+        raise AssertionError("backup path mismatch")
+    if page["backup"]["sha256"] != case["backups"][key]["sha256"]:
+        raise AssertionError("backup sha mismatch")
+    if page["provenance"]["dir"] != case["provenance"][key]["dir"]:
+        raise AssertionError("provenance owner mismatch")
+    if page["provenance"]["manifest_sha256"] != case["provenance"][key]["manifest_sha256"]:
+        raise AssertionError("provenance digest mismatch")
+    expected_members = [
+        {"path": path, "sha256": sha256_bytes(payload)}
+        for path, payload in sorted(case["provenance"][key]["members"].items())
+    ]
+    if page["provenance"]["members"] != expected_members:
+        raise AssertionError("provenance members mismatch")
+
+
+def _validate_journal_pages(case, journal, payload):
+    payload_pages = {page["page_key"]: page for page in payload["pages"]}
+    for page in journal["pages"]:
+        _validate_journal_page(case, page, payload_pages.get(page["page_key"]), payload)
+
+
+def validate_journal_projection(case, journal=None):
+    journal = journal or case["journal"]
+    _validate_journal_header(case, journal)
+    _validate_journal_projection_fields(case, journal)
+    _validate_state_summary(case, journal)
+    _validate_journal_pages(case, journal, journal["request_payload"])
+    validate_state_build(case, json.loads(case["new_state_bytes"]))
+    return True
+
+
 def validate_state_build(case, state):
     build = state.get("build")
     if not isinstance(build, dict) or build.get("version") != 2:
@@ -526,81 +623,3 @@ def validate_state_build(case, state):
         raise AssertionError("state/build generation mismatch")
     if state.get("graph", {}).get("generation") != build["generation"]:
         raise AssertionError("graph/build generation mismatch")
-
-
-def validate_journal_projection(case, journal=None):
-    journal = journal or case["journal"]
-    if journal.get("format_version") != 2 or journal.get("protocol") != "b4-02-multi-commit-v1":
-        raise AssertionError("journal version/protocol mismatch")
-    if journal.get("project_root_id") != support.project_root_id(case["root"]):
-        raise AssertionError("project_root_id mismatch")
-    if journal["request_id"] != support.sha256_bytes(support.C(journal["request_payload"])):
-        raise AssertionError("request_id mismatch")
-    if journal["transaction_id"] != support.expected_transaction_id(journal["request_id"], journal["execution_token"]):
-        raise AssertionError("transaction_id mismatch")
-    payload = journal["request_payload"]
-    if payload["state"] != journal["state"]["path"]:
-        raise AssertionError("state projection mismatch")
-    if payload["inputs"] != journal["inputs"]:
-        raise AssertionError("inputs projection mismatch")
-    if payload["plan_generation"] != journal["plan_generation"]:
-        raise AssertionError("plan generation projection mismatch")
-    if payload["parent_generation"] != journal["parent_generation"]:
-        raise AssertionError("parent generation projection mismatch")
-    if payload["page_keys"] != [page["page_key"] for page in journal["pages"]]:
-        raise AssertionError("page projection mismatch")
-    if journal["plan_generation"] != case["plan_data"]["generation"]:
-        raise AssertionError("plan_generation mismatch")
-    if journal["parent_generation"] != case["parent_generation"]:
-        raise AssertionError("parent_generation mismatch")
-    if journal["staging_root"] != derive_staging_root(case):
-        raise AssertionError("staging owner mismatch")
-    if journal["state"]["path"] != "reports/incremental/state.json":
-        raise AssertionError("state path mismatch")
-    if journal["state"]["old_sha256"] != state_digest(json.loads(case["old_state_bytes"])):
-        raise AssertionError("old state digest mismatch")
-    actual_new_state = json.loads(case["new_state_bytes"])
-    if journal["state"]["new_sha256"] != state_digest(actual_new_state):
-        raise AssertionError("new state digest mismatch")
-    if actual_new_state.get("build", {}).get("pages", {}).keys() != {page["page_key"] for page in journal["pages"]}:
-        raise AssertionError("new state build pages mismatch")
-    payload_pages = {page["page_key"]: page for page in payload["pages"]}
-    for page in journal["pages"]:
-        key = page["page_key"]
-        managed = case["registry"][key]
-        expected_payload = payload_pages.get(key)
-        if expected_payload is None:
-            raise AssertionError("payload page missing")
-        if page["response"]["path"] != managed["response"]:
-            raise AssertionError("response path mismatch")
-        if page["response"]["sha256"] != support.sha256_file(Path(case["root"]) / managed["response"]):
-            raise AssertionError("response sha256 mismatch")
-        if expected_payload["output"] != page["output"]["path"]:
-            raise AssertionError("payload output projection mismatch")
-        if page["output"]["path"] != managed["output"]:
-            raise AssertionError("output path mismatch")
-        old_bytes = case["old_outputs"][key]
-        if not isinstance(page["output"]["old_exists"], bool):
-            raise AssertionError("old_exists type mismatch")
-        if page["output"]["old_exists"] != (old_bytes is not None):
-            raise AssertionError("old_exists mismatch")
-        if page["output"]["old_sha256"] != (None if old_bytes is None else sha256_bytes(old_bytes)):
-            raise AssertionError("old output sha mismatch")
-        if page["output"]["new_sha256"] != sha256_bytes(case["new_outputs"][key]):
-            raise AssertionError("new output sha mismatch")
-        if page["backup"]["path"] != case["backups"][key]["path"]:
-            raise AssertionError("backup path mismatch")
-        if page["backup"]["sha256"] != case["backups"][key]["sha256"]:
-            raise AssertionError("backup sha mismatch")
-        if page["provenance"]["dir"] != case["provenance"][key]["dir"]:
-            raise AssertionError("provenance owner mismatch")
-        if page["provenance"]["manifest_sha256"] != case["provenance"][key]["manifest_sha256"]:
-            raise AssertionError("provenance digest mismatch")
-        expected_members = [
-            {"path": path, "sha256": sha256_bytes(payload)}
-            for path, payload in sorted(case["provenance"][key]["members"].items())
-        ]
-        if page["provenance"]["members"] != expected_members:
-            raise AssertionError("provenance members mismatch")
-    validate_state_build(case, json.loads(case["new_state_bytes"]))
-    return True

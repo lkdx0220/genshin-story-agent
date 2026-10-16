@@ -18,9 +18,10 @@
     "b203-nb02-compat-01-20261016",
     "b203-i5-cli-capability-20261016",
     "b203-q1-cleanup-20261016",
-    "b203-q1-r01-fix-20261016"
+    "b203-q1-r01-fix-20261016",
+    "b203-q1-r02-evidence-20261016"
   ],
-  "current_snapshot_id": "b203-q1-r01-fix-20261016",
+  "current_snapshot_id": "b203-q1-r02-evidence-20261016",
   "project_root": "C:/Users/24701/Desktop/原神剧情/CASE-原神剧情助手-修改用",
   "run_scope": {
     "core": [

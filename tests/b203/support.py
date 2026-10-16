@@ -439,11 +439,7 @@ def expected_provenance_dir(case, transaction_id, page_key):
     return f"reports/incremental/provenance/{transaction_id}/{slug}"
 
 
-def verify_provenance(root, page_entry, expected_snapshots):
-    provenance = page_entry["provenance"]
-    directory = Path(root) / provenance["dir"]
-    if not directory.is_dir():
-        raise AssertionError(f"provenance dir missing: {directory}")
+def _load_provenance(directory, provenance):
     manifest_path = directory / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("protocol") != "b4-02-provenance-v1":
@@ -475,15 +471,20 @@ def verify_provenance(root, page_entry, expected_snapshots):
     required = {"ingest-report.json", "ingest-prompt.txt", "sources.json", "spans.jsonl", "paragraph-index.json"}
     if not required <= set(paths):
         raise AssertionError(f"provenance missing required evidence: {sorted(required - set(paths))}")
-    manifest_hashes = {item["path"]: item["sha256"] for item in files}
+    manifest_hashes = {}
     for item in files:
         data = actual[item["path"]]
         if not data:
             raise AssertionError(f"provenance evidence empty: {item['path']}")
         if sha256_bytes(data) != item["sha256"]:
             raise AssertionError(f"provenance member hash mismatch: {item['path']}")
+        manifest_hashes[item["path"]] = item["sha256"]
     if sha256_bytes(C(manifest)) != provenance["manifest_sha256"]:
         raise AssertionError("provenance manifest sha256 mismatch")
+    return manifest_hashes, actual
+
+
+def _verify_provenance_snapshots(directory, actual, expected_snapshots, manifest_hashes):
     if not expected_snapshots:
         raise AssertionError("expected snapshots must be provided")
     sources = json.loads((directory / "sources.json").read_text(encoding="utf-8"))
@@ -507,15 +508,17 @@ def verify_provenance(root, page_entry, expected_snapshots):
     if report.get("publication") != "draft_only":
         raise AssertionError("provenance ingest report is not draft_only")
 
-def assert_multi_success(case, result, before_files, expected_scope, candidates):
-    if result.get("status") != "committed":
-        raise AssertionError(f"commit not committed: {result}")
-    state = json.loads(Path(case["state"]).read_text(encoding="utf-8"))
-    if state.get("format_version") != 1:
-        raise AssertionError("state format_version must be 1")
-    build = state.get("build")
-    if not isinstance(build, dict) or build.get("version") != 2:
-        raise AssertionError("build.version must be 2")
+
+def verify_provenance(root, page_entry, expected_snapshots):
+    provenance = page_entry["provenance"]
+    directory = Path(root) / provenance["dir"]
+    if not directory.is_dir():
+        raise AssertionError(f"provenance dir missing: {directory}")
+    manifest_hashes, actual = _load_provenance(directory, provenance)
+    _verify_provenance_snapshots(directory, actual, expected_snapshots, manifest_hashes)
+
+
+def _assert_build_identity(case, state, build, result, expected_scope, candidates):
     loaded, errors = inc.load_baseline(case["state"])
     if loaded is None:
         raise AssertionError(f"state invalid: {errors}")
@@ -535,14 +538,16 @@ def assert_multi_success(case, result, before_files, expected_scope, candidates)
     for entry in (build.get("pages") or {}).values():
         if entry.get("generation") != state["generation"]:
             raise AssertionError("page generation mismatch")
-
     request_id = expected_request_id(case, case["plan_data"], candidates)
     if build.get("request_id") != request_id or result.get("request_id") != request_id:
         raise AssertionError("request_id mismatch")
     transaction_id = expected_transaction_id(request_id, build.get("execution_token"))
     if build.get("transaction_id") != transaction_id or result.get("transaction_id") != transaction_id:
         raise AssertionError("transaction_id mismatch")
+    return ordered
 
+
+def _assert_page_entries(case, result, build, ordered):
     allowed = {"reports/incremental/state.json"}
     provenance_dirs = set()
     for page_key in ordered:
@@ -552,11 +557,9 @@ def assert_multi_success(case, result, before_files, expected_scope, candidates)
             raise AssertionError("response path mismatch")
         if entry.get("output", {}).get("path") != managed["output"]:
             raise AssertionError("output path mismatch")
-        expected_response = sha256_file(Path(case["root"]) / managed["response"])
-        expected_output = sha256_file(Path(case["root"]) / managed["output"])
-        if entry["response"].get("sha256") != expected_response:
+        if entry["response"].get("sha256") != sha256_file(Path(case["root"]) / managed["response"]):
             raise AssertionError("response sha256 mismatch")
-        if entry["output"].get("sha256") != expected_output:
+        if entry["output"].get("sha256") != sha256_file(Path(case["root"]) / managed["output"]):
             raise AssertionError("output sha256 mismatch")
         if (Path(case["root"]) / managed["output"]).read_bytes() != case["expected_outputs"][page_key]:
             raise AssertionError("output bytes mismatch")
@@ -566,7 +569,10 @@ def assert_multi_success(case, result, before_files, expected_scope, candidates)
         provenance_dirs.add(expected_dir)
         verify_provenance(case["root"], entry, case["snapshots"][page_key])
         allowed.add(managed["output"])
-    assert_allowed_changes(before_files, snapshot_files(case["root"]), allowed, provenance_dirs)
+    return allowed, provenance_dirs
+
+
+def _assert_multi_cleanup(case, state, ordered):
     if (Path(case["root"]) / "reports/incremental/commit.lock").exists():
         raise AssertionError("lock left behind")
     if list((Path(case["root"]) / "reports/incremental/journal").glob("*")):
@@ -586,6 +592,21 @@ def assert_multi_success(case, result, before_files, expected_scope, candidates)
     for page_key in ordered:
         if ("page", page_key) not in page_nodes:
             raise AssertionError(f"graph missing page node: {page_key}")
+
+
+def assert_multi_success(case, result, before_files, expected_scope, candidates):
+    if result.get("status") != "committed":
+        raise AssertionError(f"commit not committed: {result}")
+    state = json.loads(Path(case["state"]).read_text(encoding="utf-8"))
+    if state.get("format_version") != 1:
+        raise AssertionError("state format_version must be 1")
+    build = state.get("build")
+    if not isinstance(build, dict) or build.get("version") != 2:
+        raise AssertionError("build.version must be 2")
+    ordered = _assert_build_identity(case, state, build, result, expected_scope, candidates)
+    allowed, provenance_dirs = _assert_page_entries(case, result, build, ordered)
+    assert_allowed_changes(before_files, snapshot_files(case["root"]), allowed, provenance_dirs)
+    _assert_multi_cleanup(case, state, ordered)
 
 
 def staging_injection_target(response_file, output, root, target_hash):

@@ -1,9 +1,9 @@
 {
   "format_version": 3,
-  "snapshot_id": "b203-q1-r01-fix-20261016",
-  "created_at": "2026-10-16T13:21:53",
-  "parent_snapshot_id": "b203-q1-cleanup-20261016",
-  "parent_snapshot_file": "snapshots/b203-q1-cleanup-20261016.json",
+  "snapshot_id": "b203-q1-r02-evidence-20261016",
+  "created_at": "2026-10-16T14:53:09",
+  "parent_snapshot_id": "b203-q1-r01-fix-20261016",
+  "parent_snapshot_file": "snapshots/b203-q1-r01-fix-20261016.json",
   "historical_source_complete": false,
   "project_root": "C:\\Users\\24701\\Desktop\\原神剧情\\CASE-原神剧情助手-修改用",
   "managed_roots": [
@@ -39,7 +39,7 @@
     },
     {
       "path": "openspec/changes/016-multi-page-commit/contract-registry.md",
-      "sha256": "b04e650b36b0aed579c06532a780962232a66b74e73300e0ed0a29af8860887b"
+      "sha256": "3f428732ee74976c7fefba1d13ecbae7aa60afcb3cf4d16dcb811a06ce8ea1f2"
     },
     {
       "path": "openspec/changes/016-multi-page-commit/proposal.md",
@@ -47,7 +47,7 @@
     },
     {
       "path": "openspec/changes/016-multi-page-commit/tasks.md",
-      "sha256": "9859a8f85636d558fa4eb8e19d0129282e62012d68c00ca1daf297d352be98e1"
+      "sha256": "73de8f023256e2a326bb21979b8828466d50b41d57784554b9f3b92b767bcd92"
     },
     {
       "path": "scripts/check_b203_contracts.py",
@@ -99,15 +99,15 @@
     },
     {
       "path": "tests/b203/contract_manifest.json",
-      "sha256": "2ebafb206dc78d44d4ee4a53c7492627d9dad20b453c149ae2c1c8c8d515fe7b"
+      "sha256": "2de3055af4355a7dea943f8b14d5b006622ab63d0b627135ecc4a360d49b688c"
     },
     {
       "path": "tests/b203/recovery_support.py",
-      "sha256": "2d6a9f9c236f6a7de1ba762e1b387c2dd8740842c96170f7e8775b6de0e2cc5a"
+      "sha256": "c7aeee3a6aad61292a13716258f4ea160716759fdd305ce19c0c4e6744284113"
     },
     {
       "path": "tests/b203/support.py",
-      "sha256": "01c49a1df5d9ae66967ece609d613bad2339e8af136702b5a9f64d85f5e1ed55"
+      "sha256": "a4b720bd602456b7cc1ca53434052c2dbd967ddb9884528db49ca6c523992b4a"
     },
     {
       "path": "tests/b203/t1c-case-matrix.md",
@@ -131,7 +131,7 @@
     },
     {
       "path": "tests/b203/test_multi_entry_contract.py",
-      "sha256": "70a4bf010a8870959b06f9d4e73849c8dd62e1c111fefdd59d81db816efedf55"
+      "sha256": "9ce93708cdebca596f73bd9ce40608524b2d18b660b641acd81b2f7e1aebf739"
     },
     {
       "path": "tests/b203/test_process_faults.py",
@@ -139,7 +139,7 @@
     },
     {
       "path": "tests/b203/test_recovery_entry_contract.py",
-      "sha256": "f67d6c88eafc243cf6418e0cb723c1ee6eda7780adf7d70727c833a920d694b9"
+      "sha256": "ca022af0460256d82cc84364f3e3f87aca6220b67ee03ef75bc6cd5b07d3e6dc"
     },
     {
       "path": "tests/b203/test_recovery_faults.py",
