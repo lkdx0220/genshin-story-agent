@@ -23,7 +23,7 @@ PROTOCOL_VERSION = "b4-01-plan-v1"
 EXECUTION_PROTOCOL = "b4-02-execution-v1"
 CAPABILITY_DEFAULT = {
     "single_page_commit": False,
-    "multi_page_commit": False,
+    "multi_page_commit": True,
     "bootstrap": False,
     "removal": False,
     "runtime_stale": False,

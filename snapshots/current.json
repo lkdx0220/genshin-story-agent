@@ -1,9 +1,9 @@
 {
   "format_version": 3,
-  "snapshot_id": "b203-q1-r02-evidence-20261016",
-  "created_at": "2026-10-16T14:53:09",
-  "parent_snapshot_id": "b203-q1-r01-fix-20261016",
-  "parent_snapshot_file": "snapshots/b203-q1-r01-fix-20261016.json",
+  "snapshot_id": "b203-capability-enabled-20261016",
+  "created_at": "2026-10-16T15:43:16",
+  "parent_snapshot_id": "b203-q1-r02-evidence-20261016",
+  "parent_snapshot_file": "snapshots/b203-q1-r02-evidence-20261016.json",
   "historical_source_complete": false,
   "project_root": "C:\\Users\\24701\\Desktop\\原神剧情\\CASE-原神剧情助手-修改用",
   "managed_roots": [
@@ -39,7 +39,7 @@
     },
     {
       "path": "openspec/changes/016-multi-page-commit/contract-registry.md",
-      "sha256": "3f428732ee74976c7fefba1d13ecbae7aa60afcb3cf4d16dcb811a06ce8ea1f2"
+      "sha256": "12fad665cc8b8d8608a956aeddf3c7b367f1da00fc711f9eb5a4fde0b5d9f71c"
     },
     {
       "path": "openspec/changes/016-multi-page-commit/proposal.md",
@@ -47,7 +47,7 @@
     },
     {
       "path": "openspec/changes/016-multi-page-commit/tasks.md",
-      "sha256": "73de8f023256e2a326bb21979b8828466d50b41d57784554b9f3b92b767bcd92"
+      "sha256": "2883237d7b5e352328b347cf5a803c10aa4441c0868786164fe7624af9829a3b"
     },
     {
       "path": "scripts/check_b203_contracts.py",
@@ -99,7 +99,7 @@
     },
     {
       "path": "tests/b203/contract_manifest.json",
-      "sha256": "2de3055af4355a7dea943f8b14d5b006622ab63d0b627135ecc4a360d49b688c"
+      "sha256": "e21f766c4eb7d7ca486cbe1d7a02f266f14d59a0f452150a9dc8b064aa7c0bf3"
     },
     {
       "path": "tests/b203/recovery_support.py",
@@ -127,7 +127,7 @@
     },
     {
       "path": "tests/b203/test_i5_cli_capability.py",
-      "sha256": "a1a02dea596cb2e7a7b27516673b28b525c577f252d49c278b61ed6e05ba374b"
+      "sha256": "e33cdfb0580a3611d1d824907ab4f4a791df61a7f19e257da45b97f3a5c449b4"
     },
     {
       "path": "tests/b203/test_multi_entry_contract.py",

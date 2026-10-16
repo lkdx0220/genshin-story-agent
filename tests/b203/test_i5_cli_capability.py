@@ -16,11 +16,11 @@ def _paths(case):
     ]
 
 
-def test_i5_capability_remains_false_before_q1(tmp_path, monkeypatch):
+def test_i5_capability_enabled_after_q1(tmp_path, monkeypatch):
     case = support.make_multi_case(tmp_path, monkeypatch)
     report = api.precheck_rebuild(case["plan"], case["state"], case["config"], case["manifest"])
     assert report["action"] == "multi_page", report
-    assert report["capability"]["multi_page_commit"] is False
+    assert report["capability"]["multi_page_commit"] is True
     assert report["capability"]["single_page_commit"] is False
 
 
@@ -29,7 +29,7 @@ def test_i5_cli_precheck_and_commit(tmp_path, monkeypatch, capsys):
     assert api.main(["precheck"] + _paths(case)) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["action"] == "multi_page", report
-    assert report["capability"]["multi_page_commit"] is False
+    assert report["capability"]["multi_page_commit"] is True
 
     assert api.main(["commit"] + _paths(case)) == 0
     result = json.loads(capsys.readouterr().out)

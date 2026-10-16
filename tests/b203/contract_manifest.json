@@ -19,9 +19,10 @@
     "b203-i5-cli-capability-20261016",
     "b203-q1-cleanup-20261016",
     "b203-q1-r01-fix-20261016",
-    "b203-q1-r02-evidence-20261016"
+    "b203-q1-r02-evidence-20261016",
+    "b203-capability-enabled-20261016"
   ],
-  "current_snapshot_id": "b203-q1-r02-evidence-20261016",
+  "current_snapshot_id": "b203-capability-enabled-20261016",
   "project_root": "C:/Users/24701/Desktop/原神剧情/CASE-原神剧情助手-修改用",
   "run_scope": {
     "core": [
@@ -186,7 +187,7 @@
       "tests/b203/test_i1i2_fix_contract.py::test_i12_r04_success_preserves_sibling_staging",
       "tests/b203/test_i1i2_fix_contract.py::test_i12_r05_recover_respects_project_lock",
       "tests/b203/test_i5_cli_capability.py::test_i5_b201_remains_read_only_and_rejects_multi",
-      "tests/b203/test_i5_cli_capability.py::test_i5_capability_remains_false_before_q1",
+      "tests/b203/test_i5_cli_capability.py::test_i5_capability_enabled_after_q1",
       "tests/b203/test_i5_cli_capability.py::test_i5_cli_precheck_and_commit",
       "tests/b203/test_i5_cli_capability.py::test_i5_single_page_still_delegates_to_b202",
       "tests/b203/test_multi_entry_contract.py::test_multi_candidate_binding_mismatch",
