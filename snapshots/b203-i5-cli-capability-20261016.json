@@ -1,0 +1,157 @@
+{
+  "format_version": 3,
+  "snapshot_id": "b203-i5-cli-capability-20261016",
+  "created_at": "2026-10-16T11:24:26",
+  "parent_snapshot_id": "b203-nb02-compat-01-20261016",
+  "parent_snapshot_file": "snapshots/b203-nb02-compat-01-20261016.json",
+  "historical_source_complete": false,
+  "project_root": "C:\\Users\\24701\\Desktop\\原神剧情\\CASE-原神剧情助手-修改用",
+  "managed_roots": [
+    "tests/b203",
+    "openspec/changes/016-multi-page-commit",
+    "docs/b203-review-protocol.md",
+    "docs/b203-backlog.md",
+    "docs/b203-gpt-review-contract.md",
+    "scripts/check_b203_contracts.py",
+    "app/rebuild_multi.py",
+    "app/rebuild_multi_recovery.py"
+  ],
+  "files": [
+    {
+      "path": "app/rebuild_multi.py",
+      "sha256": "49fabcb43642edaadc11867fc3f674d00b76389369d22fbbde5e1b5ddf433eff"
+    },
+    {
+      "path": "app/rebuild_multi_recovery.py",
+      "sha256": "cf3e6f4a8c93090802beaa8a8ac43ec47b0d26f87d30585531ac29b67c0e69ee"
+    },
+    {
+      "path": "docs/b203-backlog.md",
+      "sha256": "5c0dd9547de73c652fe390c39ac957e8689868a13724f70c6883c242ec8c343d"
+    },
+    {
+      "path": "docs/b203-gpt-review-contract.md",
+      "sha256": "072941e488b082a0b6a445ab1aff4a36cb711f0e57c4a7cd0bdbf0287cd83f4a"
+    },
+    {
+      "path": "docs/b203-review-protocol.md",
+      "sha256": "cd226ff98f67616d1bc12443d5728fd73356992ed534c597ee842a0fbc3462a5"
+    },
+    {
+      "path": "openspec/changes/016-multi-page-commit/contract-registry.md",
+      "sha256": "7e029e9d5013ddbdeea0b491f3f1908210c01ee2c8aa13e6a9892ff1a695a56f"
+    },
+    {
+      "path": "openspec/changes/016-multi-page-commit/proposal.md",
+      "sha256": "355ae7c71afb5548463e26d6bd91ed9455e4905c4ceb4999061caef65e540e22"
+    },
+    {
+      "path": "openspec/changes/016-multi-page-commit/tasks.md",
+      "sha256": "06436eff7a9ae5375ceaab143c9f02ce26a5123c7d5a6832c9c30e9143f6b4cd"
+    },
+    {
+      "path": "scripts/check_b203_contracts.py",
+      "sha256": "7eb1676b2621ecffee8c9f561f661d40ab09e57fec785c9c635ed0563a363ac1"
+    },
+    {
+      "path": "tests/b203/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "tests/b203/child_commit.py",
+      "sha256": "f6e18c9a1bc21e61ad09dba0500181eb7d20255c4a4b3f80bf0a500ba6966e85"
+    },
+    {
+      "path": "tests/b203/compat/README.md",
+      "sha256": "df7d58a70a3cdaefea1591962cfe96d568c822da575bff11f72292654c59e346"
+    },
+    {
+      "path": "tests/b203/compat/probe_c2_residual.py",
+      "sha256": "a7ec0cbb20cfbe1436b289f0aa900674fc8ded94ab698343af57f895e9c6f576"
+    },
+    {
+      "path": "tests/b203/compat/probe_g10_closure.py",
+      "sha256": "98f79a329c2cde04aba49cb173a47521862eab34652224c351d2ce9dab7d360d"
+    },
+    {
+      "path": "tests/b203/compat/probe_independent_c1.py",
+      "sha256": "a8317aef1d92f3d724d7735f7bdd813e63acb53799267c62f1a312fc1ab1c6bc"
+    },
+    {
+      "path": "tests/b203/compat/probe_independent_c2.py.orig",
+      "sha256": "850886e1bef4a635f2c35a9b3ab4c75333a329edd66417dcabdf9043c115fcb3"
+    },
+    {
+      "path": "tests/b203/compat/probe_legacy_adapted_c2.py",
+      "sha256": "17d395139878db1af8c658cc27b14ae5850b1a5ed6db7521f01326d32a340774"
+    },
+    {
+      "path": "tests/b203/compat/probe_optional_cleanup_parents.py",
+      "sha256": "27ded1d6f5a3e8b66c326cce9db48ce493fc8679c0e298a6e93d3adfbd3ad98b"
+    },
+    {
+      "path": "tests/b203/compat/probe_portability.py",
+      "sha256": "99a7c0f731cebe74e6d25a085b6d7298b91380b83f8c005dfa8adbcefcb44e5c"
+    },
+    {
+      "path": "tests/b203/compat/probe_residual_c1.py",
+      "sha256": "b24e3fd592f47702261179737d3c72e89800ce5f8414a8ea52c2cf881eaf40b0"
+    },
+    {
+      "path": "tests/b203/contract_manifest.json",
+      "sha256": "6a32ce97b08e6bbdc2bb1bdd50d8fd86cf93f2b7a2de7b638014ac2330ef406a"
+    },
+    {
+      "path": "tests/b203/recovery_support.py",
+      "sha256": "2d6a9f9c236f6a7de1ba762e1b387c2dd8740842c96170f7e8775b6de0e2cc5a"
+    },
+    {
+      "path": "tests/b203/support.py",
+      "sha256": "01c49a1df5d9ae66967ece609d613bad2339e8af136702b5a9f64d85f5e1ed55"
+    },
+    {
+      "path": "tests/b203/t1c-case-matrix.md",
+      "sha256": "229d8f27572425eccad03338ba1e1cc52f8f05803c45838195c0d0e1d43129b4"
+    },
+    {
+      "path": "tests/b203/test_fixture_contract.py",
+      "sha256": "984b5f52c68db7f9977fd797a6ba3aec5519a7850730fc7a3937247caf818b36"
+    },
+    {
+      "path": "tests/b203/test_governance_gate_contract.py",
+      "sha256": "b59b9f44920ae85347f8d917da8fc11ea263ce9dd2a94333d45b17c66f64b25a"
+    },
+    {
+      "path": "tests/b203/test_i1i2_fix_contract.py",
+      "sha256": "a3a56fb3d100e0a3d17be2b7c0236aeefc463e14ccce1ac536ddb1ffa1999103"
+    },
+    {
+      "path": "tests/b203/test_i5_cli_capability.py",
+      "sha256": "a1a02dea596cb2e7a7b27516673b28b525c577f252d49c278b61ed6e05ba374b"
+    },
+    {
+      "path": "tests/b203/test_multi_entry_contract.py",
+      "sha256": "70a4bf010a8870959b06f9d4e73849c8dd62e1c111fefdd59d81db816efedf55"
+    },
+    {
+      "path": "tests/b203/test_process_faults.py",
+      "sha256": "3b933323059e0f14d3769080b01d5476a34c17203b15ad2381a0717aa2d5405c"
+    },
+    {
+      "path": "tests/b203/test_recovery_entry_contract.py",
+      "sha256": "f67d6c88eafc243cf6418e0cb723c1ee6eda7780adf7d70727c833a920d694b9"
+    },
+    {
+      "path": "tests/b203/test_recovery_faults.py",
+      "sha256": "fad1b8b94c35050fc5ca749870d77c2a80dfee91e80f7c999031bcafae5050d9"
+    },
+    {
+      "path": "tests/b203/test_recovery_fixture_contract.py",
+      "sha256": "33e1c588381a676569c98bcf636018c0e6f1cab8ec18dc02dd4860cf25da76a3"
+    },
+    {
+      "path": "tests/b203/test_t1b_contract.py",
+      "sha256": "e17e2a30e384ce0b6231a5a184e86458635f3b9b6139a05d7b744be8080403aa"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "format_version": 3,
+  "snapshot_id": "b203-review-audit-20261015-selected",
+  "created_at": "2026-10-15T00:00:00",
+  "parent_snapshot_id": null,
+  "parent_snapshot_file": null,
+  "historical_source_complete": false,
+  "source": "B203-review-selected-baseline-20261015.json",
+  "scope": "selected_review_files_and_partial_contract_inventory",
+  "project_root": "C:/Users/24701/Desktop/原神剧情/CASE-原神剧情助手-修改用",
+  "files": [
+    {
+      "path": "tests/b203/support.py",
+      "sha256": "01c49a1df5d9ae66967ece609d613bad2339e8af136702b5a9f64d85f5e1ed55"
+    },
+    {
+      "path": "tests/b203/test_fixture_contract.py",
+      "sha256": "984b5f52c68db7f9977fd797a6ba3aec5519a7850730fc7a3937247caf818b36"
+    },
+    {
+      "path": "tests/b203/test_multi_entry_contract.py",
+      "sha256": "70a4bf010a8870959b06f9d4e73849c8dd62e1c111fefdd59d81db816efedf55"
+    },
+    {
+      "path": "tests/b203/test_t1b_contract.py",
+      "sha256": "e17e2a30e384ce0b6231a5a184e86458635f3b9b6139a05d7b744be8080403aa"
+    },
+    {
+      "path": "tests/b203/recovery_support.py",
+      "sha256": "2d6a9f9c236f6a7de1ba762e1b387c2dd8740842c96170f7e8775b6de0e2cc5a"
+    },
+    {
+      "path": "tests/b203/test_recovery_fixture_contract.py",
+      "sha256": "33e1c588381a676569c98bcf636018c0e6f1cab8ec18dc02dd4860cf25da76a3"
+    },
+    {
+      "path": "tests/b203/test_recovery_entry_contract.py",
+      "sha256": "5f7a44b5c26108a5ed3254574a8cb9df92ffce9abf8e482a71f601c1fc3650d3"
+    },
+    {
+      "path": "openspec/changes/016-multi-page-commit/proposal.md",
+      "sha256": "2a9107cbb7122de9db9ac75e7e31a3b44178d3cdfb9974efb4bb2f22c9baeb26"
+    },
+    {
+      "path": "openspec/changes/016-multi-page-commit/tasks.md",
+      "sha256": "10878440fae1d8dca7c7b12549ec81e9180dc4efc3b689a100fc55bfd538386e"
+    }
+  ]
+}

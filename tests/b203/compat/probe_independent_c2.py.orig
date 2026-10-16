@@ -1,0 +1,151 @@
+"""Audit C2 test assets without implementing or mocking recovery."""
+
+import importlib
+import json
+import shutil
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+PROJECT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(PROJECT))
+sys.path.insert(0, str(PROJECT / "tests"))
+batch = importlib.import_module("b203.test_recovery_entry_contract")
+rs = importlib.import_module("b203.recovery_support")
+
+
+@pytest.mark.parametrize("kind", ["missing_api", "internal_dependency", "syntax", "present"])
+def test_loader_classification(monkeypatch, kind):
+    module = SimpleNamespace()
+    if kind == "missing_api":
+        error = ModuleNotFoundError("missing API", name="app.rebuild_multi")
+    elif kind == "internal_dependency":
+        error = ModuleNotFoundError("missing dependency", name="internal_dependency")
+    else:
+        error = SyntaxError("broken syntax")
+
+    def import_boundary(name):
+        assert name == "app.rebuild_multi"
+        if kind == "present":
+            return module
+        raise error
+
+    monkeypatch.setattr(batch.importlib, "import_module", import_boundary)
+    if kind == "present":
+        assert batch.load_recover_api() is module
+    elif kind == "missing_api":
+        with pytest.raises(pytest.fail.Exception, match="^B203_API_MISSING: app.rebuild_multi$"):
+            batch.load_recover_api()
+    else:
+        with pytest.raises(type(error)) as caught:
+            batch.load_recover_api()
+        assert caught.value is error
+
+
+def test_preparation_failure_is_not_masked_by_missing_api(tmp_path, monkeypatch):
+    class PreparationFailure(Exception):
+        pass
+
+    def broken_prepare(*args):
+        raise PreparationFailure("scenario assembly must execute before import")
+
+    monkeypatch.setattr(batch, "_prepare", broken_prepare)
+    with pytest.raises(PreparationFailure):
+        batch.test_c2_public_recover("RC01", tmp_path, monkeypatch)
+
+
+@pytest.mark.parametrize("scenario", [f"RC{i:02}" for i in range(1, 16)])
+def test_scenarios_can_be_assembled_independently(tmp_path, monkeypatch, scenario):
+    case = batch._prepare(scenario, tmp_path, monkeypatch)
+    assert rs.validate_journal_projection(case)
+    disk = json.loads((case["root"] / "reports/incremental/journal" / case["journal_name"]).read_bytes())
+    assert disk["request_id"] == case["request_id"]
+    assert disk["transaction_id"] == case["txid"]
+    if scenario in ("RC12", "RC13"):
+        message = "response sha256 mismatch" if scenario == "RC12" else "staging owner mismatch"
+        with pytest.raises(AssertionError) as caught:
+            rs.validate_journal_projection(case, disk)
+        assert str(caught.value) == message
+    else:
+        assert rs.validate_journal_projection(case, disk)
+    committed = scenario in ("RC03", "RC10", "RC11", "RC14", "RC15")
+    assert case["state"].read_bytes() == case["new_state_bytes" if committed else "old_state_bytes"]
+    for index, key in enumerate(case["keys"]):
+        if scenario == "RC06" and index == 2:
+            expected = b"third-party"
+        elif scenario in ("RC02", "RC03", "RC05", "RC06", "RC10", "RC11", "RC12", "RC13", "RC14", "RC15"):
+            expected = case["new_outputs"][key]
+        elif scenario in ("RC01", "RC07") and index < 2:
+            expected = case["new_outputs"][key]
+        elif scenario == "RC08" and index == 2:
+            expected = case["new_outputs"][key]
+        else:
+            expected = case["old_outputs"][key]
+        path = case["root"] / case["registry"][key]["output"]
+        assert (path.read_bytes() if path.exists() else None) == expected
+    if scenario == "RC14":
+        assert not case["plan"].exists()
+    if scenario == "RC07":
+        assert case["plan_data"]["full_required"] is True
+        assert case["old_outputs"][case["page_keys"]["a"]] == case["new_outputs"][case["page_keys"]["a"]]
+    if scenario == "RC08":
+        assert case["old_outputs"][case["page_keys"]["c"]] is None
+
+
+@pytest.mark.parametrize("errors", ["anything", ["unrelated_error:wrong.json"], {"error": "anything"}])
+def test_rejection_assertion_rejects_wrong_diagnostics(tmp_path, monkeypatch, errors):
+    case = batch._prepare("RC05", tmp_path, monkeypatch)
+    before = rs.snapshot_recovery_resources(case)
+    with pytest.raises(AssertionError):
+        batch._assert_recovery_required(case, {"status": "recovery_required", "errors": errors}, before)
+
+
+def _materialize_expected_new_cleanup(case):
+    # Assemble an assertion target directly; this is not a recovery substitute.
+    assert case["state"].read_bytes() == case["_expected_state"]
+    (case["root"] / "reports/incremental/journal" / case["journal_name"]).unlink()
+    backups = case["root"] / "reports/incremental/backups" / case["txid"]
+    if backups.exists():
+        shutil.rmtree(backups)
+
+
+def test_success_assertion_detects_protected_input_mutation(tmp_path, monkeypatch):
+    case = batch._prepare("RC03", tmp_path, monkeypatch)
+    _materialize_expected_new_cleanup(case)
+    batch._assert_ok(case, {"status": "ok", "resolved": 1})
+    response = case["root"] / case["registry"][case["keys"][0]]["response"]
+    response.write_bytes(response.read_bytes() + b"\nchanged protected input\n")
+    with pytest.raises(AssertionError):
+        batch._assert_ok(case, {"status": "ok", "resolved": 1})
+
+
+def test_success_assertion_accepts_preserved_sibling_token(tmp_path, monkeypatch):
+    case = batch._prepare("RC03", tmp_path, monkeypatch)
+    sibling = case["root"] / "reports/incremental/staging" / case["txid"] / "sibling-token/sentinel.txt"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_bytes(b"preserve sibling token")
+    _materialize_expected_new_cleanup(case)
+    batch._assert_ok(case, {"status": "ok", "resolved": 1})
+    assert sibling.read_bytes() == b"preserve sibling token"
+
+
+def test_c2_materializes_owned_staging_content(tmp_path, monkeypatch):
+    case = batch._prepare("RC03", tmp_path, monkeypatch)
+    owned = case["root"] / case["journal"]["staging_root"]
+    assert owned.is_dir(), "staging cleanup must start with an owned directory"
+    assert any(path.is_file() for path in owned.rglob("*")), "staging cleanup must have real content"
+
+
+@pytest.mark.parametrize("scenario", ["RC05", "RC09", "RC10"])
+def test_missing_backup_scenarios_retain_other_page_backups(tmp_path, monkeypatch, scenario):
+    case = batch._prepare(scenario, tmp_path, monkeypatch)
+    present = [(case["root"] / case["backups"][key]["path"]).exists() for key in case["keys"]]
+    assert present == [True, True, False], "only the last page backup should be absent"
+
+
+def test_ownership_attack_has_real_sibling_sentinels(tmp_path, monkeypatch):
+    case = batch._prepare("RC13", tmp_path, monkeypatch)
+    owner = case["root"] / "reports/incremental/staging" / case["txid"]
+    assert owner.exists() and any(path.is_file() for path in owner.rglob("*")), "ownership attack needs real sentinel resources"
