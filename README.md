@@ -107,6 +107,24 @@ L2: Plan Agent → 工具调用（36 tools，常规暴露 35）→ 熔断截断 
 - **Wiki 链接图**：`wiki_graph_search` / `wiki_graph_expand` / `wiki_graph_get` 三工具基于观测枢 `data-entry-id` 链接图，支持跨任务/地图文本/角色/物品多跳检索；全量图构建脚本见 `wiki_entry_graph.py` + `wiki_data_tools/_fetch_mihoyo_channel.py`
 - **L3 全景连锁**：全景正则 + ≥2 个任务标题命中后，代码确定性加载任务全文、地图文本、实体提及索引反向边、说话人与图谱一跳扩展，拼成 `[全景全文读取]`，再交给 qwen3.8-max 按 task/entity/map/synthesis 分段并行生成
 
+## Wiki 本地证据通道（R08，默认关闭）
+
+2026-10 起，检索侧新增一条**独立的本地证据通道**，采用"绞杀者"接法：新实现单独成包，旧逻辑原样保留，靠环境变量决定走哪条。
+
+| 项 | 说明 |
+|---|---|
+| 代码位置 | `app/wiki_evidence/`（`store.py` 证据仓、`canonical_local.py` 本地取证、`bridge.py` 接线与校验、`canonical_bridge.py` 投影与信封校验）|
+| 开关 | `LLM_WIKI_MODE`，取值 `off`（默认）/ `finite` / `agent_evidence` |
+| **默认行为** | **不设该变量 = `off` = 完全走原有链路**，用户无感知 |
+| 开启方式 | `LLM_WIKI_MODE=agent_evidence` 后重启服务 |
+| 回滚方式 | 删除该变量（或设为 `off`）后重启，立即回到原链路 |
+| 新通道做了什么 | 每段引用必须带来源身份、版本、片段定位与校验；校验不过的记录不进证据集合；只把校验过的证据投影给模型，原始消息保留作审计 |
+
+**已知限制**
+
+- 摘录目前直接取自库中原文字段切片，**尚未核验切片是否落在 `story_body()` 净化后的正文内**（已做 8 条抽样无噪声，但不构成保证）。
+- 问"知识库一共收录多少"这类**统计类问题目前没有对应工具**，会答"未提及"或误把某类子集当总量。
+
 ## Wiki 数据同步
 
 知识库数据主要来源于 B 站原神 Wiki，并已接入米游社观测枢公开只读接口做任务/地图文本核对与补充。以下脚本用于增量更新内容数据：
@@ -360,8 +378,8 @@ copy .env.example .env
 
 ```ini
 DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-# 可选：Qwen 主接口，默认 token-plan OpenAI 兼容端点；不填则使用原 DashScope
-# DASHSCOPE_BASE_URL=https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+# Qwen/百炼走 DashScope：BASE_URL 建议显式设为官方兼容端点（token-plan 端点实测返回 401，勿用）
+# DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 # 可选：主接口不可用时自动回退的旧 Key/旧接口
 # DASHSCOPE_FALLBACK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 # DASHSCOPE_FALLBACK_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
