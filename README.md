@@ -378,7 +378,7 @@ copy .env.example .env
 
 ```ini
 DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-# Qwen/百炼走 DashScope：BASE_URL 建议显式设为官方兼容端点（token-plan 端点实测返回 401，勿用）
+# Qwen/百炼走 DashScope 官方兼容端点；若指向其它端点（如 token-plan）请先实测，该端点在某些 key 下返回 401，此时改用下方官方地址
 # DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 # 可选：主接口不可用时自动回退的旧 Key/旧接口
 # DASHSCOPE_FALLBACK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
