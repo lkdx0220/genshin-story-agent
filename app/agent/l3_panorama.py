@@ -354,13 +354,15 @@ def build_sections(messages, original_query: str) -> List[PanoramaSection]:
     return sections
 
 
-def _generate_one(section: PanoramaSection) -> str:
+def _generate_one(
+    section: PanoramaSection, original_query: str = "", generation_out: Optional[dict] = None
+) -> str:
     start = time.time()
     messages = [
         SystemMessage(content=_COMMON_SYSTEM),
         HumanMessage(
             content=(
-                f"【本节主题】{section.title}\n\n"
+                f"【用户问题】{original_query}\n\n【本节主题】{section.title}\n\n"
                 f"【证据】\n{section.text}\n\n"
                 f"{section.instruction}\n\n"
                 f"【当前任务】只输出本节正文，不要输出“好的”“以下是”等开场白。"
@@ -371,23 +373,36 @@ def _generate_one(section: PanoramaSection) -> str:
         response = answer_llm_l3_fast.invoke(messages)
         content = (response.content if hasattr(response, "content") else str(response)) or ""
         content = content.strip()
+        if generation_out is not None:
+            generation_out.update(status="generated" if content else "failed")
         print(f"  -> [L3分段] {section.key} 完成 {len(content)} 字，用时 {time.time() - start:.1f}s")
         return content
     except Exception as e:
+        if generation_out is not None:
+            generation_out.update(status="failed")
         print(f"  -> [L3分段] {section.key} 失败：{e}")
         return "[本节生成失败，请稍后重试]"
 
 
-def _ordered_parallel(sections: List[PanoramaSection]) -> List[str]:
+def _ordered_parallel(
+    sections: List[PanoramaSection], original_query: str = "", generation_out: Optional[dict] = None
+) -> List[str]:
     """并行生成，但按 section 原始顺序回收，保证流式顺序和最终答案一致。"""
     results: List[str] = [""] * len(sections)
+    outcomes = [{} for _ in sections]
     with ThreadPoolExecutor(max_workers=min(_SECTION_WORKERS, max(1, len(sections)))) as pool:
-        futures = [pool.submit(_generate_one, section) for section in sections]
+        futures = [
+            pool.submit(_generate_one, section, original_query, outcomes[i])
+            for i, section in enumerate(sections)
+        ]
         for i, future in enumerate(futures):
             try:
                 results[i] = future.result()
             except Exception as e:
                 results[i] = f"[本节生成失败：{e}]"
+                outcomes[i]["status"] = "failed"
+            if generation_out is not None:
+                generation_out[sections[i].key] = outcomes[i]
             # 每完成一个 section 就推送一次，前端可以按顺序边生成边看。
             header = f"\n\n## {sections[i].title}\n\n"
             _emit_progress("answer_delta", {"delta": header + results[i]})
@@ -476,19 +491,36 @@ def _build_coverage_section(missing_names: List[str], sections) -> PanoramaSecti
     )
 
 
-def generate_panorama_answer(messages, original_query: str, emit: Optional[Callable[[str, dict], None]] = None) -> str:
-    """L3 全景题入口：返回最终答案字符串；解析失败返回空字符串由调用方回退。"""
+def generate_panorama_answer(
+    messages,
+    original_query: str,
+    emit: Optional[Callable[[str, dict], None]] = None,
+    *,
+    coverage_out: Optional[dict] = None,
+) -> str:
+    """返回原答案字符串，可附带节生成状态；不判断答案语义完整性。"""
     _tls.emit = emit
-    sections = build_sections(messages, original_query)
-    if not sections:
+    all_sections = build_sections(messages, original_query)
+    metadata = dict(
+        version=1, scope="section_generation", status="not_applicable",
+        total_sections=len(all_sections), attempted_sections=0, generated_sections=0,
+        omitted_keys=[], failed_keys=[], coverage_section_attempted=False,
+        coverage_section_generated=False, semantic_completeness="unverified",
+    )
+    if coverage_out is not None:
+        coverage_out.clear()
+        coverage_out.update(metadata)
+    if not all_sections:
+        _emit_progress("l3_coverage", metadata)
         return ""
     # 冒烟测试用：L3_PANORAMA_LIMIT=1 时只生成第一节，避免每次测试都跑完整 8 节。
     limit = _env_int("L3_PANORAMA_LIMIT", 0)
-    if limit > 0:
-        sections = sections[:limit]
+    sections = all_sections[:limit] if limit > 0 else list(all_sections)
+    omitted_keys = [section.key for section in all_sections[len(sections):]]
     print(f"  -> [L3分段] 共 {len(sections)} 节：{[s.key for s in sections]}")
     _emit_progress("answer_delta", {"delta": f"# {original_query}\n"})
-    results = _ordered_parallel(sections)
+    outcomes = {}
+    results = _ordered_parallel(sections, original_query, outcomes)
     final_answer = _assemble(sections, results, original_query)
 
     # v1.2 覆盖补充：任务正文里出现过的说话人、实体档案里列出的实体，
@@ -497,7 +529,12 @@ def generate_panorama_answer(messages, original_query: str, emit: Optional[Calla
     if missing:
         print(f"  -> [L3覆盖补充] 前文未展开：{missing}")
         coverage = _build_coverage_section(missing, sections)
-        coverage_text = _generate_one(coverage)
+        coverage_result = {}
+        coverage_text = _generate_one(coverage, original_query, coverage_result)
+        outcomes[coverage.key] = coverage_result
+        metadata["coverage_section_attempted"] = True
+        metadata["coverage_section_generated"] = coverage_result.get("status") == "generated"
+        metadata["total_sections"] += 1
         sections.append(coverage)
         results.append(coverage_text)
         _emit_progress("answer_delta", {"delta": f"\n\n## {coverage.title}\n\n{coverage_text.strip()}"})
@@ -512,5 +549,26 @@ def generate_panorama_answer(messages, original_query: str, emit: Optional[Calla
             print(f"  -> [L3覆盖检查] 仍有实体未出现：{still_missing}")
         else:
             print(f"  -> [L3覆盖检查] {len(entity_titles)} 个实体全部出现")
+    failed_keys = [section.key for section in sections if outcomes[section.key].get("status") != "generated"]
+    metadata.update(
+        status="partial" if omitted_keys or failed_keys else "complete",
+        attempted_sections=len(sections),
+        generated_sections=len(sections) - len(failed_keys),
+        omitted_keys=omitted_keys,
+        failed_keys=failed_keys,
+    )
+    if metadata["status"] == "partial":
+        reasons = []
+        if omitted_keys:
+            reasons.append(f"限量未生成 {len(omitted_keys)} 节")
+        if failed_keys:
+            reasons.append(f"生成失败 {len(failed_keys)} 节")
+        notice = "\n\n[回答不完整：" + "；".join(reasons) + "。当前内容不能作为完整全景答案。]"
+        final_answer += notice
+        _emit_progress("answer_delta", {"delta": notice})
+    if coverage_out is not None:
+        coverage_out.clear()
+        coverage_out.update(metadata)
+    _emit_progress("l3_coverage", metadata)
     print(f"  -> [L3分段] 拼装完成，总长 {len(final_answer)} 字")
     return final_answer

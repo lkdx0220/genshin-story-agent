@@ -44,6 +44,8 @@ L3_SECTION_COVERAGE = _load_prompt("system/agent_system_v4_l3_section_coverage.t
 
 # ====== Agent 状态 ======
 class GenshinAdvisorState(TypedDict):
+    wiki_route: Optional[Dict[str, object]]  # Optional finite Wiki gate metadata
+    wiki_evidence: Optional[Dict[str, object]]  # verified local original-source data
     user_query: str
     rewritten_query: Optional[str]  # 别名扫描口径的消毒文本（剥括号/限长 200），不用于提示词与检索取词
     alias_notes: Optional[str]

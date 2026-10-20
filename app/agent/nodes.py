@@ -49,6 +49,130 @@ from app.tools.search import search_world
 _HIDDEN_TOOL_NAMES = {"search_world"}
 
 
+def _planner_system_with_wiki_instruction(system_content, package):
+    from app.wiki_evidence.bridge import available, BRIDGE_INSTRUCTION
+    if available(package):
+        system_content += BRIDGE_INSTRUCTION
+    return system_content
+
+
+def _planner_project_evidence_context(state, messages, original_query):
+    from app.wiki_evidence.bridge import context_for_plan
+    return context_for_plan(state, messages, AGENT_SYSTEM_PROMPT_PLAN,
+                                pseudo_note=get_pseudo_legendary_note(original_query),
+                                recent_turns=RECENT_TURNS)
+
+
+def _planner_evidence_exit_reason(package, prior_reason):
+    from app.wiki_evidence.bridge import available
+    if available(package):
+        return "wiki_evidence"
+    return prior_reason
+
+
+def _prepare_answer_evidence(state, projected_messages, has_wiki_evidence):
+    from app.wiki_evidence.bridge import enabled
+    from app.wiki_evidence.canonical_bridge import gather
+    canonical_info = gather(state) if enabled() else None
+    return projected_messages, has_wiki_evidence, canonical_info
+
+
+def _canonical_execution_summary(tool_name, message, canonical_info):
+    bound_count = sum(entry['provenance']['tool_call_id'] == message.tool_call_id
+                      for entry in canonical_info['entries'])
+    return f"{tool_name}: 成功返回；本地出处={canonical_info['status']}；已绑定片段={bound_count}"
+
+
+def _generate_projected_panorama(messages, query, emit, trace, run_id):
+    from app.agent.l3_panorama import generate_panorama_answer
+
+    print("  -> [L3分段] 检测到全景全文，进入分段生成")
+    l3_coverage = {}
+    l3_content = generate_panorama_answer(messages, query, emit=emit,
+                                         coverage_out=l3_coverage)
+    if l3_content:
+        generation_status = "partial" if l3_coverage.get("status") == "partial" else "success"
+        trace(
+            "llm_end",
+            {
+                "role": "answer",
+                "run_id": run_id,
+                "status": generation_status,
+                "final_response_len": len(l3_content),
+                "answer_source": "l3_panorama_sections",
+                "l3_coverage": l3_coverage,
+            },
+        )
+        trace(
+            "answer_end",
+            {
+                "response_mode": "found",
+                "status": generation_status,
+                "final_response": l3_content,
+                "short_circuit": False,
+                "answer_source": "l3_panorama_sections",
+                "l3_coverage": l3_coverage,
+                "run_id": run_id,
+            },
+        )
+        return {"messages": messages, "final_response": l3_content, "l3_coverage": l3_coverage}
+    return None
+
+
+def _deterministic_metadata_result(raw_messages, query, projected_messages):
+    from app.wiki_evidence.bridge import enabled
+    direct_answer = _get_direct_metadata_answer(raw_messages, query)
+    literal_tool_answer = direct_answer
+    if not direct_answer:
+        # 名单类问题：**代码直接查库渲染**（诊断结论：模型不稳定调用 entity_query，
+        # 因此不能依赖"已有工具结果"这条路 —— 见宪法 P5 与 spec FR-001/FR-002）。
+        direct_answer = _deterministic_roster_answer(query)
+    if direct_answer:
+        print("  -> [代码短路] 元数据直答路径，跳过 LLM")
+        result = {"final_response": direct_answer, "messages": projected_messages}
+        if enabled() and literal_tool_answer:
+            # Ephemeral node output, never read from user state or the model.
+            # The outer validator rechecks exact text and current call linkage.
+            result["_wiki_literal_tool_answer"] = literal_tool_answer
+        return result
+    return None
+
+
+def _append_answer_wiki_context(execution_facts, state, has_wiki_evidence):
+    from app.wiki_evidence.bridge import enabled, BRIDGE_INSTRUCTION
+    if has_wiki_evidence:
+        execution_facts += "\n本地 Wiki 原文读取：已校验；工具调用次数仍为真实值；知识库覆盖为partial。\n"
+    system_content = execution_facts + "\n" + AGENT_SYSTEM_PROMPT_ANSWER + _ANSWER_RELATION_CONSTRAINT
+    if has_wiki_evidence:
+        system_content += BRIDGE_INSTRUCTION
+    from app.wiki_evidence.canonical_bridge import gather, ANSWER_INSTRUCTION
+    if enabled() and gather(state)['present']:
+        system_content += ANSWER_INSTRUCTION
+    return system_content
+
+
+def _answer_history_messages(state, has_wiki_evidence):
+    answer_messages = []
+    if has_wiki_evidence:
+        if state.get("conversation_summary"):
+            answer_messages.append(SystemMessage(content="先前对话摘要（非事实来源）：" + state["conversation_summary"]))
+        for turn in (state.get("conversation_history") or [])[-RECENT_TURNS:]:
+            answer_messages.append(HumanMessage(content=turn["user"]))
+            answer_messages.append(AIMessage(content=turn["assistant"]))
+    return answer_messages
+
+
+def _weak_evidence_question(state, messages):
+    from app.wiki_evidence.bridge import enabled, is_source_message
+    question = state.get("user_query", "") if enabled() else ""
+    if not question:
+        for msg in reversed(messages):
+            if isinstance(msg, HumanMessage) and not is_source_message(msg):
+                question = str(msg.content or "")
+                break
+    return question
+
+
 def _get_initial_tools():
     """返回初始可暴露给 LLM 的工具列表（排除隐藏的碰壁后工具）。"""
     return [t for t in _tools_by_name.values() if getattr(t, "name", "") not in _HIDDEN_TOOL_NAMES]
@@ -385,13 +509,8 @@ def _extract_mechanism_terms(messages) -> List[str]:
 
     只做通用句式提取，不针对具体题目；用于回答阶段提醒模型保留机制原词。
     """
-    text_parts = []
-    for msg in messages:
-        if isinstance(msg, ToolMessage):
-            content = msg.content if hasattr(msg, "content") else str(msg)
-            if content:
-                text_parts.append(str(content))
-    text = "\n".join(text_parts)
+    from app.wiki_evidence.bridge import source_texts
+    text = "\n".join(source_texts(messages))
     if not text:
         return []
     terms: List[str] = []
@@ -495,10 +614,8 @@ def _extract_query_focus_terms(user_query: str, exclude_terms=None) -> List[str]
 def _mechanism_context_windows(messages, term: str, width: int = _MECHANISM_CONTEXT_WINDOW) -> List[str]:
     """返回机制名在工具原文中的前后文窗口（用于相关性预筛与裁判）。"""
     windows: List[str] = []
-    for msg in messages:
-        if not isinstance(msg, ToolMessage):
-            continue
-        content = str(getattr(msg, "content", "") or "")
+    from app.wiki_evidence.bridge import source_texts
+    for content in source_texts(messages):
         if not content:
             continue
         start = 0
@@ -644,6 +761,10 @@ def assess_query(state: GenshinAdvisorState) -> Dict[str, Any]:
 
 def route_after_assess(state: GenshinAdvisorState) -> str:
     """分类后的路由：L1 → fast_agent，L2 → plan_agent"""
+    from app.wiki_evidence.bridge import enabled
+    if enabled():
+        # Opt-in experiment uses the original Planner/Answer even for L1.
+        return "plan_agent"
     mode = state.get("execution_mode", "L2")
     if mode == "L1":
         return "fast_agent"
@@ -654,6 +775,14 @@ def route_after_assess(state: GenshinAdvisorState) -> str:
 
 
 def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
+    from app.wiki_evidence.bridge import prepared_plan_state, attach_result, enabled
+    if not enabled():
+        clean = prepared_plan_state(state)
+        return attach_result(_fast_agent_original(clean), clean)
+    return _fast_agent_original(state)
+
+
+def _fast_agent_original(state: GenshinAdvisorState) -> Dict[str, Any]:
     """快速路径：合并 Plan + Answer，使用全部工具，最多 2 轮工具调用。"""
     iteration = state.get("fast_iteration", 0) or 0
     messages = list(state.get("messages", []))
@@ -978,6 +1107,14 @@ def _maybe_add_dead_end_search_world(messages, routed_tools):
 
 
 def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
+    from app.wiki_evidence.bridge import prepared_plan_state, attach_result
+    from app.wiki_evidence.canonical_bridge import stamp_plan_result
+    prepared = prepared_plan_state(state)
+    result = _plan_agent_original(prepared)
+    return stamp_plan_result(attach_result(result, prepared), prepared)
+
+
+def _plan_agent_original(state: GenshinAdvisorState) -> Dict[str, Any]:
     """规划阶段：分析用户问题，输出【执行报告】和工具调用。不生成最终回答。"""
     iteration = state.get("iteration", 0) or 0
     messages = list(state.get("messages", []))
@@ -1057,7 +1194,7 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         # ---- 步骤3：构建本轮 llm_with_tools ----
         current_llm_with_tools = plan_llm_l2.bind_tools(routed_tools)
 
-        system_content = AGENT_SYSTEM_PROMPT_PLAN
+        system_content = _planner_system_with_wiki_instruction(AGENT_SYSTEM_PROMPT_PLAN, state.get("wiki_evidence"))
 
         # 注入别名参考（如有）
         if alias_notes:
@@ -1113,6 +1250,8 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
                 )
             )
         current_llm_with_tools = plan_llm_l2.bind_tools(routed_tools)
+
+    messages = _planner_project_evidence_context(state, messages, original_query)
 
     # 任务未命中后的确定性恢复：在让 LLM 自由选择下一步之前，先走 search_all → 相似名纠错。
     auto_recovery = _maybe_auto_task_recovery(state, messages, routed_tools, iteration)
@@ -1321,7 +1460,8 @@ def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             if has_prior_tool_result:
                 plan_exit_reason = "prior_tool_result"
 
-    is_exempt = plan_exit_reason in ("alias_identity", "math_greeting", "prior_tool_result")
+    plan_exit_reason = _planner_evidence_exit_reason(state.get("wiki_evidence"), plan_exit_reason)
+    is_exempt = plan_exit_reason in ("alias_identity", "math_greeting", "prior_tool_result", "wiki_evidence")
 
     if is_exempt:
         if plan_exit_reason == "alias_identity":
@@ -2962,7 +3102,8 @@ def _auto_read_probe_text(state, messages) -> str:
             parts.append(str(turn.get("user") or ""))
         else:
             parts.append(str(turn or ""))
-    humans = [m for m in messages if isinstance(m, HumanMessage)]
+    from app.wiki_evidence.bridge import is_source_message
+    humans = [m for m in messages if isinstance(m, HumanMessage) and not is_source_message(m)]
     for msg in humans[-2:]:
         parts.append(str(getattr(msg, "content", "") or ""))
     return _probe_for_entity_match("\n".join(p for p in parts if p))
@@ -4267,11 +4408,7 @@ def _confirm_weak_evidence(state) -> None:
     if any(strong_mark in str(getattr(m, "content", "") or "") for m in _round_tool_messages(messages)):
         return
 
-    question = ""
-    for msg in reversed(messages):
-        if isinstance(msg, HumanMessage):
-            question = str(msg.content or "")
-            break
+    question = _weak_evidence_question(state, messages)
     snippets = "\n---\n".join(str(getattr(m, "content", "") or "")[:300] for m in weak)[:3000]
     prompt = _EVIDENCE_CONFIRM_PROMPT.format(question=question[:500], snippets=snippets)
     try:
@@ -4314,9 +4451,10 @@ def _count_recent_no_progress(messages) -> int:
     不按「最后一批」计：Planner 每次重复调用都是独立一轮，最后一批永远只有 1 条，
     会漏掉空转累积（XX2 实测连续 8 轮各 1 条）。
     """
+    from app.wiki_evidence.bridge import is_source_message
     turn_start = 0
     for i in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[i], HumanMessage):
+        if isinstance(messages[i], HumanMessage) and not is_source_message(messages[i]):
             turn_start = i + 1
             break
     return sum(1 for msg in messages[turn_start:] if isinstance(msg, ToolMessage) and _is_no_progress(msg))
@@ -4345,9 +4483,10 @@ def _turn_window_stats(messages) -> Tuple[bool, int]:
     只看本轮：多轮会话里历史轮次的成功不应永久关闭熔断（旧实现扫全会话，
     一旦历史上有过成功，熔断此后再也不会触发）。
     """
+    from app.wiki_evidence.bridge import is_source_message
     turn_start = 0
     for idx, msg in enumerate(messages):
-        if isinstance(msg, HumanMessage):
+        if isinstance(msg, HumanMessage) and not is_source_message(msg):
             turn_start = idx
     has_any_success = False
     for msg in messages[turn_start:]:
@@ -4425,6 +4564,10 @@ def route_after_tools(state: GenshinAdvisorState) -> str:
 
 def _build_fallback_answer(messages: list, original_query: str) -> str:
     """LLM 返回空时的兜底：从工具返回结果中提取与查询相关的片段，拼凑回答。"""
+    from app.wiki_evidence.bridge import is_source_message
+    if any(is_source_message(m) for m in messages):
+        # A generation failure says nothing about the source's answerability.
+        return "[回答生成失败] 已取得本地剧情原文，但本轮未生成有效回答。"
     parts = []
     for msg in messages:
         if isinstance(msg, ToolMessage):
@@ -5015,7 +5158,8 @@ def _enforce_citation_grounding(
 
 def _citation_contexts(messages):
     """拼接全部工具返回原文，作为引用核对的出处语料。"""
-    return "\n".join(str(m.content or "") for m in messages if isinstance(m, ToolMessage))
+    from app.wiki_evidence.bridge import source_texts
+    return "\n".join(source_texts(messages))
 
 
 def _citation_exempt_normalized(original_query, answer_messages):
@@ -5103,9 +5247,73 @@ def _citation_retry_once(answer_messages, answer_llm, contexts, unverified, unve
 
 
 def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
+    """Opt-in finalization covers normal, deterministic and L3 early returns."""
+    from app.wiki_evidence.bridge import enabled, prepared_plan_state, attach_result, validate_answer
+    if not enabled():
+        clean = prepared_plan_state(state)
+        return attach_result(_answer_agent_original(clean), clean)
+
+    pending_trace = []
+
+    def progress(name, payload):
+        # Unvalidated tokens never reach the shared UI callback. Forward
+        # progress immediately; emit only the assembled, checked answer below.
+        if name != "answer_delta":
+            _emit_progress(name, payload)
+
+    def record(name, payload):
+        if name == "answer_end" or (name == "llm_end" and payload.get("role") == "answer"):
+            pending_trace.append((name, payload))
+        else:
+            trace_emit(name, payload)
+
+    from app.wiki_evidence.canonical_bridge import gather
+    canonical = gather(state)
+    # Planner summaries may paraphrase unbound canonical facts. Keep the
+    # original state for audit and final identity checks, but Answer receives
+    # actual verified sources instead of that advisory summary.
+    answer_state = dict(state, execution_plan="") if canonical['present'] else state
+    result = _answer_agent_original(answer_state, emit_progress=progress, answer_trace=record)
+    draft = result.get("final_response", "")
+    # Includes actual original tool results after the Planner supplements the
+    # partial Wiki chapter. No fabricated success or replacement tool output.
+    sources = list(state.get("messages", [])) + list(result.get("messages", []))
+    literal_tool_answer = result.pop("_wiki_literal_tool_answer", None)
+    final = validate_answer(draft, state, sources, literal_tool_answer=literal_tool_answer)
+    status = "validation_rejected" if final.startswith("[回答未通过") else "success"
+    if final.startswith(("[证据已变化]", "[回答生成失败]", "[回答已中断]")):
+        status = "interrupted" if final.startswith("[回答已中断]") else "error"
+    validation_status = status
+    if status == "success" and canonical['present'] and canonical['status'] in ("partial", "missing", "stale"):
+        status = "partial"
+    if status == "success" and result.get("l3_coverage", {}).get("status") == "partial":
+        status = "partial"
+    for name, payload in pending_trace:
+        if name == "llm_end":
+            trace_emit(name, dict(payload, status=status, final_response_len=len(final)))
+    end = next((p for n, p in reversed(pending_trace) if n == "answer_end"), {})
+    trace_emit("answer_end", dict(end, final_response=final, status=status,
+                                 run_id=state.get("run_id"), source_validation=validation_status))
+    _emit_progress("answer_delta", {"delta": final})
+    return dict(result, final_response=final)
+
+
+def _answer_agent_original(state: GenshinAdvisorState, *, emit_progress=None, answer_trace=None) -> Dict[str, Any]:
     """回答阶段：基于规划阶段的【执行报告】和工具返回结果，生成最终回答。不调用任何工具。"""
+    _emit_progress = emit_progress or globals()["_emit_progress"]
+    trace_emit = answer_trace or globals()["trace_emit"]
     messages = list(state.get("messages", []))
-    # 名单类短路：本轮工具已给出交集 / 任务→角色名单时，直接以结构化结论作答，不调用 LLM。
+    from app.wiki_evidence.bridge import context_for_answer, enabled, is_source_message
+    had_no_messages = not messages
+    raw_messages = messages
+    try:
+        projected_messages, has_wiki_evidence = context_for_answer(state, raw_messages)
+    except ValueError:
+        return {"final_response": "[证据已变化] 本轮回答未展示，请重新查询。", "messages": raw_messages}
+    # Control facts use the original execution record. Only projected evidence
+    # reaches generation, grounding, retry/fallback and semantic helpers below.
+    messages, has_wiki_evidence, canonical_info = _prepare_answer_evidence(state, projected_messages, has_wiki_evidence)
+    from app.wiki_evidence.canonical_bridge import _looks_canonical
     # 理由：① 名单是结构化数据，不该交给模型誊写（实测删掉过《人前人后》的菲尔戈黛特）；
     #       ② 省一次大模型调用，回答更快。
     execution_plan = state.get("execution_plan", "")
@@ -5118,7 +5326,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         answer_llm = answer_llm_medium
         print("  -> [综合叙述] 使用 medium Answer LLM")
     # L3 全景/超长文综合：使用更强的 qwen3.8-max。
-    if _already_full_text_panoramic(messages):
+    if _already_full_text_panoramic(raw_messages):
         answer_llm = answer_llm_l3
         print("  -> [L3全景] 使用 qwen3.8-max Answer LLM")
     # P0-3：为什么/原因/机制/原理/怎么/如何类问题强制 medium，避免
@@ -5140,8 +5348,9 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
             _cancel_events.pop(run_id, None)
         return {"final_response": existing_final, "messages": messages}
 
-    # 前置拦截：plan_agent 已产生最终回答（如 P16 超短输入），跳过 LLM 调用
-    if existing_final and not messages:
+    # 前置拦截：仅原始输入 messages 为空且已有最终回答时早退（如确定性预取 / P16）。
+    # had_no_messages 在证据投影 / 注入前采集；模式开启或证据就绪不放宽非空输入。
+    if existing_final and had_no_messages:
         print("  -> [前置拦截] plan_agent 已产生最终回答，直接返回")
         return {"final_response": existing_final, "messages": messages}
 
@@ -5160,7 +5369,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # ---- 构建【执行事实】区块（注入到 prompt 中，防止 LLM 伪造熔断）----
     # 先从 AIMessage.tool_calls 还原工具名，因为自定义 tool_executor 创建 ToolMessage 时没有填 name
     name_by_call_id = {}
-    for msg in messages:
+    for msg in raw_messages:
         if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
             for tc in msg.tool_calls:
                 tid = tc.get("id")
@@ -5174,7 +5383,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     max_consecutive_failures = 0
     has_successful_tool = False
 
-    for i, msg in enumerate(messages):
+    for i, msg in enumerate(raw_messages):
         if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
             tool_call_count += len(msg.tool_calls)
         elif isinstance(msg, ToolMessage):
@@ -5191,9 +5400,11 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
 
             # 提取工具名（优先 ToolMessage.name，缺失时用 tool_call_id 反查）
             tool_name = (getattr(msg, "name", "") or "") or name_by_call_id.get(getattr(msg, "tool_call_id", ""), "")
+            canonical_result = canonical_info is not None and (
+                msg.tool_call_id in canonical_info['canonical_ids'] or _looks_canonical(msg))
             # 从最近的 AIMessage 中提取该 tool 的参数
             call_args = ""
-            for prev_msg in reversed(messages[:i]):
+            for prev_msg in reversed(raw_messages[:i]):
                 if isinstance(prev_msg, AIMessage) and hasattr(prev_msg, "tool_calls") and prev_msg.tool_calls:
                     for tc in prev_msg.tool_calls:
                         if tc.get("name") == tool_name:
@@ -5202,18 +5413,25 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
                             break
                     break
             label = f"{tool_name}{call_args}"
+            if canonical_result:
+                # Raw canonical bodies/arguments are internal candidates. Even
+                # the system execution summary must not expose them as facts.
+                label = tool_name
             if is_intercepted:
                 tool_results_summary.append(f"{label}: [被系统截断]")
             elif is_failure:
                 tool_results_summary.append(f"{label}: 未找到")
             else:
                 has_successful_tool = True
-                length = len(content)
-                tool_results_summary.append(f"{label}: 成功返回({length}字)")
-                # 对于成功返回的数据，提取一行内容预览
-                content_preview = content.strip().split("\n")[0][:60]
-                if content_preview:
-                    tool_results_summary[-1] += f" | {content_preview}"
+                if canonical_result:
+                    tool_results_summary.append(_canonical_execution_summary(label, msg, canonical_info))
+                else:
+                    length = len(content)
+                    tool_results_summary.append(f"{label}: 成功返回({length}字)")
+                    # 对于成功返回的数据，提取一行内容预览
+                    content_preview = content.strip().split("\n")[0][:60]
+                    if content_preview:
+                        tool_results_summary[-1] += f" | {content_preview}"
                 if tool_name in ("load_quest_content", "load_book_content", "find_first_mention"):
                     full_text_loaded = True
 
@@ -5230,7 +5448,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 判断 response_mode：失败熔断 或 工具调用次数=0 且无全文加载 → not_found
     # response_mode 是二元值，由代码层确定性注入，Answer 据此决定是否输出"未收录"
     # 只要已有任意成功的工具返回，就不能因为后续补充查询失败而整体判为“未收录”。
-    if (consecutive_failures >= 2 or (tool_call_count == 0 and not full_text_loaded)) and not has_successful_tool:
+    if (consecutive_failures >= 2 or (tool_call_count == 0 and not full_text_loaded)) and not has_successful_tool and not has_wiki_evidence:
         response_mode = "not_found"
     else:
         response_mode = "found"
@@ -5238,33 +5456,10 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # ---- L3 全景题：分段生成 ----
     # 全景题证据约 15 万字，单次 qwen3.8-max 生成 1.2~1.8 万字实测超过 10 分钟；
     # 这里改为按任务线/实体/地图/跨线综合分桶，多节并行生成后拼装。
-    if _already_full_text_panoramic(messages):
-        from app.agent.l3_panorama import generate_panorama_answer
-
-        print("  -> [L3分段] 检测到全景全文，进入分段生成")
-        l3_content = generate_panorama_answer(messages, original_query, emit=_emit_progress)
-        if l3_content:
-            trace_emit(
-                "llm_end",
-                {
-                    "role": "answer",
-                    "run_id": state.get("run_id"),
-                    "status": "success",
-                    "final_response_len": len(l3_content),
-                    "answer_source": "l3_panorama_sections",
-                },
-            )
-            trace_emit(
-                "answer_end",
-                {
-                    "response_mode": "found",
-                    "final_response": l3_content,
-                    "short_circuit": False,
-                    "answer_source": "l3_panorama_sections",
-                    "run_id": state.get("run_id"),
-                },
-            )
-            return {"messages": messages, "final_response": l3_content}
+    if _already_full_text_panoramic(raw_messages):
+        panorama_result = _generate_projected_panorama(messages, original_query, _emit_progress, trace_emit, state.get("run_id"))
+        if panorama_result is not None:
+            return panorama_result
         print("  -> [L3分段] 解析失败，回退单次 L3 调用")
 
     # ---- 代码短路：纯别名身份查询直答 ----
@@ -5291,14 +5486,9 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # ---- 代码短路：元数据工具确定性直答 ----
     # 如果本轮只调用了结构化元数据工具，直接复述工具结果，不经过回答 LLM，
     # 防止模型在“作者未提及”之外联想稻妻/雷神/白狐等不存在的信息。
-    direct_answer = _get_direct_metadata_answer(messages, original_query)
-    if not direct_answer:
-        # 名单类问题：**代码直接查库渲染**（诊断结论：模型不稳定调用 entity_query，
-        # 因此不能依赖"已有工具结果"这条路 —— 见宪法 P5 与 spec FR-001/FR-002）。
-        direct_answer = _deterministic_roster_answer(original_query)
-    if direct_answer:
-        print("  -> [代码短路] 元数据直答路径，跳过 LLM")
-        return {"final_response": direct_answer, "messages": messages}
+    metadata_result = _deterministic_metadata_result(raw_messages, original_query, messages)
+    if metadata_result is not None:
+        return metadata_result
 
     execution_facts = (
         f"===== 【执行事实】（铁证，不可篡改）=====\n"
@@ -5310,7 +5500,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         f"你的'熔断检查'必须如实填写以上信息。如果'工具调用次数'为0，不得写'已加载全文'或'连续N次未找到'。"
     )
 
-    system_content = execution_facts + "\n" + AGENT_SYSTEM_PROMPT_ANSWER + _ANSWER_RELATION_CONSTRAINT
+    system_content = _append_answer_wiki_context(execution_facts, state, has_wiki_evidence)
 
     # 概念本质题范围硬规则：只回答概念本身，不展开组织/阵营/教团的成立史。
     # 这是通用范围控制，不针对任何具体题目；由既有的概念本质判定函数触发。
@@ -5344,7 +5534,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     # 全景题：证据里包含代码加载的全文，输出规约必须明确要求“逐线逐角色逐地图文本展开”，
     # 否则模型会再次把 15 万字证据压缩成 2~3 千字概要。
-    if _already_full_text_panoramic(messages):
+    if _already_full_text_panoramic(raw_messages):
         system_content += AGENT_SYSTEM_PROMPT_L3_ANSWER
 
     # not_found 代码短路：response_mode=not_found 时直接返回固定字符串，不调用 LLM
@@ -5368,6 +5558,8 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # 构建回答阶段的上下文：系统提示 + 执行报告 + 所有工具返回 + 用户原始问题
     answer_messages: List[BaseMessage] = [SystemMessage(content=system_content)]
 
+    answer_messages.extend(_answer_history_messages(state, has_wiki_evidence))
+
     # 注入规划阶段的执行报告作为上下文
     if execution_plan:
         answer_messages.append(
@@ -5378,7 +5570,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     # 注入所有对话消息（工具调用和返回结果）
     for msg in messages:
-        if isinstance(msg, (ToolMessage, AIMessage)):
+        if isinstance(msg, (ToolMessage, AIMessage)) or is_source_message(msg):
             answer_messages.append(msg)
 
     # 用户原始问题必须放在最后一条：规划阶段收尾时会留下一条无 tool_calls 的 AIMessage
@@ -5406,7 +5598,8 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
                     stream_finish_reason = str(finish_reason)
             if delta:
                 content_parts.append(delta)
-                _emit_progress("answer_delta", {"delta": delta})
+                if not enabled():
+                    _emit_progress("answer_delta", {"delta": delta})
     except Exception as e:
         print(f"  -> [流式] 流式生成失败，回退非流式: {e}")
         stream_error = e

@@ -5,11 +5,13 @@
 不联网、不修改 wiki、不发布事实。
 """
 
+import os
 from typing import Optional
 
 from langchain_core.tools import tool
 
 from app.canonical import canonical_query as _canonical_query
+from app.canonical import canonical_local_query as _canonical_local_query
 
 
 @tool("canonical_query")
@@ -32,4 +34,6 @@ def canonical_query_tool(question: str, snapshot: Optional[dict] = None, player_
     question = str(question or "").strip()
     if not question:
         raise ValueError("question 不能为空")
+    if os.environ.get('LLM_WIKI_MODE') == 'agent_evidence':
+        return _canonical_local_query(question, snapshot=snapshot, player_choice=player_choice)
     return _canonical_query(question, snapshot=snapshot, player_choice=player_choice)

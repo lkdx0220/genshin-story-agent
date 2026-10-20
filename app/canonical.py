@@ -1068,3 +1068,32 @@ def canonical_query(
             return "> [选择冲突] 结构化参数与 snapshot.player_choice 不一致；请先明确改选规则。"
         merged["player_choice"] = player_choice
     return default_index().answer(question, top_k=top_k, snapshot=merged)
+
+
+def canonical_local_query(
+    question: str,
+    top_k: int = 6,
+    snapshot: Optional[Dict[str, Any]] = None,
+    player_choice: Optional[str] = None,
+) -> str:
+    """Opt-in original-KB envelope; unchanged legacy text remains audit-only.
+
+    The tool executor transports strings with ``str(result)``. Return a JSON
+    string, never a dict/artifact, and never invent a tool execution identity.
+    """
+    from app.wiki_evidence.canonical_local import build_envelope, dumps_envelope
+
+    original_text = canonical_query(question, top_k=top_k, snapshot=snapshot,
+                                    player_choice=player_choice)
+    merged = dict(snapshot or {})
+    choice = merged.get('player_choice')
+    invalid_choice = (
+        player_choice not in (None, 'aether', 'lumine')
+        or choice not in (None, 'aether', 'lumine')
+        or (player_choice is not None and choice is not None and choice != player_choice)
+    )
+    if player_choice is not None:
+        merged['player_choice'] = player_choice
+    hits = [] if invalid_choice else default_index().search(
+        question, top_k=top_k, snapshot=merged)
+    return dumps_envelope(build_envelope(original_text, hits, REPO_ROOT))

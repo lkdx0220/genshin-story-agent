@@ -42,14 +42,82 @@ def _assigned_names(body):
     return top, nested
 
 
-def test_critical_bindings_are_top_level():
+def _module_functions(tree):
+    """模块级函数名 -> 节点。"""
+    return {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+
+
+def _direct_callees(fn, module_funcs):
+    """fn 直接调用的模块级函数名（只看 Call 的目标是 Name 的情况）。"""
+    out = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in module_funcs:
+            out.add(n.func.id)
+    return out
+
+
+def _is_pure_delegation(fn, module_funcs):
+    """wrapper 判定：函数体顶层只允许 赋值/文档字符串表达式/return 调用模块级函数。
+
+    出现 if/for/while/try/with 等控制流 -> 不是纯委托，需路径完整性另行证明。
+    """
+    for stmt in fn.body:
+        if isinstance(stmt, ast.Return):
+            v = stmt.value
+            if not (isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id in module_funcs):
+                return False
+        elif isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+            continue
+        elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str):
+            continue  # 文档字符串
+        else:
+            return False
+    return True
+
+
+def test_critical_bindings_are_reachable_top_level():
+    """结构契约（2026-10-20 修订 v2）：承载层顶层 + 所有 return 路径经过承载层。
+
+    背景：R08 把 answer_agent 改成**编排层**（enabled 分支、gather、validate_answer、trace），
+    实际承载 answer_messages 的是它调用的 _answer_agent_original（其函数体顶层）。
+    因此：① 不再要求 answer_agent 自己赋值；② 改为在"可达链"里定位承载层，
+    并要求该层**顶层**赋值（不得只在嵌套分支）；③ answer_agent 函数体内必须出现承载层调用（**弱化版**：不证明支配关系，已记为已知局限）。
+    """
     tree = ast.parse(NODES.read_text(encoding="utf-8"))
-    fn = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "answer_agent"), None)
+    funcs = _module_functions(tree)
+    fn = funcs.get("answer_agent")
     assert fn is not None, "未找到 answer_agent"
-    top, nested = _assigned_names(fn.body)
+
+    callees = _direct_callees(fn, funcs)
+    chain = [fn] + [funcs[n] for n in sorted(callees)]
+
     for name in CRITICAL_BINDINGS:
-        assert name in top, f"{name} 未在 answer_agent 函数体顶层赋值（疑似被缩进进条件分支）"
-        assert name not in nested or name in top, f"{name} 只在嵌套分支内赋值"
+        carriers = []
+        nested_only = []
+        for f in chain:
+            top, nested = _assigned_names(f.body)
+            if name in top:
+                carriers.append(f.name)
+            elif name in nested:
+                nested_only.append(f.name)
+        assert carriers, (
+            f"{name} 不在可达链任何一层的顶层：疑似被缩进进条件分支。"
+            f"chain={[f.name for f in chain]} nested_only={nested_only}"
+        )
+        assert not (nested_only and not carriers), f"{name} 仅在嵌套分支内赋值：{nested_only}"
+
+        # 弱化版路径检查（已知局限，见 docstring）：只要求 answer_agent 函数体内
+        # 出现承载层调用，不证明"每条 return 都被它支配"。支配关系检查待后续版本。
+        for carrier in carriers:
+            if carrier == "answer_agent":
+                continue
+            called_anywhere = {
+                c.func.id for c in ast.walk(fn)
+                if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+            }
+            assert carrier in called_anywhere, (
+                f"{name} 的承载函数 {carrier} 从未在 answer_agent 中被调用"
+            )
 
 
 def test_answer_messages_assignment_not_guarded_by_alias_notes():
