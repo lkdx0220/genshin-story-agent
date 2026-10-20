@@ -93,8 +93,10 @@ def _kb_stats() -> dict:
         out["data_date"] = datetime.fromtimestamp(graph.stat().st_mtime).strftime("%Y-%m-%d")
     idx = kb / "wiki_entity_mention_index.json"
     if idx.exists():
-        ents = (json.loads(idx.read_text(encoding="utf-8")).get("entities") or {})
+        idx_data = json.loads(idx.read_text(encoding="utf-8"))
+        ents = (idx_data.get("entities") or {})
         out["entities"] = len(ents)
+        out["entities_total"] = (idx_data.get("stats") or {}).get("entities")
         out["mentions"] = sum(len(v.get("mentions") or []) for v in ents.values())
     am = kb / "entity_alias_map.json"
     if am.exists():
@@ -136,6 +138,9 @@ def build_block() -> str:
         ("已注册工具",
          f"{total} / 初始暴露 {total - hidden}" if hidden else f"{total}（初始暴露数见 app/tools/__init__.py）"),
         ("词条条目", f"{kb.get('entries', '—'):,}" if isinstance(kb.get("entries"), int) else "—"),
+        ("实体总数",
+         f"{kb.get('entities_total', '—'):,}"
+         if isinstance(kb.get("entities_total"), int) else "—"),
         ("提及索引实体（有提及）/ 提及对",
          f"{kb.get('entities', '—'):,} / {kb.get('mentions', '—'):,}"
          if isinstance(kb.get("entities"), int) and isinstance(kb.get("mentions"), int) else "—"),
