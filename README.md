@@ -18,7 +18,7 @@
 | cast 覆盖（活动剧情） | 648/698 = 92.8% |
 | cast 覆盖（彩蛋剧情） | 原始 11/24 = 45.8%；有剧情/语音 11/14 = 78.6% |
 | 工作区数据快照日期 | 2026-10-13 |
-| 最新 KB Release | kb-2026.09.10（发布资产是快照，非当前工作区状态） |
+| 最新 KB Release | kb-2026.10.13（发布资产是快照，非当前工作区状态） |
 <!-- /GENERATED:STATUS -->
 
 > 系统架构与能力现状总览（含四条确定性关系能力）：[`docs/项目架构总览-20261012.md`](docs/项目架构总览-20261012.md)
@@ -27,22 +27,22 @@
 
 如果你不想自己逐条抓取 Wiki、重建向量库，可以直接使用已经打包好的知识库快照：
 
-- **Release 页面**：https://github.com/lkdx0220/genshin-story-agent/releases/tag/kb-2026.09.10
-- **tag**：`kb-2026.09.10`
-- **对应 commit**：`951a1a7`
+- **Release 页面**：https://github.com/lkdx0220/genshin-story-agent/releases/tag/kb-2026.10.13
+- **tag**：`kb-2026.10.13`
+- **对应 commit**：`5e629fd`
 
 三个资产分别对应不同部分：
 
 | 资产 | 解压位置 | 内容 | 前置条件 |
 |---|---|---|---|
-| [`genshin-story-agent-kb-2026.09.10.zip`](https://github.com/lkdx0220/genshin-story-agent/releases/download/kb-2026.09.10/genshin-story-agent-kb-2026.09.10.zip) | 项目根目录 | 项目代码 + 核心知识库 JSON | Python 环境、API Key |
-| [`kb-vectors-text-embedding-v4-2026.09.10.zip`](https://github.com/lkdx0220/genshin-story-agent/releases/download/kb-2026.09.10/kb-vectors-text-embedding-v4-2026.09.10.zip) | 项目根目录，解压为 `kb_vectors/` | 阿里云百炼 `text-embedding-v4` 向量库 | DashScope API Key |
-| [`kb-vectors-bge-m3-2026.09.10.zip`](https://github.com/lkdx0220/genshin-story-agent/releases/download/kb-2026.09.10/kb-vectors-bge-m3-2026.09.10.zip) | 项目根目录，解压为 `kb_vectors_m3/` | 本地 Ollama BGE-M3 向量库（运行时默认） | 本地 Ollama + `bge-m3:latest` |
+| [`genshin-story-agent-kb-2026.10.13.zip`](https://github.com/lkdx0220/genshin-story-agent/releases/download/kb-2026.10.13/genshin-story-agent-kb-2026.10.13.zip) | 项目根目录 | 项目代码 + 核心知识库 JSON | Python 环境、API Key |
+| [`kb-vectors-text-embedding-v4-2026.10.13.zip`](https://github.com/lkdx0220/genshin-story-agent/releases/download/kb-2026.10.13/kb-vectors-text-embedding-v4-2026.10.13.zip) | 项目根目录，解压为 `kb_vectors/` | 阿里云百炼 `text-embedding-v4` 向量库 | DashScope API Key |
+| [`kb-vectors-bge-m3-2026.10.13.zip`](https://github.com/lkdx0220/genshin-story-agent/releases/download/kb-2026.10.13/kb-vectors-bge-m3-2026.10.13.zip) | 项目根目录，解压为 `kb_vectors_m3/` | 本地 Ollama BGE-M3 向量库（运行时默认） | 本地 Ollama + `bge-m3:latest` |
 
 ### 从 Release 开始使用
 
 1. **下载并解压核心包**
-   - 下载 `genshin-story-agent-kb-2026.09.10.zip`，解压到任意目录，得到完整的项目根目录。
+   - 下载 `genshin-story-agent-kb-2026.10.13.zip`，解压到任意目录，得到完整的项目根目录。
 
 2. **安装依赖并配置密钥**
    ```bash
@@ -56,9 +56,9 @@
      ```bash
      ollama pull bge-m3:latest
      ```
-     把 `kb-vectors-bge-m3-2026.09.10.zip` 解压到项目根，确认得到 `kb_vectors_m3/` 目录。
+     把 `kb-vectors-bge-m3-2026.10.13.zip` 解压到项目根，确认得到 `kb_vectors_m3/` 目录。
    - **远程 text-embedding-v4**：
-     把 `kb-vectors-text-embedding-v4-2026.09.10.zip` 解压到项目根，确认得到 `kb_vectors/` 目录；然后在启动前切换后端：
+     把 `kb-vectors-text-embedding-v4-2026.10.13.zip` 解压到项目根，确认得到 `kb_vectors/` 目录；然后在启动前切换后端：
      ```powershell
      $env:KB_VECTOR_DIR="<项目根>\kb_vectors"
      $env:KB_EMBEDDING_BACKEND="text-embedding-v4"
@@ -74,7 +74,7 @@
 
 5. **校验下载文件（可选）**
    ```powershell
-   Get-FileHash .\genshin-story-agent-kb-2026.09.10.zip -Algorithm SHA256
+   Get-FileHash .\genshin-story-agent-kb-2026.10.13.zip -Algorithm SHA256
    ```
    与 Release 里的 `SHA256SUMS.txt` 比对即可。
 
