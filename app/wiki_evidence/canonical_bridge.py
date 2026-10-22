@@ -1,7 +1,7 @@
 """Canonical tool provenance consumers; original executor and tool API stay intact.
 
 No tool result or source URL is trusted merely because it is a ToolMessage.
-Only exact local records authorized by canonical_local can enter the Answer.
+Canonical records and configured chapter spans keep separate trust boundaries.
 """
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from . import validation_diagnostics as diagnostic
+
 SCHEMA = 'canonical-local-evidence-v1'
 ROOT = Path(__file__).resolve().parents[2]
 STATES = {'bound', 'partial', 'missing', 'stale'}
@@ -23,14 +25,7 @@ canonical 的 original_text 仅供定位线索，不是可答事实；只使用 
 stale 或未知时，继续按原有工具和预算补查本地 RAG，不重复同一已执行工具及相同参数。
 预算结束或补查仍无证据时说明具体缺口，不能把“候选未绑定”写成整个知识库未收录。
 '''
-ANSWER_INSTRUCTION = '''
-【canonical 引用覆盖规则：仅本模式】
-本轮 canonical 的旧 URL/source 脚注规则由此覆盖：仅引用当前程序提供的 L1/L2 等本地别名，
-格式如 [^L1]。你仍自行组织自然中文、比较与分析，可准确引用提供的原文；不得编造原话。
-不要输出脚注定义、来源路径、旧 source 脚注或外站证据；脚注原文由程序装配。
-不能使用未绑定的 canonical 候选文本、旧 URL、Planner 猜测作为事实。缺口不作结论，
-保留提瓦特剧情的奇幻语境和请求/完成、主体/否定/阶段区别，不加无关免责声明。
-'''
+ANSWER_INSTRUCTION = (ROOT / 'prompts' / 'system' / 'answer_wiki_evidence_citations.txt').read_bytes().decode('utf-8').replace('\r\n', '\n').replace('\r', '\n')
 
 
 def _canonical_call_table(messages):
@@ -105,7 +100,7 @@ def _merge_citation_records(records, gaps, canonical_ids, present):
     for number, identity in enumerate(sorted(unique), 1):
         entries.append(dict(unique[identity], alias=f'L{number}'))
     status = 'partial' if entries and gaps else 'bound' if entries else 'missing'
-    if not entries and any(g.get('code') in {'source_changed', 'source_stale', 'stale_source', 'source_file_changed'} for g in gaps):
+    if not entries and any(g.get('code') in {'source_changed', 'source_stale', 'stale_source', 'source_file_changed', 'bundle_source_changed'} for g in gaps):
         status = 'stale'
     return {'present': present, 'status': status, 'entries': entries,
             'gaps': gaps, 'canonical_ids': canonical_ids}
@@ -189,8 +184,9 @@ def gather(state):
     messages = list(state.get('messages', []))
     table = _canonical_call_table(messages)
     calls = table[0]
-    records, gaps, canonical_ids = [], [], set()
-    present = False
+    from .bundle_citations import collect
+    records, gaps, present = collect(state)
+    canonical_ids = set()
     for index, message in enumerate(messages):
         if not isinstance(message, ToolMessage):
             continue
@@ -216,7 +212,7 @@ def plan_messages(state, messages):
     if not enabled():
         return messages
     info = gather(dict(state, messages=messages))
-    if not info['present']:
+    if not info['canonical_ids']:
         return messages
     # The protocol groups stay intact. The original JSON remains internal to
     # Planner; the explicit assessment overrides executor's generic success.
@@ -293,28 +289,49 @@ def _has_supplement(state):
     return False
 
 
-def finalize(text, state):
+def _citation_rejection(text, state, info, supplied, used, literal_tool_answer):
+    """Close references against fresh evidence before assembling any footnote."""
+    if any(g.get('code') == 'bundle_source_changed' for g in info['gaps']):
+        return '[证据已变化] 本轮回答未展示，请重新查询。'
+    if re.search(r'^\s*\[\^[^\]]+\]:', text, re.MULTILINE):
+        return '[回答未通过来源校验] 脚注定义只能由程序生成。'
+    if any(alias not in supplied for alias in used):
+        return '[回答未通过来源校验] 本地引用不属于本轮证据。'
+    from .bridge import _exact_current_tool_rendering
+    literal = _exact_current_tool_rendering(text, state, literal_tool_answer)
+    bundle_present = any(entry.get('source_kind') == 'bundle' for entry in info['entries'])
+    if supplied and not used and not literal and (bundle_present or not _has_supplement(state)):
+        return '[回答未通过来源校验] 回答未选择本轮本地引用。'
+    if not supplied and not _has_supplement(state):
+        return '【未覆盖的部分】本轮尚未取得可核对的本地原文，无法据此回答；这不表示整个知识库未收录。'
+    return None
+
+
+@diagnostic.validation_boundary("finalize")
+def finalize(text, state, *, literal_tool_answer=None):
     """Validate local-ID closure, then assemble original quotes and gap status."""
     if not enabled():
         return text
     info = gather(state)
+    diagnostic.evidence(info)
     if not info['present']:
         # Any unknown local reference must still fail closed.
         if re.search(r'\[\^L[^\]]*\]', text):
+            diagnostic.citation_comparisons(text, info, {}, re.findall(r'\[\^(L[^\]]*)\]', text),
+                                           '[回答未通过来源校验] 本地引用不属于本轮证据。')
             return '[回答未通过来源校验] 本地引用不属于本轮证据。'
         return text
     if text.startswith(('[回答未通过', '[证据已变化]', '[回答生成失败]', '[回答已中断]')):
         return text
-    if re.search(r'^\s*\[\^[^\]]+\]:', text, re.MULTILINE):
-        return '[回答未通过来源校验] 脚注定义只能由程序生成。'
     supplied = {entry['alias']:entry for entry in info['entries']}
     used = re.findall(r'\[\^([^\]]+)\]', text)
-    if any(alias not in supplied for alias in used):
-        return '[回答未通过来源校验] 本地引用不属于本轮证据。'
-    if supplied and not used and not _has_supplement(state):
-        return '[回答未通过来源校验] 回答未选择本轮本地引用。'
-    if not supplied and not _has_supplement(state):
-        return '【未覆盖的部分】本轮尚未取得可核对的本地原文，无法据此回答；这不表示整个知识库未收录。'
+    rejection = _citation_rejection(text, state, info, supplied, used, literal_tool_answer)
+    diagnostic.citation_comparisons(text, info, supplied, used, rejection)
+    if rejection is not None:
+        return rejection
+    from .bridge import _exact_current_tool_rendering
+    if not used and _exact_current_tool_rendering(text, state, literal_tool_answer):
+        return text
     # gather() above reopens original sources immediately before assembly.
     # The local map and finalization never trust the model's own definitions.
     lines = [text]

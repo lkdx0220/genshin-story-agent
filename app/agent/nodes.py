@@ -9,6 +9,7 @@ import re
 import json
 import time
 import os
+from pathlib import Path
 from typing import Dict, Any, List, Tuple
 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, ToolMessage
@@ -42,6 +43,7 @@ from app.schema import (
 )
 from app.progress import _emit_progress, _cancel_events
 from app.trace_recorder import emit as trace_emit
+from app.wiki_evidence.diagnostics import capture_answer
 from app.tools import tools_by_name as _tools_by_name
 from app.tools.search import search_world
 
@@ -146,8 +148,17 @@ def _append_answer_wiki_context(execution_facts, state, has_wiki_evidence):
     if has_wiki_evidence:
         system_content += BRIDGE_INSTRUCTION
     from app.wiki_evidence.canonical_bridge import gather, ANSWER_INSTRUCTION
-    if enabled() and gather(state)['present']:
-        system_content += ANSWER_INSTRUCTION
+    if enabled():
+        current_evidence = gather(state)
+        if current_evidence['present']:
+            system_content += ANSWER_INSTRUCTION + '\n' + json.dumps({
+                'schema_version': 'local-answer-citations-v1',
+                'local_evidence': current_evidence['entries'],
+                'citation_markers': {
+                    entry['alias']: f"[^{entry['alias']}]"
+                    for entry in current_evidence['entries']
+                },
+            }, ensure_ascii=False) + '\n'
     return system_content
 
 
@@ -4801,7 +4812,7 @@ def _retry_answer_as_found(answer_messages, messages, original_query, current_ll
         candidates.append(answer_llm_deep)
     for retry_llm in candidates:
         try:
-            response = llm_invoke_with_retry(retry_messages, llm_instance=retry_llm)
+            response = _answer_invoke_with_diagnostics(retry_messages, llm_instance=retry_llm)
             cand = getattr(response, "content", "") or ""
         except Exception as e:
             print(f"  -> [未收录重试] {getattr(retry_llm, 'model_name', '?')} 调用失败: {e}")
@@ -5145,6 +5156,9 @@ def _enforce_citation_grounding(
     )
     if not unverified and not unverified_lines:
         return content
+    from app.wiki_evidence.diagnostics import record_stage
+    record_stage("legacy_quote_failure", content=content, comparison_corpus=contexts,
+                 unverified=unverified, unverified_lines=unverified_lines)
     panoramic = _already_full_text_panoramic(messages)
     _report_unverified_citation(run_id, unverified, unverified_lines, panoramic)
     if panoramic:
@@ -5217,7 +5231,7 @@ def _citation_retry_once(answer_messages, answer_llm, contexts, unverified, unve
         )
     ]
     try:
-        retry_response = llm_invoke_with_retry(retry_messages, llm_instance=answer_llm)
+        retry_response = _answer_invoke_with_diagnostics(retry_messages, llm_instance=answer_llm)
         retry_content = (getattr(retry_response, "content", "") or "").strip()
     except Exception as e:
         print(f"  -> [引用自检] 纠错重试失败: {type(e).__name__}: {e}")
@@ -5228,6 +5242,9 @@ def _citation_retry_once(answer_messages, answer_llm, contexts, unverified, unve
         return ""
     left = _unverified_quotes(retry_content, contexts)
     left_lines = _unverified_dialogue_lines(retry_content, contexts)
+    from app.wiki_evidence.diagnostics import record_stage
+    record_stage("legacy_quote_retry", content=retry_content, comparison_corpus=contexts,
+                 unverified=left, unverified_lines=left_lines)
     if not left and not left_lines:
         print("  -> [引用自检] 纠错重试通过，引用全部有出处")
         trace_emit("citation_check", {"run_id": run_id, "status": "retry_ok", "unverified_count": 0})
@@ -5246,6 +5263,12 @@ def _citation_retry_once(answer_messages, answer_llm, contexts, unverified, unve
     return ""
 
 
+def _answer_invoke_with_diagnostics(messages, *, llm_instance):
+    from app.wiki_evidence.diagnostics import observed_model
+    return llm_invoke_with_retry(messages, llm_instance=observed_model(llm_instance))
+
+
+@capture_answer
 def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     """Opt-in finalization covers normal, deterministic and L3 early returns."""
     from app.wiki_evidence.bridge import enabled, prepared_plan_state, attach_result, validate_answer
@@ -5279,7 +5302,8 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     # partial Wiki chapter. No fabricated success or replacement tool output.
     sources = list(state.get("messages", [])) + list(result.get("messages", []))
     literal_tool_answer = result.pop("_wiki_literal_tool_answer", None)
-    final = validate_answer(draft, state, sources, literal_tool_answer=literal_tool_answer)
+    validation = validate_answer(draft, state, sources, literal_tool_answer=literal_tool_answer)
+    final = validation["presentation"]
     status = "validation_rejected" if final.startswith("[回答未通过") else "success"
     if final.startswith(("[证据已变化]", "[回答生成失败]", "[回答已中断]")):
         status = "interrupted" if final.startswith("[回答已中断]") else "error"
@@ -5295,7 +5319,7 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     trace_emit("answer_end", dict(end, final_response=final, status=status,
                                  run_id=state.get("run_id"), source_validation=validation_status))
     _emit_progress("answer_delta", {"delta": final})
-    return dict(result, final_response=final)
+    return dict(result, final_response=final, answer_validation=validation)
 
 
 def _answer_agent_original(state: GenshinAdvisorState, *, emit_progress=None, answer_trace=None) -> Dict[str, Any]:
@@ -5587,7 +5611,8 @@ def _answer_agent_original(state: GenshinAdvisorState, *, emit_progress=None, an
     stream_error = None
     stream_finish_reason = ""
     try:
-        for chunk in answer_llm.stream(answer_messages):
+        from app.wiki_evidence.diagnostics import observed_model
+        for chunk in observed_model(answer_llm).stream(answer_messages):
             if isinstance(chunk, str):
                 delta = chunk
             else:
@@ -5626,7 +5651,7 @@ def _answer_agent_original(state: GenshinAdvisorState, *, emit_progress=None, an
 
     if stream_error is not None or not content_parts:
         try:
-            response = llm_invoke_with_retry(answer_messages, llm_instance=answer_llm)
+            response = _answer_invoke_with_diagnostics(answer_messages, llm_instance=answer_llm)
             content = response.content if hasattr(response, "content") else ""
         except Exception as e:
             content = f"抱歉，处理出错：{e}"
@@ -5637,6 +5662,9 @@ def _answer_agent_original(state: GenshinAdvisorState, *, emit_progress=None, an
     else:
         content = "".join(content_parts)
 
+    from app.wiki_evidence.diagnostics import record_stage
+    record_stage("generation_selected", content=content, stream_fallback=bool(stream_error))
+
     # P0-2：response_mode=found 时不允许输出“未收录”。
     # 轻量模型偶发在流式里只输出一句“当前知识库未收录。”，与代码判定矛盾；
     # 这里重试 medium/deep，仍失败才退回工具原文。
@@ -5646,7 +5674,9 @@ def _answer_agent_original(state: GenshinAdvisorState, *, emit_progress=None, an
 
     # 范围守卫：概念本质题剔除组织名，对比分析题剔除题目未要求的分析维度。
     # 这是生成后校验，不依赖模型自觉；只对 R1/C1 这类结构性范围问题触发。
+    record_stage("before_scope_guard", content=content)
     content = _apply_answer_scope_guard(original_query, content, messages, state)
+    record_stage("after_scope_guard", content=content)
 
     # 引用自检：答案里的引号片段必须在工具返回里找得到出处；查无出处先纠错重试一次，
     # 仍不合格降级为「未收录」（L3 长答案只记 trace，不重试不降级）。
@@ -5694,10 +5724,12 @@ def _answer_agent_original(state: GenshinAdvisorState, *, emit_progress=None, an
 # 动机：实测在"角色 ↔ 剧情"关系题上，若不走 entity_query 而只靠正文检索，
 # 模型会凭自身记忆补剧情（如凭空写出一段"往生堂赛诗结缘"）。此处收紧为：
 # 关系题必须走工具、只依据工具返回作答、无证据时如实说未收录。
-_ANSWER_RELATION_CONSTRAINT = """
-【关系类问题硬约束】当用户问的是"某人参与过/出现在哪些剧情""谁和谁一起出现过/有没有共同剧情/是否都在场"这类关系问题时：
-1. 必须调用 entity_query（单人以 participated，两人以 co_occur + target）；
-2. 只依据它的返回内容作答：结论区（强证据）可陈述；线索区（中·有动作 / 弱·仅文字提及）不得当作出场结论；
-3. 返回里没有的内容一律不得补充——不得凭自身知识补写剧情、场景、对话或理由；
-4. 若返回带覆盖度声明，必须如实说明知识库的收录范围；没有命中就直说"知识库未收录"，不要用常识推测。
-"""
+_PROMPT_ROOT = Path(__file__).resolve().parents[2] / "prompts" / "system"
+
+
+def _load_prompt_file(name: str) -> str:
+    """Load an instruction owned by prompts/system; absence is a startup error."""
+    return _PROMPT_ROOT.joinpath(name).read_bytes().decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+
+
+_ANSWER_RELATION_CONSTRAINT = _load_prompt_file("answer_relation_constraint.txt")

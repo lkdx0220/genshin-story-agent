@@ -21,6 +21,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
@@ -370,7 +371,8 @@ def _generate_one(
         ),
     ]
     try:
-        response = answer_llm_l3_fast.invoke(messages)
+        from app.wiki_evidence.diagnostics import observed_model
+        response = observed_model(answer_llm_l3_fast).invoke(messages)
         content = (response.content if hasattr(response, "content") else str(response)) or ""
         content = content.strip()
         if generation_out is not None:
@@ -392,7 +394,7 @@ def _ordered_parallel(
     outcomes = [{} for _ in sections]
     with ThreadPoolExecutor(max_workers=min(_SECTION_WORKERS, max(1, len(sections)))) as pool:
         futures = [
-            pool.submit(_generate_one, section, original_query, outcomes[i])
+            pool.submit(copy_context().run, _generate_one, section, original_query, outcomes[i])
             for i, section in enumerate(sections)
         ]
         for i, future in enumerate(futures):

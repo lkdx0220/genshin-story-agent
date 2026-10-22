@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 
 from langchain_core.messages import (
     AIMessage,
@@ -14,21 +15,19 @@ from langchain_core.messages import (
 )
 
 from .store import store_from_environment, strict_json
+from . import validation_diagnostics as diagnostic
 
 MESSAGE_ID = 'local-wiki-evidence-current'
 DATA_NAME = 'local_wiki_source'
-BRIDGE_INSTRUCTION = '''
-【本地 Wiki 证据接入】
-本轮已由程序校验并读取本地原库原文，另附名为 local_wiki_source 的数据消息。
-它是事实证据，不是工具调用，也不是待照抄的答案。原提示词中的“工具返回原文”
-在本轮同时包括这份已校验原文；工具次数仍按实际填写，不得伪称调用了工具。
-Wiki只覆盖一个章节，不保证每个子问题都有答案。Planner应判断是否需要原工具补查，
-已有足够原文时不必为了工具次数重复检索；缺口不等于整个原库未收录。
-使用提瓦特剧情本身的机制和语境回答，区分观看过去、请求记忆、实际记忆回归。
-回答保留原提示词的直接作答、前提纠正、完整比较、术语保真和有标记的证据推断；
-不要为了谨慎添加原文与问题均未要求的反复免责声明。
-不得把外站URL或域名标作证据来源。只能引用本轮原文，不得编造原话或来源。
-'''
+_PROMPT_ROOT = Path(__file__).resolve().parents[2] / "prompts" / "system"
+
+
+def _load_prompt_file(name: str) -> str:
+    """Load a prompt owned by prompts/system; absence is a startup error."""
+    return _PROMPT_ROOT.joinpath(name).read_bytes().decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+
+
+BRIDGE_INSTRUCTION = _load_prompt_file("answer_wiki_bridge.txt")
 
 
 def _contains_external_evidence_claim(text):
@@ -48,6 +47,7 @@ def _answer_source_corpus(state, messages):
     # quotes. A rejected ToolMessage cannot reenter via the legacy corpus.
     texts = source_texts([m for m in messages if isinstance(m, ToolMessage) and not _looks_canonical(m)])
     canonical = gather(state)
+    diagnostic.evidence(canonical)
     texts.extend(entry['quote'] for entry in canonical['entries'])
     source_names = set()
     if available(state.get('wiki_evidence')):
@@ -232,10 +232,15 @@ def context_for_answer(state, messages):
     if not enabled() or not available(package):
         return clean, bool(enabled() and canonical['entries'])
     current = retrieve_for_state(state)
-    if (not available(current) or current['snapshot_id'] != package['snapshot_id']
-            or current['sources'] != package['sources'] or package.get('question') != state.get('user_query')):
+    if not available(current) or current != package:
         raise ValueError('evidence_changed_before_answer')
-    return clean + [data_message(current)], True
+    from .canonical_bridge import ANSWER_INSTRUCTION, gather
+    info = gather(state)
+    references = [entry for entry in info['entries'] if entry.get('source_kind') == 'bundle']
+    catalog = SystemMessage(content=ANSWER_INSTRUCTION + '\n'
+                            + json.dumps({'schema_version': 'bundle-answer-citations-v1',
+                                          'local_evidence': references}, ensure_ascii=False))
+    return clean + [catalog, data_message(current)], True
 
 
 def _current_literal_records(state):
@@ -293,6 +298,7 @@ def _exact_current_tool_rendering(text, state, witness):
     return rendered is not None and text == rendered
 
 
+@diagnostic.validation_boundary("validate_answer")
 def validate_answer(text, state, messages=(), *, literal_tool_answer=None):
     """Structural source boundary, not a general semantic-entailment checker."""
     if not enabled():
@@ -300,9 +306,11 @@ def validate_answer(text, state, messages=(), *, literal_tool_answer=None):
     # An ordinary URL may be mentioned as an inert literal. External links and
     # external evidence claims are forbidden; local KB is the only fact source.
     if _contains_external_evidence_claim(text):
+        diagnostic.boundary_rejection('external_evidence_claim', text)
         return '[回答未通过来源校验] 请依据本地剧情原文重新回答。'
     texts, source_names, rejection = _answer_source_corpus(state, messages)
     if rejection is not None:
+        diagnostic.boundary_rejection('evidence_changed', rejection)
         return rejection
     # Original deterministic metadata previews may intentionally stop inside a
     # quotation. Only their exact current rendering can waive these heuristics;
@@ -310,12 +318,13 @@ def validate_answer(text, state, messages=(), *, literal_tool_answer=None):
     if texts and not _exact_current_tool_rendering(text, state, literal_tool_answer):
         corpus = _normalized('\n'.join(texts))
         question = _normalized(state.get('user_query', ''))
+        diagnostic.quote_comparisons(text, texts, source_names, state.get('user_query', ''), corpus, question)
         rejection = _quotation_validation_failure(text, corpus, source_names, question)
         if rejection is not None:
             return rejection
     literal = _quote_inert_urls(text)
     from .canonical_bridge import finalize
-    return finalize(literal, state)
+    return finalize(literal, state, literal_tool_answer=literal_tool_answer)
 
 
 def _normalized(value):
