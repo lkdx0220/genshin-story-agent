@@ -13,6 +13,7 @@ L2（完整路径）：Plan → Tool 循环 → Answer，最多 MAX_AGENT_ITERAT
 from langgraph.graph import StateGraph, END
 
 from app.schema import GenshinAdvisorState
+from app.statistics.routing import statistics_gate
 from app.agent import (
     rewrite_query,
     assess_query,
@@ -37,8 +38,13 @@ def create_agent_workflow() -> StateGraph:
     workflow.add_node("plan_agent", plan_agent)
     workflow.add_node("tools", tool_executor)
     workflow.add_node("answer_agent", answer_agent)
+    workflow.add_node("statistics_gate", statistics_gate)
 
-    workflow.set_entry_point("rewrite_query")
+    workflow.set_entry_point("statistics_gate")
+    workflow.add_conditional_edges(
+        "statistics_gate", lambda state: "statistics" if state.get("count_result") is not None else "legacy",
+        {"statistics": END, "legacy": "rewrite_query"},
+    )
     workflow.add_edge("rewrite_query", "assess_query")
 
     # 分类后路由：L1 → fast_agent，L2 → plan_agent

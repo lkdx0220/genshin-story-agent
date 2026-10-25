@@ -44,6 +44,7 @@ L3_SECTION_COVERAGE = _load_prompt("system/agent_system_v4_l3_section_coverage.t
 
 # ====== Agent 状态 ======
 class GenshinAdvisorState(TypedDict):
+    count_result: Optional[Dict[str, object]]  # Current-request deterministic statistics only
     wiki_route: Optional[Dict[str, object]]  # Optional finite Wiki gate metadata
     wiki_evidence: Optional[Dict[str, object]]  # verified local original-source data
     user_query: str

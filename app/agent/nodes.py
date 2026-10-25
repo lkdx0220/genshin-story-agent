@@ -4318,12 +4318,16 @@ DIRECT_ANSWER_TOOLS = {
 }
 
 
-def _get_direct_metadata_answer(messages: list, original_query: str = "") -> str | None:
+def _get_direct_metadata_answer(messages: list, original_query: str = "", *, count_result=None) -> str | None:
     """如果当前只发生了元数据类工具调用，直接返回其原始结果。
 
     返回 None 表示不适用（存在非元数据工具、或没有任何工具消息）。
     返回字符串时，调用方应跳过回答 LLM，直接将字符串作为 final_response。
     """
+    if count_result is not None:
+        from app.statistics.contracts import validate_result
+        return validate_result(count_result)["answer_text_hint"]
+
     # 默认不允许把完整元数据卡直接当答案；只有用户明确要求“详情/资料/原始数据”才返回。
     # 介绍类、是谁类、背景类问题统一交给 Answer LLM 综合叙述。
     if _should_synthesize_answer(original_query):
