@@ -357,10 +357,36 @@ def chat_ui():
     if os.path.exists(ui_path):
         try:
             with open(ui_path, "r", encoding="utf-8") as f:
-                return f.read()
+                html = f.read()
         except OSError as e:
             return f"<h1>读取 chat_ui.html 失败: {e}</h1>", 500
+        # 浏览器读不到系统鼠标大小；本机访问时由服务端读注册表注入，远程访问者的系统设置无从得知
+        if _is_local_request():
+            size = _windows_cursor_base_size()
+            if size:
+                html = html.replace(
+                    '<meta name="os-cursor-size" content="">',
+                    f'<meta name="os-cursor-size" content="{size}">',
+                    1,
+                )
+        return html
     return "<h1>chat_ui.html 未找到</h1>", 404
+
+
+
+def _windows_cursor_base_size() -> int:
+    """Windows「鼠标指针大小」对应的基准像素（100% 缩放下，默认 32）；非 Windows 或读取失败返回 0。"""
+    if sys.platform != "win32":
+        return 0
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Cursors") as key:
+            value, _ = winreg.QueryValueEx(key, "CursorBaseSize")
+        value = int(value)
+        return value if 16 <= value <= 512 else 0
+    except (OSError, ValueError):
+        return 0
 
 
 # ====== 首页 ======

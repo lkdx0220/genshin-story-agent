@@ -3,8 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
+<!-- 本机访问时服务端填入 Windows「鼠标指针大小」（CursorBaseSize），远程访问留空 -->
+<meta name="os-cursor-size" content="">
 <title>原神剧情助手</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- 标题衬线字体：fontsource 按 unicode-range 分片，只下载页面实际用到的字；加载失败回退到无衬线 -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc@5/chinese-simplified-600.css">
 <style>
 :root {
   --bg-deep: #0a0e17;
@@ -17,19 +21,24 @@
   --ice: #7ec8e3;
   --ice-dim: #5a9ab0;
   --text: #d4c5b2;
-  --text-dim: #8b7d6b;
-  --text-muted: #5a5148;
+  --text-dim: #a39581;
+  --text-muted: #7d7264;
   --user-bubble: #c9a96e;
   --user-text: #0a0e17;
   --ai-bubble: #1a1f2e;
   --ai-border: #2a3040;
-  --border: #1e2532;
+  --border: #232b3a;
+  --col: 820px;  /* 对话列最大宽度：宽屏下保持舒适的行长 */
   --red: #e06060;
-  --font-display: 'Noto Serif SC', 'SimSun', 'STSong', serif;
+  --font-display: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', var(--font-body);
   --font-body: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', system-ui, sans-serif;
   --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
 }
 *{margin:0;padding:0;box-sizing:border-box}
+/* 全页统一星形指针，--cursor 由 head 里的 applyCursorSize() 按系统指针大小生成；文本输入处保留 I 形光标 */
+:root{--cursor:auto}
+*,*::before,*::after{cursor:var(--cursor)!important}
+textarea,input:not([type=button]):not([type=submit]){cursor:text!important}
 body{
   font-family:var(--font-body);
   background:var(--bg-deep);
@@ -77,8 +86,8 @@ body{
 .sidebar-backdrop.show{opacity:1;visibility:visible}
 .sidebar-header h1{
   font-family:var(--font-display);
-  font-size:17px;color:var(--gold);
-  letter-spacing:0.05em;margin-bottom:12px;
+  font-size:19px;font-weight:600;color:var(--gold);
+  letter-spacing:0.06em;margin-bottom:14px;
   display:flex;align-items:center;gap:6px;
 }
 .sidebar-header h1::before{
@@ -91,7 +100,7 @@ body{
   width:100%;padding:10px 0;border-radius:8px;
   border:1px solid var(--gold-dim);
   background:rgba(201,169,110,0.06);
-  color:var(--gold);font-size:13px;cursor:pointer;
+  color:var(--gold);font-size:14px;cursor:pointer;
   font-family:var(--font-body);
   transition:all 0.2s;
   display:flex;align-items:center;justify-content:center;gap:6px;
@@ -105,122 +114,140 @@ body{
   flex:1;overflow-y:auto;padding:8px;
 }
 .conv-item{
-  padding:10px 12px;border-radius:6px;
-  cursor:pointer;font-size:13px;
-  color:var(--text-dim);margin:2px 0;
+  width:100%;padding:9px 10px 9px 12px;border-radius:6px;
+  cursor:pointer;font-size:14px;
+  color:var(--text-dim);margin:1px 0;
   transition:all 0.15s;
   display:flex;align-items:center;gap:6px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  background:none;border:none;text-align:left;font-family:var(--font-body);
 }
+.conv-title{flex:1;overflow:hidden;text-overflow:ellipsis}
+.conv-group{
+  font-size:12px;color:var(--text-muted);
+  padding:14px 12px 6px;letter-spacing:0.05em;
+}
+.conv-group:first-child{padding-top:6px}
+.conv-empty{font-size:13px;color:var(--text-muted);padding:16px 12px;text-align:center}
+.conv-search{margin:12px 0 0;position:relative}
+.conv-search svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-muted);pointer-events:none}
+.conv-search input{
+  width:100%;padding:8px 10px 8px 32px;border-radius:6px;
+  border:1px solid var(--border);background:var(--bg-input);
+  color:var(--text);font-size:13px;font-family:var(--font-body);outline:none;
+}
+.conv-search input:focus{border-color:var(--gold-dim)}
+.conv-search input::placeholder{color:var(--text-muted)}
 .conv-item:hover{background:rgba(255,255,255,0.03);color:var(--text)}
-.conv-item.active{background:rgba(201,169,110,0.08);color:var(--gold)}
+.conv-item.active{background:rgba(201,169,110,0.1);color:var(--gold);box-shadow:inset 2px 0 0 var(--gold)}
 .conv-item .del-btn{
   margin-left:auto;opacity:0;background:none;border:none;
-  color:var(--red);cursor:pointer;font-size:14px;
-  padding:2px 4px;border-radius:3px;
+  color:var(--red);cursor:pointer;font-size:16px;line-height:1;
+  padding:2px 6px;border-radius:3px;flex-shrink:0;
   transition:opacity 0.15s;
 }
-.conv-item:hover .del-btn{opacity:0.6}
+.conv-item:hover .del-btn,.conv-item:focus-within .del-btn,.conv-item.active .del-btn{opacity:0.6}
 .conv-item .del-btn:hover{opacity:1;background:rgba(224,96,96,0.15)}
 .sidebar-footer{
-  padding:12px 16px;border-top:1px solid var(--border);
-  font-size:11px;color:var(--text-muted);
+  padding:10px 12px;border-top:1px solid var(--border);
+  font-size:12px;color:var(--text-muted);
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
 }
-/* ---- 访问令牌 ---- */
-.token-row{
-  display:flex;gap:6px;align-items:center;
-  margin-bottom:8px;padding:8px 10px;
-  background:rgba(255,255,255,0.03);
-  border:1px solid var(--border);
-  border-radius:6px;
+.settings-btn{
+  display:flex;align-items:center;gap:6px;
+  background:none;border:1px solid transparent;border-radius:6px;
+  color:var(--text-dim);font-size:13px;font-family:var(--font-body);
+  padding:6px 8px;cursor:pointer;transition:all 0.15s;
 }
-.token-row input{
-  flex:1;min-width:0;
-  background:var(--bg-input);
-  border:1px solid var(--border);
-  border-radius:4px;
-  color:var(--text);
-  font-size:11px;
-  padding:5px 8px;
-  outline:none;
+.settings-btn:hover{color:var(--text);border-color:var(--border);background:rgba(255,255,255,0.03)}
+.token-badge{
+  font-size:11px;padding:1px 6px;border-radius:9px;
+  border:1px solid var(--border);color:var(--text-muted);
 }
-.token-row input:focus{border-color:var(--gold-dim)}
-.token-row button{
-  background:var(--gold-dim);
-  border:none;color:#0a0e17;
-  font-size:11px;border-radius:4px;
-  padding:5px 10px;cursor:pointer;
-}
+.token-badge.set{border-color:rgba(126,200,227,0.35);color:var(--ice)}
+.version{font-size:11px}
 /* ---- 主对话区 ---- */
 .main{
   flex:1;display:flex;flex-direction:column;
   min-width:0;position:relative;z-index:1;
 }
 .top-bar{
-  padding:16px 24px;border-bottom:1px solid var(--border);
+  padding:14px 24px;border-bottom:1px solid var(--border);
   display:flex;align-items:center;gap:10px;
-  background:var(--bg-deep);
+  background:rgba(10,14,23,0.85);backdrop-filter:blur(8px);
   z-index:3;
 }
 .top-bar h2{
   font-family:var(--font-display);
-  font-size:15px;color:var(--text-dim);
-  letter-spacing:0.03em;flex:1;
+  font-size:16px;font-weight:600;color:var(--text);
+  letter-spacing:0.03em;flex:1;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
+.status-pill{
+  display:flex;align-items:center;gap:7px;
+  padding:4px 10px;border-radius:12px;
+  border:1px solid var(--border);background:rgba(255,255,255,0.02);
+}
+.status-pill.busy{border-color:rgba(126,200,227,0.3)}
 .status-dot{width:7px;height:7px;border-radius:50%;background:var(--gold);box-shadow:0 0 8px var(--gold)}
 .status-text{font-size:12px;color:var(--text-dim)}
 .status-text.error{color:var(--red)}
 /* ---- 对话内容区 ---- */
 .chat-area{
-  flex:1;overflow-y:auto;padding:20px 24px;
-  display:flex;flex-direction:column;gap:4px;
+  flex:1;overflow-y:auto;padding:24px 24px 32px;
+  display:flex;flex-direction:column;gap:6px;
 }
+/* 消息与欢迎页都收进居中列；滚动条仍贴窗口右侧 */
+.chat-area>*{width:100%;max-width:var(--col);margin-left:auto;margin-right:auto}
 /* ---- 欢迎页 ---- */
 .welcome{
   display:flex;flex-direction:column;
   align-items:center;justify-content:center;
-  height:100%;text-align:center;
-  margin-top:-60px;
+  min-height:100%;text-align:center;
+  padding-bottom:40px;
 }
 .welcome-icon{
-  font-size:52px;margin-bottom:16px;
-  filter:drop-shadow(0 0 20px rgba(201,169,110,0.3));
+  color:var(--gold);margin-bottom:18px;
+  filter:drop-shadow(0 0 18px rgba(201,169,110,0.45));
 }
+.welcome-icon svg{display:block}
 .welcome h2{
   font-family:var(--font-display);
-  font-size:28px;color:var(--gold);
-  letter-spacing:0.04em;margin-bottom:6px;
+  font-size:34px;font-weight:600;color:var(--gold);
+  letter-spacing:0.08em;margin-bottom:10px;
 }
 .welcome p{
-  color:var(--text-dim);font-size:14px;margin-bottom:28px;
+  color:var(--text-dim);font-size:15px;margin-bottom:36px;letter-spacing:0.04em;
 }
 .example-grid{
   display:grid;grid-template-columns:1fr 1fr;
-  gap:10px;max-width:540px;width:100%;
+  gap:12px;max-width:640px;width:100%;
 }
 .example-card{
   background:var(--bg-surface);
   border:1px solid var(--border);
-  border-radius:8px;padding:14px 16px;
-  cursor:pointer;font-size:13px;color:var(--text-dim);
+  border-radius:10px;padding:14px 16px;
+  cursor:pointer;font-size:14px;color:var(--text);
   text-align:left;transition:all 0.2s;
-  line-height:1.5;
+  line-height:1.5;font-family:var(--font-body);
   display:flex;align-items:center;
 }
 .example-card:hover{
   border-color:var(--gold-dim);
-  color:var(--text);
-  box-shadow:0 4px 20px rgba(201,169,110,0.06);
+  background:#151b27;
+  box-shadow:0 4px 20px rgba(201,169,110,0.08);
   transform:translateY(-1px);
 }
 /* ---- 消息气泡 ---- */
 .message{
   display:flex;gap:12px;
-  max-width:85%;animation:msgIn 0.25s ease-out;
-  padding:4px 0;
+  animation:msgIn 0.25s ease-out;
+  padding:6px 0;
 }
-.message.user{align-self:flex-end;flex-direction:row-reverse}
-.message.assistant{align-self:flex-start}
+.message.user{flex-direction:row-reverse}
+.message.user>.msg-col{max-width:80%;align-items:flex-end}
+.message.assistant>.msg-col{flex:1}
+.msg-col{display:flex;flex-direction:column;min-width:0}
 @keyframes msgIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 .avatar{
   width:32px;height:32px;border-radius:50%;
@@ -231,7 +258,7 @@ body{
 .message.assistant .avatar{background:rgba(126,200,227,0.1);color:var(--ice)}
 .bubble{
   padding:12px 16px;border-radius:12px;
-  font-size:14px;line-height:1.7;
+  font-size:15px;line-height:1.8;
   word-break:break-word;
   user-select:text;-webkit-user-select:text;
 }
@@ -246,14 +273,14 @@ body{
   border-bottom-left-radius:4px;
 }
 /* ---- Markdown 内部样式 ---- */
-.bubble h3{color:var(--gold);font-size:15px;margin:12px 0 6px;font-family:var(--font-display)}
-.bubble h4{color:var(--ice);font-size:14px;margin:8px 0 4px}
+.bubble h3{color:var(--gold);font-size:16px;margin:12px 0 6px;font-family:var(--font-display)}
+.bubble h4{color:var(--ice);font-size:15px;margin:8px 0 4px}
 .bubble p{margin:6px 0}
 .bubble ul,.bubble ol{margin:6px 0 6px 20px}
 .bubble li{margin:2px 0}
 .bubble code{
   background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:3px;
-  font-family:var(--font-mono);font-size:12px;
+  font-family:var(--font-mono);font-size:13px;
   color:var(--ice);
 }
 .bubble pre{
@@ -264,7 +291,7 @@ body{
 .bubble pre code{background:none;padding:0}
 .bubble strong{color:var(--gold-glow)}
 .bubble em{color:var(--ice-dim)}
-.bubble table{border-collapse:collapse;margin:8px 0;width:100%;font-size:13px}
+.bubble table{border-collapse:collapse;margin:8px 0;width:100%;font-size:14px}
 .bubble th,.bubble td{border:1px solid var(--border);padding:6px 10px;text-align:left}
 .bubble th{background:rgba(201,169,110,0.08);color:var(--gold);font-weight:600}
 .bubble blockquote{
@@ -280,7 +307,8 @@ body{
 .tool-summary{
   padding:8px 12px;cursor:pointer;
   font-size:12px;color:var(--text-dim);
-  display:flex;align-items:center;gap:6px;
+  display:flex;align-items:center;gap:6px;width:100%;
+  background:none;border:none;font-family:var(--font-body);text-align:left;
   transition:background 0.15s;
   user-select:none;
 }
@@ -309,26 +337,31 @@ body{
 @keyframes typing{0%,60%,100%{opacity:0.3;transform:scale(0.8)}30%{opacity:1;transform:scale(1)}}
 /* ---- 输入区 ---- */
 .input-area{
-  padding:16px 24px 20px;border-top:1px solid var(--border);
-  background:var(--bg-deep);z-index:3;
+  padding:12px 24px 16px;
+  background:var(--bg-deep);
+  z-index:3;
 }
+.input-inner{max-width:var(--col);margin:0 auto}
 .input-row{
-  display:flex;gap:10px;align-items:flex-end;
+  display:flex;gap:8px;align-items:flex-end;
+  padding:6px 6px 6px 4px;border-radius:14px;
+  border:1px solid var(--border);background:var(--bg-input);
+  box-shadow:0 6px 24px rgba(0,0,0,0.35);
+  transition:border-color 0.2s,box-shadow 0.2s;
 }
+.input-row:focus-within{border-color:var(--gold-dim);box-shadow:0 6px 24px rgba(0,0,0,0.35),0 0 0 3px rgba(201,169,110,0.08)}
 .input-box{
-  flex:1;padding:12px 16px;border-radius:10px;
-  border:1px solid var(--border);
-  background:var(--bg-input);color:var(--text);
-  font-size:14px;font-family:var(--font-body);
+  flex:1;padding:9px 12px;border-radius:10px;
+  border:none;
+  background:transparent;color:var(--text);
+  font-size:15px;font-family:var(--font-body);
   resize:none;outline:none;line-height:1.5;
-  min-height:44px;max-height:160px;
-  transition:border-color 0.2s;
+  min-height:40px;max-height:200px;
   user-select:text;-webkit-user-select:text;
 }
-.input-box:focus{border-color:var(--gold-dim);box-shadow:0 0 0 2px rgba(201,169,110,0.08)}
 .input-box::placeholder{color:var(--text-muted)}
 .send-btn{
-  width:44px;height:44px;border-radius:10px;
+  width:40px;height:40px;border-radius:10px;
   border:1px solid var(--gold-dim);
   background:rgba(201,169,110,0.1);
   color:var(--gold);cursor:pointer;
@@ -341,7 +374,8 @@ body{
   box-shadow:0 0 12px rgba(201,169,110,0.15);
 }
 .send-btn:disabled{opacity:0.3;cursor:not-allowed;box-shadow:none}
-.input-hint{font-size:11px;color:var(--text-muted);margin-top:6px;text-align:right}
+.input-hint{font-size:12px;color:var(--text-muted);margin-top:8px;text-align:center}
+.input-hint kbd{font-family:var(--font-body);font-size:11px;padding:0 5px;border:1px solid var(--border);border-radius:4px;color:var(--text-dim)}
 /* ---- 自定义确认弹窗 ---- */
 .modal-overlay{
   position:fixed;top:0;left:0;width:100%;height:100%;
@@ -394,6 +428,29 @@ body{
   background:#e07070;
   box-shadow:0 0 20px rgba(224,96,96,0.35);
 }
+.modal-btn-primary{background:var(--gold);color:var(--user-text);font-weight:600}
+.modal-btn-primary:hover{background:var(--gold-glow)}
+.modal-box.settings{max-width:420px;text-align:left}
+.modal-box.settings .modal-title{text-align:left;margin-bottom:16px;font-size:17px}
+.field-label{display:block;font-size:13px;color:var(--text);margin-bottom:6px}
+.field-help{font-size:12px;color:var(--text-muted);margin-top:6px;line-height:1.6}
+.field-input{
+  width:100%;padding:9px 12px;border-radius:8px;
+  border:1px solid var(--border);background:var(--bg-input);
+  color:var(--text);font-size:14px;font-family:var(--font-mono);outline:none;
+}
+.field-input:focus{border-color:var(--gold-dim)}
+.modal-box.settings .modal-btns{justify-content:flex-end;margin-top:22px}
+.toast{
+  position:fixed;left:50%;bottom:96px;transform:translateX(-50%);
+  background:var(--bg-surface);border:1px solid var(--gold-dim);color:var(--text);
+  font-size:13px;padding:8px 16px;border-radius:8px;z-index:200;
+  box-shadow:0 6px 24px rgba(0,0,0,0.4);animation:fadeIn 0.2s ease;
+}
+/* ---- 键盘焦点 ---- */
+button:focus-visible,input:focus-visible,.conv-item:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.conv-item:focus-visible{outline-offset:-2px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 @keyframes scaleIn{from{opacity:0;transform:scale(0.92)}to{opacity:1;transform:scale(1)}}
 /* ---- 滚动条 ---- */
@@ -408,9 +465,12 @@ body{
   /* 抽屉盖住左侧 260px，汉堡按钮在它下面点不到，必须有遮罩与关闭按钮 */
   .sidebar-backdrop{display:block}
   .sidebar-close{display:flex}
-  .message{max-width:92%}
+  .message.user>.msg-col{max-width:88%}
+  .welcome h2{font-size:26px}
   .example-grid{grid-template-columns:1fr}
-  .input-area{padding:12px 16px 16px}
+  .input-area{padding:8px 12px 12px}
+  .input-hint{display:none}
+  .conv-item .del-btn{opacity:0.6}
   .chat-area{padding:16px}
   .top-bar{padding:12px 16px}
   .hamburger{
@@ -426,6 +486,45 @@ body{
 }
 @media(min-width:769px){.hamburger{display:none!important}}
 </style>
+<script>
+// ====== 星形鼠标指针 ======
+// 图案取自 ys_sc_534517 pointer.cur：原文件是 72px 画布，这里只保留左上 48px 有图的部分。
+// Windows 会把整张 72px 画布缩放到「指针大小 × 显示缩放」，所以裁剪后的显示尺寸 = 48/72 × 指针大小（CSS 像素）。
+const CURSOR_SRC='data:image/png;base64,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';
+const CURSOR_CROP_RATIO=48/72;
+const CURSOR_DEFAULT_BASE=32;   // Windows 默认指针大小（档位 1）
+const CURSOR_MAX_CSS=128;       // Chromium 忽略超过 128 CSS 像素的自定义光标
+
+function cursorBaseSize(){
+  const saved=Number(localStorage.getItem('cursor_size')||0);
+  if(saved)return saved;
+  const os=Number(document.querySelector('meta[name="os-cursor-size"]')?.content||0);
+  return os||CURSOR_DEFAULT_BASE;
+}
+
+function applyCursorSize(){
+  const css=Math.min(CURSOR_MAX_CSS,Math.round(cursorBaseSize()*CURSOR_CROP_RATIO));
+  const dpr=window.devicePixelRatio||1;
+  const px=Math.round(css*dpr);
+  const img=new Image();
+  img.onload=()=>{
+    // 按设备像素重采样一次，避免浏览器在高 DPI 屏上把小图再放大发糊
+    const c=document.createElement('canvas');c.width=c.height=px;
+    const ctx=c.getContext('2d');ctx.imageSmoothingQuality='high';
+    ctx.drawImage(img,0,0,px,px);
+    const url=c.toDataURL('image/png');
+    // image-set 声明 dpr 倍图，光标的 CSS 尺寸 = px / dpr；热点在左上尖端
+    document.documentElement.style.setProperty('--cursor',
+      `-webkit-image-set(url("${url}") ${dpr}x) 0 0, url("${url}") 0 0, auto`);
+  };
+  img.src=CURSOR_SRC;
+}
+applyCursorSize();
+// 拖到不同缩放比例的显示器上时 devicePixelRatio 会变，重新生成
+(function watchDpr(){
+  matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener('change',()=>{applyCursorSize();watchDpr();},{once:true});
+})();
+</script>
 </head>
 <body>
 
@@ -441,51 +540,44 @@ body{
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       新建对话
     </button>
-  </div>
-  <div class="conversation-list" id="convList"></div>
-  <div class="sidebar-footer">
-    <div class="token-row">
-      <input id="apiTokenInput" type="password" placeholder="访问令牌（远程时填写）" autocomplete="off">
-      <button onclick="saveApiToken()" title="保存令牌">保存</button>
+    <div class="conv-search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="convSearch" type="search" placeholder="搜索对话" aria-label="搜索对话" oninput="renderSidebar()">
     </div>
-    <div>v4.0 &middot; Plan/Answer 架构</div>
+  </div>
+  <nav class="conversation-list" id="convList" aria-label="历史对话"></nav>
+  <div class="sidebar-footer">
+    <button class="settings-btn" onclick="openSettings()" aria-label="设置">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      设置
+      <span class="token-badge" id="tokenBadge">未设令牌</span>
+    </button>
+    <span class="version" title="Plan/Answer 架构">v4.0</span>
   </div>
 </aside>
 
 <!-- 主区域 -->
 <main class="main">
   <div class="top-bar">
-    <button class="hamburger" onclick="toggleSidebar()">
+    <button class="hamburger" onclick="toggleSidebar()" aria-label="打开会话列表">
       <span></span><span></span><span></span>
     </button>
     <h2 id="convTitle">新对话</h2>
-    <div class="status-dot" id="statusDot" title="Agent 就绪"></div>
-    <span class="status-text" id="statusText">就绪</span>
-  </div>
-
-  <div class="chat-area" id="chatArea">
-    <!-- 欢迎页 -->
-    <div class="welcome" id="welcome">
-      <div class="welcome-icon">&#x2726;</div>
-      <h2>提瓦特剧情档案馆</h2>
-      <p>探索七国历史、角色故事与世界观深处的秘密</p>
-      <div class="example-grid">
-        <div class="example-card" onclick="askExample(this)">枫丹的正义之神是谁？</div>
-        <div class="example-card" onclick="askExample(this)">比较蒙德和璃月的饮食文化差异</div>
-        <div class="example-card" onclick="askExample(this)">解释一下"神之眼"的发放机制</div>
-        <div class="example-card" onclick="askExample(this)">介绍一下《提瓦特游览指南》</div>
-        <div class="example-card" onclick="askExample(this)">须弥有哪些特产？</div>
-        <div class="example-card" onclick="askExample(this)">「引蝶之章」有哪些子任务？</div>
-      </div>
+    <div class="status-pill" id="statusPill" role="status">
+      <div class="status-dot" id="statusDot"></div>
+      <span class="status-text" id="statusText">就绪</span>
     </div>
   </div>
 
+  <div class="chat-area" id="chatArea" aria-live="polite"></div>
+
   <div class="input-area">
+    <div class="input-inner">
     <div class="input-row">
       <textarea class="input-box" id="inputBox" rows="1"
         lang="zh-CN" autocomplete="on" spellcheck="false" inputmode="text"
-        placeholder="输入你想了解的原神剧情问题..."
-        onkeydown="handleKey(event)"></textarea>
+        placeholder="输入你想了解的原神剧情问题…" aria-label="提问"
+        onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
       <button class="send-btn" id="sendBtn" onclick="handleSendBtn()" title="发送">
         <svg id="sendIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
@@ -495,7 +587,8 @@ body{
         </svg>
       </button>
     </div>
-    <div class="input-hint">Enter 发送 &middot; Shift+Enter 换行</div>
+    <div class="input-hint"><kbd>Enter</kbd> 发送 &middot; <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 &middot; 回答基于知识库检索，可能存在偏差</div>
+    </div>
   </div>
 </main>
 
@@ -583,12 +676,80 @@ function getAuthHeaders(extra){
   return headers;
 }
 
-function saveApiToken(){
-  const input = document.getElementById('apiTokenInput');
-  apiToken = (input.value || '').trim();
+function saveApiToken(value){
+  apiToken = (value || '').trim();
   localStorage.setItem('api_token', apiToken);
-  input.value = apiToken;
-  console.log('已保存访问令牌');
+  updateTokenBadge();
+  showToast(apiToken ? '访问令牌已保存' : '访问令牌已清除');
+  loadSessions();  // 令牌决定会话命名空间，换令牌后刷新列表
+}
+
+function updateTokenBadge(){
+  const b=document.getElementById('tokenBadge');
+  if(!b)return;
+  b.textContent=apiToken?'已设令牌':'未设令牌';
+  b.classList.toggle('set',!!apiToken);
+}
+
+function showToast(text){
+  const t=document.createElement('div');
+  t.className='toast';t.setAttribute('role','status');t.textContent=text;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(),1800);
+}
+
+function osCursorLabel(){
+  const os=Number(document.querySelector('meta[name="os-cursor-size"]')?.content||0);
+  return os?`（当前 ${os}px）`:'（未检测到，按默认）';
+}
+
+function openSettings(){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.innerHTML=`
+    <div class="modal-box settings" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modal-title" id="settingsTitle">设置</div>
+      <label class="field-label" for="apiTokenInput">访问令牌</label>
+      <input class="field-input" id="apiTokenInput" type="password" autocomplete="off" placeholder="本机直连可留空">
+      <div class="field-help">通过远程地址访问时填写。令牌只保存在本浏览器，并决定你能看到哪些历史对话。</div>
+      <label class="field-label" for="cursorSizeSelect" style="margin-top:18px">鼠标指针大小</label>
+      <select class="field-input" id="cursorSizeSelect" style="font-family:var(--font-body)">
+        <option value="0">跟随系统${osCursorLabel()}</option>
+        <option value="32">1 档（默认）</option>
+        <option value="48">2 档</option>
+        <option value="64">3 档</option>
+        <option value="96">5 档</option>
+        <option value="128">7 档</option>
+      </select>
+      <div class="field-help">档位对应 Windows「设置 → 辅助功能 → 鼠标指针和触控 → 大小」。远程访问时读不到系统设置，可在这里手动选。</div>
+      <div class="modal-btns">
+        <button class="modal-btn modal-btn-cancel">取消</button>
+        <button class="modal-btn modal-btn-primary">保存</button>
+      </div>
+    </div>`;
+  const input=overlay.querySelector('#apiTokenInput');
+  input.value=apiToken;
+  const sizeSel=overlay.querySelector('#cursorSizeSelect');
+  const savedSize=localStorage.getItem('cursor_size')||'0';
+  sizeSel.value=sizeSel.querySelector(`option[value="${savedSize}"]`)?savedSize:'0';
+  // 选中即预览，取消时还原
+  sizeSel.onchange=()=>{localStorage.setItem('cursor_size',sizeSel.value);applyCursorSize();};
+  const close=()=>overlay.remove();
+  const cancel=()=>{localStorage.setItem('cursor_size',savedSize);applyCursorSize();close();};
+  const save=()=>{
+    if(sizeSel.value==='0')localStorage.removeItem('cursor_size');
+    if(input.value.trim()!==apiToken)saveApiToken(input.value);
+    close();
+  };
+  overlay.querySelector('.modal-btn-cancel').onclick=cancel;
+  overlay.querySelector('.modal-btn-primary').onclick=save;
+  overlay.addEventListener('click',e=>{if(e.target===overlay)cancel();});
+  overlay.addEventListener('keydown',e=>{
+    if(e.key==='Escape')cancel();
+    else if(e.key==='Enter'&&e.target===input)save();
+  });
+  document.body.appendChild(overlay);
+  input.focus();
 }
 
 // 会话 ID 由时间戳 + 随机串组成：时间戳可猜，光靠它别人能凭 /api/sessions/<id> 读删同一个会话
@@ -607,8 +768,10 @@ async function loadSessions(){
       conversations=data.sessions.filter(s=>/^[A-Za-z0-9_-]{1,64}$/.test(s.id||'')).map(s=>({
         id:s.id,title:s.title,messages:[],loaded:false
       }));
-      renderSidebar();
+    }else{
+      conversations=conversations.filter(c=>c.loaded&&c.messages.length===0);
     }
+    renderSidebar();
   }catch(e){
     console.error('加载会话列表失败:',e);
   }
@@ -623,19 +786,55 @@ function newChat(){
   renderSidebar();
 }
 
+// 会话 ID 形如 conv_<毫秒时间戳>_<随机串>，用它推出创建时间做分组，无需后端额外字段
+function convTime(c){
+  const m=/^conv_(\d{13})/.exec(c.id);
+  return m?Number(m[1]):0;
+}
+
+function convGroup(ts){
+  if(!ts)return '更早';
+  const day=86400000;
+  const today=new Date();today.setHours(0,0,0,0);
+  const t=today.getTime();
+  if(ts>=t)return '今天';
+  if(ts>=t-day)return '昨天';
+  if(ts>=t-7*day)return '近 7 天';
+  if(ts>=t-30*day)return '近 30 天';
+  return '更早';
+}
+
+function convDisplayTitle(c){
+  if(c.title==='新对话'&&c.messages.length>0){
+    const t=c.messages[0].text.replace(/\n/g,' ');
+    return t.slice(0,20)+(t.length>20?'…':'');
+  }
+  return c.title||'新对话';
+}
+
 function renderSidebar(){
   const list=document.getElementById('convList');
-  list.innerHTML=conversations.map(c=>{
-    let title=c.title;
-    if(title==='新对话'&&c.messages.length>0){
-      title=c.messages[0].text.replace(/\n/g,' ').slice(0,20)+(c.messages[0].text.length>20?'...':'');
-    }
-    const active=c.id===currentConvId?'active':'';
-    return `<div class="conv-item ${active}" onclick="switchConv('${c.id}')">
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${escHtml(title)}</span>
-      <button class="del-btn" onclick="event.stopPropagation();deleteConv('${c.id}')" title="删除">×</button>
+  const q=(document.getElementById('convSearch')?.value||'').trim().toLowerCase();
+  const items=conversations
+    .map(c=>({c,title:convDisplayTitle(c),ts:convTime(c)}))
+    .filter(x=>!q||x.title.toLowerCase().includes(q))
+    .sort((a,b)=>b.ts-a.ts);
+  if(items.length===0){
+    list.innerHTML=`<div class="conv-empty">${q?'没有匹配的对话':'还没有对话'}</div>`;
+    return;
+  }
+  let html='',lastGroup='';
+  for(const {c,title,ts} of items){
+    const g=convGroup(ts);
+    if(g!==lastGroup){html+=`<div class="conv-group">${g}</div>`;lastGroup=g;}
+    const active=c.id===currentConvId;
+    html+=`<div class="conv-item${active?' active':''}" role="button" tabindex="0"${active?' aria-current="true"':''}
+      onclick="switchConv('${c.id}')" onkeydown="if(event.target===this&&(event.key==='Enter'||event.key===' ')){event.preventDefault();switchConv('${c.id}')}">
+      <span class="conv-title" title="${escHtml(title).replace(/"/g,'&quot;')}">${escHtml(title)}</span>
+      <button class="del-btn" onclick="event.stopPropagation();deleteConv('${c.id}')" title="删除" aria-label="删除对话">×</button>
     </div>`;
-  }).join('');
+  }
+  list.innerHTML=html;
 }
 
 function switchConv(id){
@@ -690,19 +889,28 @@ function switchConv(id){
     });
 }
 
+const EXAMPLES=[
+  '枫丹的正义之神是谁？',
+  '比较蒙德和璃月的饮食文化差异',
+  '解释一下"神之眼"的发放机制',
+  '介绍一下《提瓦特游览指南》',
+  '须弥有哪些特产？',
+  '「引蝶之章」有哪些子任务？',
+];
+
 function showWelcome(){
+  const cards=EXAMPLES.map(q=>
+    `<button class="example-card" onclick="askExample(this)">${escHtml(q)}</button>`
+  ).join('');
   document.getElementById('chatArea').innerHTML='<div class="welcome" id="welcome">'+
-    '<div class="welcome-icon">&#x2726;</div>'+
+    '<div class="welcome-icon" aria-hidden="true"><svg width="56" height="56" viewBox="0 0 64 64">'+
+      '<path d="M32 4 C34 22 42 30 60 32 C42 34 34 42 32 60 C30 42 22 34 4 32 C22 30 30 22 32 4Z" fill="currentColor"/>'+
+      '<circle cx="32" cy="32" r="22" fill="none" stroke="currentColor" stroke-opacity="0.35" stroke-width="1"/>'+
+      '<circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" stroke-opacity="0.15" stroke-width="1" stroke-dasharray="2 4"/>'+
+    '</svg></div>'+
     '<h2>提瓦特剧情档案馆</h2>'+
     '<p>探索七国历史、角色故事与世界观深处的秘密</p>'+
-    '<div class="example-grid">'+
-      '<div class="example-card" onclick="askExample(this)">枫丹的正义之神是谁？</div>'+
-      '<div class="example-card" onclick="askExample(this)">比较蒙德和璃月的饮食文化差异</div>'+
-      '<div class="example-card" onclick="askExample(this)">解释一下"神之眼"的发放机制</div>'+
-      '<div class="example-card" onclick="askExample(this)">介绍一下《提瓦特游览指南》</div>'+
-      '<div class="example-card" onclick="askExample(this)">须弥有哪些特产？</div>'+
-      '<div class="example-card" onclick="askExample(this)">「引蝶之章」有哪些子任务？</div>'+
-    '</div></div>';
+    '<div class="example-grid">'+cards+'</div></div>';
 }
 
 function deleteConv(id){
@@ -745,14 +953,14 @@ function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').repla
 // ====== 消息渲染 ======
 function renderMessage(m,idx){
   const role=m.role;
-  const avatar=role==='user'?('&#x1F464;'):('<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="5"/><path d="M3 21c0-5 4-9 9-9s9 4 9 9"/></svg>');
+  const avatar=role==='user'?('<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>'):('<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="5"/><path d="M3 21c0-5 4-9 9-9s9 4 9 9"/></svg>');
   let toolHtml='';
   if(m.tool_calls&&m.tool_calls.length>0){
     const total=m.tool_calls.length;
     toolHtml=`<div class="tool-panel">
-      <div class="tool-summary" onclick="toggleTools(this)" title="点击展开">
-        <span class="arrow">▶</span> 工具调用（${total} 次）
-      </div>
+      <button class="tool-summary" onclick="toggleTools(this)" aria-expanded="false">
+        <span class="arrow" aria-hidden="true">▶</span> 工具调用（${total} 次）
+      </button>
       <div class="tool-body">${m.tool_calls.map((tc,i)=>
         `<div class="tool-row"><span class="tool-iter">#${i+1}</span><span class="tool-name">${escHtml(tc.tool)}</span><span class="tool-args">${escHtml(tc.args||'')}</span></div>`
       ).join('')}</div>
@@ -761,7 +969,7 @@ function renderMessage(m,idx){
   const bubbleContent=role==='assistant'?renderMarkdown(m.text):escHtml(m.text);
   return `<div class="message ${role}">
     <div class="avatar">${avatar}</div>
-    <div style="display:flex;flex-direction:column;min-width:0">
+    <div class="msg-col">
       <div class="bubble">${bubbleContent}</div>
       ${toolHtml}
     </div>
@@ -775,7 +983,8 @@ function bindToolPanels(){
 }
 
 function toggleTools(el){
-  el.classList.toggle('expanded');
+  const open=el.classList.toggle('expanded');
+  el.setAttribute('aria-expanded',String(open));
   const body=el.nextElementSibling;
   if(body)body.classList.toggle('open');
 }
@@ -843,7 +1052,7 @@ async function sendMessage(){
   const progressEl=document.createElement('div');
   progressEl.className='message assistant';
   progressEl.id='progressMsg';
-  progressEl.innerHTML=`<div class="avatar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="5"/><path d="M3 21c0-5 4-9 9-9s9 4 9 9"/></svg></div><div class="bubble" id="progressBubble"><div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div><div style="margin-top:6px;font-size:12px;color:var(--text-muted)" id="progressText">正在思考…</div></div>`;
+  progressEl.innerHTML=`<div class="avatar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="8" r="5"/><path d="M3 21c0-5 4-9 9-9s9 4 9 9"/></svg></div><div class="msg-col"><div class="bubble" id="progressBubble"><div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div><div style="margin-top:6px;font-size:13px;color:var(--text-dim)" id="progressText">正在思考…</div></div></div>`;
   document.getElementById('chatArea').appendChild(progressEl);
   scrollBottom();
 
@@ -921,8 +1130,8 @@ async function sendMessage(){
                 st=document.createElement('div');
                 st.id='streamText';
                 st.style.marginTop='6px';
-                st.style.fontSize='14px';
-                st.style.lineHeight='1.7';
+                st.style.fontSize='15px';
+                st.style.lineHeight='1.8';
                 pb.appendChild(st);
                 const pt=document.getElementById('progressText');
                 if(pt)pt.remove();
@@ -1005,7 +1214,8 @@ function setLoading(loading){
     stopIcon.style.display='';
     dot.style.background='var(--ice)';
     dot.style.boxShadow='0 0 8px var(--ice)';
-    txt.textContent='思考中...';
+    document.getElementById('statusPill').classList.add('busy');
+    txt.textContent='思考中…';
     txt.className='status-text';
   }else{
     btn.title='发送';
@@ -1014,9 +1224,15 @@ function setLoading(loading){
     btn.disabled=false;
     dot.style.background='var(--gold)';
     dot.style.boxShadow='0 0 8px var(--gold)';
+    document.getElementById('statusPill').classList.remove('busy');
     txt.textContent='就绪';
     txt.className='status-text';
   }
+}
+
+function autoGrow(el){
+  el.style.height='auto';
+  el.style.height=Math.min(el.scrollHeight,200)+'px';
 }
 
 function handleKey(e){
@@ -1062,13 +1278,9 @@ window.addEventListener('beforeunload',()=>{
 function escHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 
 // ====== 初始化 ======
-(function(){
-  const tokenInput = document.getElementById('apiTokenInput');
-  if(tokenInput){
-    tokenInput.value = apiToken;
-    tokenInput.addEventListener('change', saveApiToken);
-  }
-})();
+updateTokenBadge();
+showWelcome();
+renderSidebar();
 loadSessions();
 </script>
 
