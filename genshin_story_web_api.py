@@ -224,6 +224,7 @@ def _get_workflow():
 
 # 取消信号映射：session_id → threading.Event
 _cancel_events: Dict[str, threading.Event] = {}
+_publication_guards: dict[str, "_EvidencePublication"] = {}
 # session_id → run_id 映射，供 /api/cancel 通过 session_id 定位运行实例
 _session_cancel_keys: Dict[str, str] = {}
 
@@ -373,7 +374,6 @@ def chat_ui():
     return "<h1>chat_ui.html 未找到</h1>", 404
 
 
-
 def _windows_cursor_base_size() -> int:
     """Windows「鼠标指针大小」对应的基准像素（100% 缩放下，默认 32）；非 Windows 或读取失败返回 0。"""
     if sys.platform != "win32":
@@ -511,9 +511,14 @@ def api_cancel():
     run_id = _session_cancel_keys.get(session_key)
     if not run_id:
         return jsonify({"success": False, "error": "未找到运行中的会话"}), 404
-    cancel_event = _cancel_events.get(run_id)
+    guard = _publication_guards.get(run_id)
+    cancel_event = guard.event if guard is not None else _cancel_events.get(run_id)
     if cancel_event:
-        cancel_event.set()
+        if guard is not None:
+            if not guard.cancel():
+                return jsonify({'success': False, 'error': '回答已经结束'}), 409
+        else:
+            cancel_event.set()
         print(f"[取消] session={session_id[:20]}... 已设置中断信号")
         return jsonify({"success": True, "cancelled": session_id})
     return jsonify({"success": False, "error": "未找到运行中的会话"}), 404
@@ -713,6 +718,69 @@ def _save_session_to_disk(session_id: str, data: dict, tenant: str | None = None
         print(f"[会话写入失败] {type(e).__name__}: {e}")
 
 
+
+class _EvidencePublication:
+    """Linearize request-local cancellation and one final publication."""
+    def __init__(self, event):
+        self.event = event
+        self.lock = threading.Lock()
+        self.published = False
+
+    def cancel(self):
+        with self.lock:
+            if self.published:
+                return False
+            self.event.set()
+            return True
+
+    def claim(self, event):
+        with self.lock:
+            if self.published:
+                return None
+            if self.event.is_set() or '[回答已中断]' in str(event.get('answer', '')):
+                event = {'type': 'cancelled', 'answer': '[回答已中断] 当前任务已被用户终止。'}
+            if event.get('type') in {'done', 'error', 'timeout', 'cancelled'}:
+                self.published = True
+            return event
+
+
+def _public_tool_name(name):
+    return isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9_]{0,62}', name) is not None
+
+
+def _evidence_progress(event):
+    kind = event.get('type')
+    allowed = {'rewrite_start', 'rewrite_end', 'assess_start', 'assess_end',
+               'plan_start', 'plan_end', 'tool_start', 'tool_end', 'answer_start'}
+    if kind not in allowed:
+        return None
+    public = {'type': kind}
+    if _public_tool_name(event.get('tool')):
+        public['tool'] = event['tool']
+    return public
+
+
+def _evidence_events(events, guard):
+    while True:
+        try:
+            event = events.get(timeout=300)
+        except queue.Empty:
+            event = {'type': 'timeout', 'error': '回答生成超时，请简化问题后重试'}
+        if event.get('type') == 'done':
+            event = {key: event[key] for key in ('type', 'answer', 'tool_calls', 'session_id') if key in event}
+        elif event.get('type') == 'error':
+            event = {'type': 'error', 'error': '[回答生成失败] 本轮回答未展示，请重新查询。'}
+        else:
+            event = event if event.get('type') == 'timeout' else _evidence_progress(event)
+        if event is None:
+            continue
+        event = guard.claim(event)
+        if event is None:
+            return
+        yield event
+        if event['type'] in {'done', 'cancelled', 'error', 'timeout'}:
+            return
+
 def _extract_tool_calls(state: Dict) -> list:
     """从 state 的 messages 中提取工具调用记录，返回前端友好格式"""
     messages = state.get("messages", [])
@@ -763,8 +831,12 @@ def api_chat():
     conv_summary = history.get("summary", "")
     progress_queue = queue.Queue()
 
+    evidence_mode = os.environ.get('LLM_WIKI_MODE', 'off') == 'agent_evidence'
+
     def progress_hook(event):
-        progress_queue.put(event)
+        public = _evidence_progress(event) if evidence_mode else event
+        if public is not None:
+            progress_queue.put(public)
 
     def run_agent():
         try:
@@ -773,6 +845,7 @@ def api_chat():
             agent = _get_workflow()
             result = agent.invoke(
                 {
+                    "raw_query": message,  # server-captured before entry sanitation
                     "user_query": agent_module.sanitize_prompt_text(message),
                     "rewritten_query": None,
                     "alias_notes": None,
@@ -788,6 +861,17 @@ def api_chat():
             )
             answer = result.get("final_response", "无结果")
             tool_calls = _extract_tool_calls(result)
+            if evidence_mode:
+                if result.get('execution_mode') == 'L1' and not (
+                    result.get('fast_finalized') and result.get('request_nonce')
+                    and result.get('fast_terminal_nonce') == result['request_nonce']
+                ):
+                    raise ValueError('unfinalized_fast_publication')
+                tool_calls = [{'tool': item['tool']} for item in tool_calls
+                              if _public_tool_name(item.get('tool'))]
+                if result.get('termination_kind') == 'error':
+                    progress_queue.put({'type': 'error'})
+                    return
             progress_queue.put(
                 {
                     "type": "done",
@@ -795,6 +879,7 @@ def api_chat():
                     "tool_calls": tool_calls,
                     "session_id": session_id,
                     "message": message,
+                    **({"wiki_route": result["wiki_route"]} if "wiki_route" in result else {}),
                 }
             )
         except Exception as e:
@@ -805,7 +890,8 @@ def api_chat():
             progress_queue.put({"type": "error", "error": f"服务器内部错误（{type(e).__name__}），详情见服务端日志"})
         finally:
             agent_module.set_progress_hook(None)
-            agent_module._cancel_events.pop(run_id, None)
+            if not evidence_mode:
+                agent_module._cancel_events.pop(run_id, None)
 
     # 生成运行标识并注册取消信号（完整 UUID，避免短号被猜测后取消他人任务）
     import uuid
@@ -813,6 +899,8 @@ def api_chat():
     run_id = str(uuid.uuid4())
     cancel_event = threading.Event()
     _cancel_events[run_id] = cancel_event
+    if evidence_mode:
+        _publication_guards[run_id] = _EvidencePublication(cancel_event)
     # 会话键 → run_id 映射，供 /api/cancel 查找（键含命名空间，避免跨口令误取消）
     _session_cancel_keys[session_key] = run_id
 
@@ -822,6 +910,30 @@ def api_chat():
     def generate():
         nonlocal conv_pairs, conv_summary
         final_event = None
+        if evidence_mode:
+            try:
+                for public in _evidence_events(progress_queue, _publication_guards[run_id]):
+                    final_event = public['type'] if public['type'] in {'done', 'cancelled', 'error', 'timeout'} else None
+                    yield f"data: {json.dumps(public, ensure_ascii=False)}\n\n"
+                    if final_event == 'done':
+                        conv_pairs.append({'user': message, 'assistant': public['answer']})
+                        if len(conv_pairs) > SUMMARY_TRIGGER:
+                            turns_to_summarize = conv_pairs[:-RECENT_TURNS]
+                            if turns_to_summarize:
+                                conv_summary = _summarize_conversation(conv_summary, turns_to_summarize)
+                                conv_pairs = conv_pairs[-RECENT_TURNS:]
+            finally:
+                guard = _publication_guards.pop(run_id, None)
+                if guard is not None:
+                    guard.cancel()
+                _cancel_events.pop(run_id, None)
+                if _session_cancel_keys.get(session_key) == run_id:
+                    _session_cancel_keys.pop(session_key, None)
+            if final_event != 'done':
+                conv_pairs.append({'user': message, 'assistant': ''})
+            _sessions[session_key] = {'pairs': conv_pairs, 'summary': conv_summary}
+            _save_session_to_disk(session_id, _sessions[session_key], tenant)
+            return
         while True:
             try:
                 event = progress_queue.get(timeout=300)

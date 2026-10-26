@@ -47,6 +47,22 @@ class GenshinAdvisorState(TypedDict):
     count_result: Optional[Dict[str, object]]  # Current-request deterministic statistics only
     wiki_route: Optional[Dict[str, object]]  # Optional finite Wiki gate metadata
     wiki_evidence: Optional[Dict[str, object]]  # verified local original-source data
+    fast_finalized: bool | None
+    fast_terminal_nonce: str | None
+    fast_exit_kind: str | None
+    answer_validation: dict[str, object] | None
+    answer_diagnostics: dict[str, object] | None
+    raw_draft: object
+    raw_query: str | None  # Captured by server, never accepted from client state
+    original_query: str | None  # Complete entry-sanitized question, not scan text
+    request_nonce: str | None  # Fresh per invoke; independent of cancellation run_id
+    coref_changed: bool | None
+    unresolved_reference: bool | None
+    alias_binding: dict[str, object] | None  # Internal correlation, not authentication
+    termination_kind: str | None
+    route_reason: str | None
+    accepted_aliases: list[tuple[str, str]] | None
+    route_diagnostics: dict[str, object] | None
     user_query: str
     rewritten_query: Optional[str]  # 别名扫描口径的消毒文本（剥括号/限长 200），不用于提示词与检索取词
     alias_notes: Optional[str]

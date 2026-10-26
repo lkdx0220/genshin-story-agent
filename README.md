@@ -18,7 +18,7 @@
 | 别名归一映射 | 700 |
 | cast 覆盖（活动剧情） | 648/698 = 92.8% |
 | cast 覆盖（彩蛋剧情） | 原始 11/24 = 45.8%；有剧情/语音 11/14 = 78.6% |
-| 工作区数据快照日期 | 2026-10-13 |
+| 工作区数据快照日期 | 2026-10-24 |
 | 最新 KB Release | kb-2026.10.13（发布资产是快照，非当前工作区状态） |
 <!-- /GENERATED:STATUS -->
 
@@ -108,6 +108,19 @@ L2: Plan Agent → 工具调用（36 tools，常规暴露 35）→ 熔断截断 
 - **Wiki 链接图**：`wiki_graph_search` / `wiki_graph_expand` / `wiki_graph_get` 三工具基于观测枢 `data-entry-id` 链接图，支持跨任务/地图文本/角色/物品多跳检索；全量图构建脚本见 `wiki_entry_graph.py` + `wiki_data_tools/_fetch_mihoyo_channel.py`
 - **L3 全景连锁**：全景正则 + ≥2 个任务标题命中后，代码确定性加载任务全文、地图文本、实体提及索引反向边、说话人与图谱一跳扩展，拼成 `[全景全文读取]`，再交给 qwen3.8-max 按 task/entity/map/synthesis 分段并行生成
 
+## 最近更新（2026-10-26）
+
+- **L1 路由适配**：`agent_evidence` 模式下，统计入口优先；通过本轮消歧并完成身份绑定的纯别名问题在 assess 前结束；可支持的本地证据问题走 L1，缺少可信证据时回退 L2。`off` / `finite` 保留既有路径。
+- **别名直出边界**：零工具不等于零模型。自然问题如“外号大娘的角色是谁？”仍可能调用一次别名消歧；只有 accepted 且绑定有效才允许提前结束，拒绝、超时与复合问题回退。
+- **统计与安全读取**：特产计数/列举、剧情出场人数和成员集合使用确定性入口；安全读取兼容三种模式，每轮仍保留 SHA、来源清单、所属请求和独立副本检查。
+- **Planner 与网络**：补齐规划续轮消息封装及运行依赖；Agent 客户端直连国内模型接口，别名消歧关闭 DeepSeek thinking，避免小任务长思考耗尽 10 秒超时。
+- **回答与流式边界**：新增证据路由的最终回答经过来源校验；提前终结、取消和 SSE 发布使用统一终结约束，用户回答不展示内部文件路径或知识库哈希。
+- **交付范围**：本次同步应用源码、提示词、相关测试和依赖版本；独立离线审核只对列出的有限范围接受，不代表整仓质量或真实模型稳定性全部通过。原有 UI 更新保留。
+
+默认 `LLM_WIKI_MODE=off`，安装和重启不会自动打开本地证据新路由。若要启用 `agent_evidence`，需显式配置并重启，再做真实请求回归。
+
+本次验证：相关离线回归 290 项、网络策略 3 项通过；5000 服务在 `off` 模式重启后，4 题真实 HTTP/SSE 冒烟通过（包含特产计数/列举、人数下界与缺失拒答）。这些结果不代表真实模型质量或新模式性能验收。发布镜像 Ruff/DeepSec 对比无新增 blocker/high；A 门仍有历史 high，mypy/radon 首轮超时，未宣称全量静态检查通过。
+
 ## Wiki 本地证据通道（R08，默认关闭）
 
 2026-10 起，检索侧新增一条**独立的本地证据通道**，采用"绞杀者"接法：新实现单独成包，旧逻辑原样保留，靠环境变量决定走哪条。
@@ -121,10 +134,13 @@ L2: Plan Agent → 工具调用（36 tools，常规暴露 35）→ 熔断截断 
 | 回滚方式 | 删除该变量（或设为 `off`）后重启，立即回到原链路 |
 | 新通道做了什么 | 每段引用必须带来源身份、版本、片段定位与校验；校验不过的记录不进证据集合；只把校验过的证据投影给模型，原始消息保留作审计 |
 
-**已知限制**
+**统计能力与已知限制**
 
-- 摘录目前直接取自库中原文字段切片，**尚未核验切片是否落在 `story_body()` 净化后的正文内**（已做 8 条抽样无噪声，但不构成保证）。
-- 问"知识库一共收录多少"这类**统计类问题目前没有对应工具**，会答"未提及"或误把某类子集当总量。
+- 已支持“须弥有多少特产 / 须弥有哪些特产”等简单地区特产问题，以及已收录剧情的出场人数与名单。
+- 覆盖不足时只给有依据的下界；同名歧义、缺失和不支持的范围不会硬报精确总数。出场统计口径是收录证据，不等于玩家在全部版本看到的实际总人数。
+- 任务、料理、怪物的地区计数/地区列举暂拒答；带复杂条件的特产问句保留原文回退，未承诺旧链路一定答对。
+- 完整性校验不能代替语义审核。全库覆盖、真实模型准确率、冷热时延和同会话并发仍需单独验证；历史整仓 A 门失败未因局部交付清偿。
+- 新增测试中，`test_alias_promotion_real_resources.py` 需要外部冻结资源清单与查询选择配置；`test_wiki_fast_evidence.py` 的 `prefetch-asts` 探针还需要对应旧源码基线。它们是带前置输入的验收测试，不是裸 `pytest` 的自包含证明。
 
 ## Wiki 数据同步
 
@@ -334,7 +350,7 @@ python scripts/build_entity_mention_index.py
 | Plan Agent（L1 快速） | qwen3.7-plus | token-plan / 阿里云百炼（回退） | 简单事实类快速规划（兼顾工具调用稳定性） |
 | Answer Agent（轻量） | qwen3.6-flash（主）/ qwen-plus（DashScope 回退） | token-plan / 阿里云百炼（回退） | 角色查询类快速回答 |
 | 意图路由 | qwen3.7-plus（主）/ qwen-plus（DashScope 回退） | token-plan / 阿里云百炼（回退） | 实体锚定后的意图分类 |
-| 别名消歧 | deepseek-flash | DeepSeek | "水神→芙宁娜/芙卡洛斯"歧义判断 |
+| 别名消歧 | deepseek-flash | DeepSeek | thinking disabled；别名消歧失败或超时按回退处理 |
 | L1/L2 路径分类 | deepseek-flash | DeepSeek | 简单题/复杂题分流 |
 | 向量 Embedding（运行时默认） | bge-m3:latest（本地 Ollama GGUF F16） | 本地 Ollama | Agent 运行时语义检索；可用环境变量切回 text-embedding-v4 |
 | 向量 Embedding（对照/构建） | text-embedding-v4 | 阿里云百炼 | 建库脚本默认编码器与 A/B 对照 |
@@ -378,11 +394,11 @@ copy .env.example .env
 编辑 `.env`，填入你的 API Key：
 
 ```ini
-DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+DASHSCOPE_API_KEY=YOUR_API_KEY_HERE
 # Qwen/百炼走 DashScope 官方兼容端点；若指向其它端点（如 token-plan）请先实测，该端点在某些 key 下返回 401，此时改用下方官方地址
 # DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 # 可选：主接口不可用时自动回退的旧 Key/旧接口
-# DASHSCOPE_FALLBACK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# DASHSCOPE_FALLBACK_API_KEY=YOUR_API_KEY_HERE
 # DASHSCOPE_FALLBACK_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
 

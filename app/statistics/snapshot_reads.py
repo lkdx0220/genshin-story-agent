@@ -83,7 +83,7 @@ class SnapshotReadContext:
         self._expected_sources = _freeze(dict(expected_sources))
         self._manifest = _freeze(_code_manifest())
         self._mode = os.environ.get('LLM_WIKI_MODE', 'off')
-        require(self._mode in {'off', 'finite'}, 'reads_mode')
+        require(self._mode in {'off', 'finite', 'agent_evidence'}, 'reads_mode')
         self._execution = None
         self._fingerprint = None
         self.hits = 0

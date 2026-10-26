@@ -170,10 +170,15 @@ def complete_capture(capture, result):
                 answer_diagnostics=snapshot(data), diagnostic_storage=storage)
 
 
-def capture_answer(function):
+def capture_answer(function=None, *, stage='answer', only_enabled=False):
+    if function is None:
+        return lambda wrapped: capture_answer(wrapped, stage=stage, only_enabled=only_enabled)
     @wraps(function)
     def recorded(state, *args, **kwargs):
+        if only_enabled and os.environ.get('LLM_WIKI_MODE', 'off') != 'agent_evidence':
+            return function(state, *args, **kwargs)
         capture = Capture(state)
+        capture.data['stage'] = stage
         token = _ACTIVE.set(capture)
         try:
             result = function(state, *args, **kwargs)

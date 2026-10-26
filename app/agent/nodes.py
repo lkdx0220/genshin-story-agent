@@ -10,7 +10,7 @@ import json
 import time
 import os
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, cast
 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage, ToolMessage
 
@@ -43,6 +43,8 @@ from app.schema import (
 )
 from app.progress import _emit_progress, _cancel_events
 from app.trace_recorder import emit as trace_emit
+from app.agent_context import build_context, history_context, tool_response
+from app.agent_invocation import invoke_planner
 from app.wiki_evidence.diagnostics import capture_answer
 from app.tools import tools_by_name as _tools_by_name
 from app.tools.search import search_world
@@ -59,10 +61,15 @@ def _planner_system_with_wiki_instruction(system_content, package):
 
 
 def _planner_project_evidence_context(state, messages, original_query):
-    from app.wiki_evidence.bridge import context_for_plan
-    return context_for_plan(state, messages, AGENT_SYSTEM_PROMPT_PLAN,
-                                pseudo_note=get_pseudo_legendary_note(original_query),
-                                recent_turns=RECENT_TURNS)
+    from app.wiki_evidence.bridge import context_for_plan, enabled, is_source_message
+    deltas = [m for m in messages if not is_source_message(m)]
+    continuation = enabled() and bool(deltas)
+    prompt = AGENT_SYSTEM_PROMPT_PLAN if continuation else _planner_system_with_wiki_instruction(
+        AGENT_SYSTEM_PROMPT_PLAN, state.get('wiki_evidence'))
+    context = build_context(state, deltas, prompt, recent_turns=RECENT_TURNS,
+                            profile='ae_continuation' if continuation else 'plan',
+                            pseudo_note=get_pseudo_legendary_note(original_query))
+    return context_for_plan(state, context, AGENT_SYSTEM_PROMPT_PLAN)
 
 
 def _planner_evidence_exit_reason(package, prior_reason):
@@ -163,14 +170,7 @@ def _append_answer_wiki_context(execution_facts, state, has_wiki_evidence):
 
 
 def _answer_history_messages(state, has_wiki_evidence):
-    answer_messages = []
-    if has_wiki_evidence:
-        if state.get("conversation_summary"):
-            answer_messages.append(SystemMessage(content="先前对话摘要（非事实来源）：" + state["conversation_summary"]))
-        for turn in (state.get("conversation_history") or [])[-RECENT_TURNS:]:
-            answer_messages.append(HumanMessage(content=turn["user"]))
-            answer_messages.append(AIMessage(content=turn["assistant"]))
-    return answer_messages
+    return history_context(state, RECENT_TURNS, include_summary=True)
 
 
 def _weak_evidence_question(state, messages):
@@ -293,16 +293,23 @@ def _alias_scan(sanitized: str, match_text: str) -> Tuple[list, list, list, list
     return alias_notes_parts, alias_pairs, covered_spans, compound_candidates
 
 
-def _alias_judge_compounds(compound_candidates, covered_spans, alias_notes_parts, alias_pairs) -> Tuple[float, int]:
+def _alias_judge_compounds(compound_candidates, covered_spans, alias_notes_parts, alias_pairs, acceptance_status=None) -> tuple[float, int]:
     """批量 AI 沙箱判断复合命中候选，接受的写入 alias_notes/alias_pairs。
 
     返回 (批量耗时ms, 候选数)；无候选时返回 (0.0, 0)。
     """
+    if acceptance_status is not None:
+        acceptance_status["complete"] = not compound_candidates
     if not compound_candidates:
         return 0.0, 0
     batch_candidates = [(a, c, ctx) for a, c, ctx, _pos, _span in compound_candidates]
     t_batch = time.perf_counter()
     batch_results = _judge_alias_sandbox_batch(batch_candidates)
+    if acceptance_status is not None:
+        acceptance_status["complete"] = (
+            isinstance(batch_results, list) and len(batch_results) == len(batch_candidates)
+            and all(type(value) is bool for value in batch_results)
+        )
     batch_duration_ms = (time.perf_counter() - t_batch) * 1000
     for (alias, canonical, context, pos, span), accepted in zip(compound_candidates, batch_results, strict=False):
         if not accepted:
@@ -391,8 +398,9 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
     alias_notes_parts, alias_pairs, covered_spans, compound_candidates = _alias_scan(sanitized, match_text)
 
     # 批量 AI 沙箱判断：一次调用处理所有复合命中候选
+    acceptance_status = {} if os.environ.get('LLM_WIKI_MODE', 'off') == 'agent_evidence' else None
     batch_duration_ms, batch_candidate_count = _alias_judge_compounds(
-        compound_candidates, covered_spans, alias_notes_parts, alias_pairs
+        compound_candidates, covered_spans, alias_notes_parts, alias_pairs, acceptance_status
     )
 
     alias_notes = _build_alias_notes(alias_notes_parts)
@@ -419,12 +427,25 @@ def rewrite_query(state: GenshinAdvisorState) -> Dict[str, Any]:
             "batch_candidate_count": batch_candidate_count,
         },
     )
-    return {
+    result = {
         "user_query": user_query,
         "rewritten_query": sanitized,
         "alias_notes": alias_notes,
         "alias_pairs": alias_pairs or None,
     }
+    if acceptance_status is not None:
+        from app.agent.alias_identity import (
+            has_unresolved_reference,
+            make_alias_binding,
+        )
+        from character_aliases import ALIAS_MAP as current_alias_map
+        result.update(
+            coref_changed=state.get("user_query", "") != user_query,
+            unresolved_reference=has_unresolved_reference(user_query, alias_pairs),
+            alias_binding=(make_alias_binding(state, user_query, alias_pairs, current_alias_map)
+                           if acceptance_status.get("complete") else None),
+        )
+    return result
 
 
 ASSESS_PROMPT = """你是原神剧情助手的查询分类器。你的唯一任务是判断用户问题属于哪种类型。
@@ -772,10 +793,6 @@ def assess_query(state: GenshinAdvisorState) -> Dict[str, Any]:
 
 def route_after_assess(state: GenshinAdvisorState) -> str:
     """分类后的路由：L1 → fast_agent，L2 → plan_agent"""
-    from app.wiki_evidence.bridge import enabled
-    if enabled():
-        # Opt-in experiment uses the original Planner/Answer even for L1.
-        return "plan_agent"
     mode = state.get("execution_mode", "L2")
     if mode == "L1":
         return "fast_agent"
@@ -785,12 +802,30 @@ def route_after_assess(state: GenshinAdvisorState) -> str:
 # ====== 快速回答节点（L1 路径）======
 
 
+@capture_answer(stage='fast', only_enabled=True)
 def fast_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
-    from app.wiki_evidence.bridge import prepared_plan_state, attach_result, enabled
+    from app.wiki_evidence.bridge import (
+        attach_result, enabled, evidence_stop, finish_fast_result,
+        prepare_evidence_state, prepared_plan_state,
+    )
     if not enabled():
         clean = prepared_plan_state(state)
         return attach_result(_fast_agent_original(clean), clean)
-    return _fast_agent_original(state)
+    if _fast_agent_cancel_result(state) is not None:
+        return evidence_stop(state, 'cancelled')
+    try:
+        prepared = prepare_evidence_state(state)
+        from app.wiki_evidence.canonical_bridge import stamp_plan_result
+        result = stamp_plan_result(_fast_agent_original(prepared), prepared)
+        finished = finish_fast_result(prepared, result,
+                                      cancelled=_fast_agent_cancel_result(state) is not None)
+        if _fast_agent_cancel_result(state) is not None:
+            finished = evidence_stop(state, 'cancelled')
+        return attach_result(finished, prepared)
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+        return evidence_stop(state, 'evidence_invalid', reason=type(error).__name__)
+    except Exception as error:
+        return evidence_stop(state, 'error', reason=type(error).__name__)
 
 
 def _fast_agent_original(state: GenshinAdvisorState) -> Dict[str, Any]:
@@ -810,7 +845,20 @@ def _fast_agent_original(state: GenshinAdvisorState) -> Dict[str, Any]:
 
     messages, current_llm_with_tools = _fast_agent_prepare_messages(state, messages, original_query, alias_notes)
 
-    short_circuit = _fast_agent_code_shortcuts(messages, original_query, iteration)
+    from app.wiki_evidence.bridge import available, enabled
+    if enabled():
+        direct = _get_direct_metadata_answer(messages, original_query)
+        if direct:
+            return {'messages': [], 'final_response': direct,
+                    '_wiki_literal_tool_answer': direct, 'fast_iteration': iteration + 1}
+        tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
+        if tool_messages and all(_is_not_found(m) for m in tool_messages) and not available(state.get('wiki_evidence')):
+            from app.wiki_evidence.canonical_bridge import gather
+            if not gather(state)['entries']:
+                return {'fast_exit_kind': 'insufficient_evidence', 'messages': []}
+        short_circuit = None
+    else:
+        short_circuit = _fast_agent_code_shortcuts(messages, original_query, iteration)
     if short_circuit is not None:
         return short_circuit
 
@@ -835,35 +883,21 @@ def _fast_agent_cancel_result(state):
 
 
 def _fast_agent_prepare_messages(state, messages, original_query, alias_notes):
-    """准备本轮消息：首轮构建系统提示与近期历史，后续轮次沿用已有消息。
-
-    两种情况都要拿全部工具并绑定到快速路径 LLM，返回 (messages, 带工具 LLM)。
-    """
+    """每轮从请求字段重算临时前缀；state.messages 只保存请求增量。"""
     all_tools = _get_initial_tools()
     current_llm_with_tools = plan_llm.bind_tools(all_tools)
-    if messages:
-        return messages, current_llm_with_tools
-
-    system_content = AGENT_SYSTEM_PROMPT_FAST
-
-    if alias_notes:
-        system_content += alias_notes
-
-    # 注入对话摘要
-    conv_summary = state.get("conversation_summary", "")
-    if conv_summary:
-        system_content += f"\n\n## 之前的对话摘要\n{conv_summary}"
-
-    messages: List[BaseMessage] = [SystemMessage(content=system_content)]
-
-    # 注入最近 N 轮对话历史
-    conv_history = state.get("conversation_history") or []
-    for turn in conv_history[-RECENT_TURNS:]:
-        messages.append(HumanMessage(content=turn["user"]))
-        messages.append(AIMessage(content=turn["assistant"]))
-
-    messages.append(HumanMessage(content=original_query))
-    return messages, current_llm_with_tools
+    from app.wiki_evidence.bridge import context_for_fast, enabled, is_source_message
+    if enabled():
+        from app.wiki_evidence.canonical_bridge import project_messages
+        from app.wiki_evidence.diagnostics import observed_model
+        messages, _ = project_messages(state, [m for m in messages if not is_source_message(m)])
+        current_llm_with_tools = observed_model(current_llm_with_tools)
+    context = build_context(dict(state, user_query=original_query, alias_notes=alias_notes),
+                            messages, AGENT_SYSTEM_PROMPT_FAST,
+                            recent_turns=RECENT_TURNS, profile='fast')
+    if enabled():
+        context = context_for_fast(state, context)
+    return context, current_llm_with_tools
 
 
 def _fast_agent_code_shortcuts(messages, original_query, iteration):
@@ -874,7 +908,7 @@ def _fast_agent_code_shortcuts(messages, original_query, iteration):
     if direct_answer:
         print("  -> [代码短路] 元数据直答路径，跳过 LLM")
         return {
-            "messages": messages,
+            "messages": [],
             "final_response": direct_answer,
             "fast_iteration": iteration + 1,
             "intent_labels": ["ALL"],
@@ -885,7 +919,7 @@ def _fast_agent_code_shortcuts(messages, original_query, iteration):
     if tool_messages and all(_is_not_found(m) for m in tool_messages):
         print("  -> [代码短路] 快速路径所有工具均未找到，直接返回'未收录'")
         return {
-            "messages": messages,
+            "messages": [],
             "final_response": "当前知识库未收录。",
             "fast_iteration": iteration + 1,
             "intent_labels": ["ALL"],
@@ -896,6 +930,10 @@ def _fast_agent_code_shortcuts(messages, original_query, iteration):
 def _fast_agent_forced_answer(state, messages, iteration):
     """已达最大轮次：剥离未执行的 tool_calls 后强制生成回答，空内容兜底为未收录。"""
     print("  -> 已达最大快速轮次，强制生成回答")
+    from app.wiki_evidence.bridge import enabled
+    if enabled():
+        from copy import deepcopy
+        messages = deepcopy(messages)
     # 剥离最后一条 AIMessage 的 tool_calls（工具未执行，防止 LLM 困惑）
     for i in range(len(messages) - 1, -1, -1):
         msg = messages[i]
@@ -904,23 +942,30 @@ def _fast_agent_forced_answer(state, messages, iteration):
             msg.additional_kwargs = {}
             break
     current_llm = llm  # 不带工具绑定的 llm
+    if enabled():
+        from app.wiki_evidence.diagnostics import observed_model
+        current_llm = observed_model(current_llm)
     try:
-        response = current_llm.invoke(messages)
+        response = invoke_planner(current_llm, messages, fallback=_fast_fallback_model(),
+                                  retry=llm_invoke_with_retry, emit=trace_emit,
+                                  role='fast_forced', iteration=iteration + 1,
+                                  run_id=state.get('run_id'))
     except Exception as e:
         print(f"  -> LLM 调用失败: {e}")
-        try:
-            response = llm_invoke_with_retry(messages)
-        except Exception:
-            response = AIMessage(content=f"抱歉，处理出错：{e}")
+        if enabled():
+            return {'fast_exit_kind': 'error', 'messages': [], 'route_reason': type(e).__name__}
+        response = AIMessage(content=f"抱歉，处理出错：{e}")
     content = response.content if hasattr(response, "content") else ""
     # 空内容兜底：与下方正常收尾分支保持一致——工具已执行、模型却吐空串时，
     # 不能把空串交给用户（前端会渲染成「（无回复）」）。
     if not content or not content.strip():
+        if enabled():
+            return {'fast_exit_kind': 'empty_output', 'messages': []}
         print("  -> 强制回答返回空内容，使用未收录兜底")
         trace_emit("fast_empty_fallback", {"iteration": iteration + 1, "run_id": state.get("run_id")})
         content = "当前知识库未收录。"
     return {
-        "messages": messages,
+        "messages": [],
         "final_response": content,
         "fast_iteration": iteration + 1,
         "intent_labels": ["ALL"],
@@ -929,36 +974,21 @@ def _fast_agent_forced_answer(state, messages, iteration):
 
 def _fast_agent_tool_round(state, messages, iteration, current_llm_with_tools):
     """正常轮次：调用带工具的 LLM；有 tool_calls 交回循环，否则直接收尾返回。"""
-    trace_emit(
-        "llm_start",
-        {
-            "role": "fast",
-            "iteration": iteration + 1,
-            "run_id": state.get("run_id"),
-            "model": getattr(current_llm_with_tools, "model_name", None),
-        },
-    )
     try:
-        response = current_llm_with_tools.invoke(messages)
+        response = invoke_planner(current_llm_with_tools, messages, fallback=_fast_fallback_model(),
+                                  retry=llm_invoke_with_retry, emit=trace_emit,
+                                  role='fast', iteration=iteration + 1,
+                                  run_id=state.get('run_id'))
     except Exception as e:
         print(f"  -> LLM 调用失败: {e}")
-        try:
-            response = llm_invoke_with_retry(messages)
-        except Exception:
-            return {
-                "final_response": f"抱歉，处理出错：{e}",
-                "messages": messages,
-                "intent_labels": ["ALL"],
-            }
-    trace_emit(
-        "llm_end",
-        {
-            "role": "fast",
-            "iteration": iteration + 1,
-            "run_id": state.get("run_id"),
-            "tool_call_count": len(getattr(response, "tool_calls", None) or []),
-        },
-    )
+        from app.wiki_evidence.bridge import enabled
+        if enabled():
+            return {'fast_exit_kind': 'error', 'messages': [], 'route_reason': type(e).__name__}
+        return {
+            "final_response": f"抱歉，处理出错：{e}",
+            "messages": [],
+            "intent_labels": ["ALL"],
+        }
 
     # 有工具调用 → 继续循环
     if hasattr(response, "tool_calls") and response.tool_calls:
@@ -972,6 +1002,9 @@ def _fast_agent_tool_round(state, messages, iteration, current_llm_with_tools):
     content = response.content if hasattr(response, "content") else ""
     # 空内容兜底：工具已返回"未找到"等结果，但 LLM 仍可能返回空串，此时明确告知未收录
     if not content or not content.strip():
+        from app.wiki_evidence.bridge import enabled
+        if enabled():
+            return {'fast_exit_kind': 'empty_output', 'messages': []}
         content = "当前知识库未收录。"
     print("  -> 快速路径完成（无工具调用），直接返回回答")
     return {
@@ -982,16 +1015,30 @@ def _fast_agent_tool_round(state, messages, iteration, current_llm_with_tools):
     }
 
 
+def _fast_fallback_model():
+    from app.wiki_evidence.bridge import enabled
+    from app.wiki_evidence.diagnostics import observed_model
+    return observed_model(llm) if enabled() else llm
+
+
 def route_after_fast(state: GenshinAdvisorState) -> str:
     """快速路径工具执行后路由：有 tool_calls 且未达上限 → tools，否则 → END"""
     messages = state.get("messages", [])
     iteration = state.get("fast_iteration", 0) or 0
 
+    from app.wiki_evidence.bridge import enabled
+    if enabled() and state.get('final_response'):
+        if not (state.get('fast_finalized') and state.get('request_nonce')
+                and state.get('fast_terminal_nonce') == state['request_nonce']):
+            raise ValueError('fast_terminal_not_finalized')
+        return 'end'
     # 已产生最终回答
     if state.get("final_response"):
         return "end"
 
     if not messages:
+        if enabled():
+            raise ValueError('fast_terminal_not_finalized')
         return "end"
 
     last_msg = messages[-1]
@@ -1002,6 +1049,8 @@ def route_after_fast(state: GenshinAdvisorState) -> str:
             return "fast_agent"
         return "tools"
 
+    if enabled():
+        raise ValueError('fast_terminal_not_finalized')
     return "end"
 
 
@@ -1120,7 +1169,18 @@ def _maybe_add_dead_end_search_world(messages, routed_tools):
 def plan_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
     from app.wiki_evidence.bridge import prepared_plan_state, attach_result
     from app.wiki_evidence.canonical_bridge import stamp_plan_result
-    prepared = prepared_plan_state(state)
+    from app.wiki_evidence.bridge import enabled, evidence_stop, prepare_evidence_state
+    if enabled():
+        try:
+            prepared = prepare_evidence_state(state)
+        except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+            return evidence_stop(state, 'evidence_invalid', reason=type(error).__name__)
+        except Exception as error:
+            return evidence_stop(state, 'error', reason=type(error).__name__)
+        if _fast_agent_cancel_result(state) is not None:
+            return evidence_stop(state, 'cancelled')
+    else:
+        prepared = prepared_plan_state(state)
     result = _plan_agent_original(prepared)
     return stamp_plan_result(attach_result(result, prepared), prepared)
 
@@ -1130,7 +1190,6 @@ def _plan_agent_original(state: GenshinAdvisorState) -> Dict[str, Any]:
     iteration = state.get("iteration", 0) or 0
     messages = list(state.get("messages", []))
     original_query = state.get("user_query", "")
-    alias_notes = state.get("alias_notes", "")
     intent_labels = state.get("intent_labels", [])
 
     # ---- 名单类问题：代码直查权威 cast，跳过规划与回答 LLM（宪法 P5 确定性直出）----
@@ -1205,40 +1264,6 @@ def _plan_agent_original(state: GenshinAdvisorState) -> Dict[str, Any]:
         # ---- 步骤3：构建本轮 llm_with_tools ----
         current_llm_with_tools = plan_llm_l2.bind_tools(routed_tools)
 
-        system_content = _planner_system_with_wiki_instruction(AGENT_SYSTEM_PROMPT_PLAN, state.get("wiki_evidence"))
-
-        # 注入别名参考（如有）
-        if alias_notes:
-            system_content += alias_notes
-
-        # 注入伪传说任务提示（如有）
-        pseudo_note = get_pseudo_legendary_note(original_query)
-        if pseudo_note:
-            system_content += "\n\n" + pseudo_note
-
-        # 注入对话摘要（旧对话的压缩）
-        if conv_summary:
-            system_content += f"\n\n## 之前的对话摘要\n{conv_summary}\n（以上是之前对话的摘要，供你理解上下文。请注意：如果用户当前问题与摘要中的话题相关，请结合上下文回答；如果不相关，请忽略。）"
-
-        # 构建消息：SystemPrompt + 最近N轮历史 + 当前问题
-        # 显式 Context Cache：SystemPrompt 作为稳定前缀打 cache_control 标记，
-        # 同一会话后续 plan 轮次可命中缓存，减少 Prefill 耗时。
-        messages = [
-            SystemMessage(
-                content=[
-                    {"type": "text", "text": system_content, "cache_control": {"type": "ephemeral"}},
-                ]
-            )
-        ]
-
-        # 注入最近 N 轮对话历史
-        conv_history = state.get("conversation_history") or []
-        for turn in conv_history[-RECENT_TURNS:]:
-            messages.append(HumanMessage(content=turn["user"]))
-            messages.append(AIMessage(content=turn["assistant"]))
-
-        # 当前问题：使用原始问题，不做替换
-        messages.append(HumanMessage(content=original_query))
     else:
         # 后续轮次：延用已有的 intent 和工具集
         intent_labels = state.get("intent_labels", [])
@@ -1253,6 +1278,7 @@ def _plan_agent_original(state: GenshinAdvisorState) -> Dict[str, Any]:
         if not had_search_world and any(getattr(t, "name", "") == "search_world" for t in routed_tools):
             messages.append(
                 SystemMessage(
+                    name='planner_runtime_hint',
                     content=(
                         "系统提示：常规搜索（search_all/hybrid_search）已碰壁。"
                         "现已补充工具 search_world，可搜索世界观设定、组织/NPC背景（如至冬组织名、lore.json 条目）。"
@@ -1294,38 +1320,19 @@ def _plan_agent_original(state: GenshinAdvisorState) -> Dict[str, Any]:
     if relationship_auto is not None:
         return relationship_auto
 
-    trace_emit(
-        "llm_start",
-        {
-            "role": "plan",
-            "iteration": iteration + 1,
-            "run_id": state.get("run_id"),
-            "model": getattr(current_llm_with_tools, "model_name", None),
-        },
-    )
     try:
-        response = current_llm_with_tools.invoke(messages)
+        response = invoke_planner(current_llm_with_tools, messages, fallback=llm,
+                                  retry=llm_invoke_with_retry, emit=trace_emit,
+                                  role='plan', iteration=iteration + 1,
+                                  run_id=state.get('run_id'))
     except Exception as e:
         print(f"  -> LLM 调用失败: {e}")
-        try:
-            response = llm_invoke_with_retry(messages)
-        except Exception:
-            return {
-                "execution_plan": f"【执行报告】\n用户问题回显：{original_query}\n用户意图：未知\n工具决策：LLM调用失败\n",
-                "final_response": f"抱歉，处理出错：{e}",
-                "messages": messages,
-                "intent_labels": intent_labels,
-            }
-    trace_emit(
-        "llm_end",
-        {
-            "role": "plan",
-            "iteration": iteration + 1,
-            "status": "success",
-            "run_id": state.get("run_id"),
-            "tool_call_count": len(getattr(response, "tool_calls", None) or []),
-        },
-    )
+        return {
+            "execution_plan": f"【执行报告】\n用户问题回显：{original_query}\n用户意图：未知\n工具决策：LLM调用失败\n",
+            "final_response": f"抱歉，处理出错：{e}",
+            "messages": [],
+            "intent_labels": intent_labels,
+        }
 
     # 保存执行计划（response.content 即模型输出的【执行报告】文本）
     plan_content = response.content if hasattr(response, "content") else ""
@@ -1363,7 +1370,7 @@ def _plan_agent_original(state: GenshinAdvisorState) -> Dict[str, Any]:
         print(
             f"  -> [JSON工具块] 从执行报告提取 {len(json_tool_calls)} 个工具: {[tc['name'] for tc in json_tool_calls]}"
         )
-        structured_response = AIMessage(content=plan_content, tool_calls=json_tool_calls)
+        structured_response = tool_response(response, json_tool_calls)
         trace_emit(
             "plan",
             {
@@ -1519,30 +1526,14 @@ def _plan_agent_original(state: GenshinAdvisorState) -> Dict[str, Any]:
                 )
             )
         )
-        trace_emit(
-            "llm_start",
-            {
-                "role": "plan_retry",
-                "iteration": iteration + 1,
-                "run_id": state.get("run_id"),
-                "model": getattr(current_llm_with_tools, "model_name", None),
-            },
-        )
         try:
-            response = current_llm_with_tools.invoke(messages)
+            response = invoke_planner(current_llm_with_tools, messages, fallback=None,
+                                      retry=llm_invoke_with_retry, emit=trace_emit,
+                                      role='plan_retry', iteration=iteration + 1,
+                                      run_id=state.get('run_id'))
         except Exception as e:
             print(f"  -> [拦截] LLM 重试调用失败: {e}")
-            trace_emit("llm_end", {"role": "plan_retry", "status": "error", "run_id": state.get("run_id")})
         else:
-            trace_emit(
-                "llm_end",
-                {
-                    "role": "plan_retry",
-                    "status": "success",
-                    "run_id": state.get("run_id"),
-                    "tool_call_count": len(getattr(response, "tool_calls", None) or []),
-                },
-            )
             plan_content = response.content if hasattr(response, "content") else ""
             if hasattr(response, "tool_calls") and response.tool_calls:
                 print(
@@ -1563,7 +1554,7 @@ def _plan_agent_original(state: GenshinAdvisorState) -> Dict[str, Any]:
                 print(
                     f"  -> [拦截] 重试 JSON工具块，调用 {len(retry_json_calls)} 个工具: {[tc['name'] for tc in retry_json_calls]}"
                 )
-                structured_retry = AIMessage(content=plan_content, tool_calls=retry_json_calls)
+                structured_retry = tool_response(response, retry_json_calls)
                 trace_emit(
                     "plan",
                     {
@@ -1611,6 +1602,10 @@ def _plan_agent_original(state: GenshinAdvisorState) -> Dict[str, Any]:
 
 def route_after_plan(state: GenshinAdvisorState) -> str:
     """规划节点后的路由：有 tool_calls → tools，无 tool_calls → answer_agent"""
+    from app.wiki_evidence.bridge import enabled
+    if enabled() and state.get('termination_kind') in {'evidence_invalid', 'error', 'cancelled'}:
+        return 'end'
+
     messages = state.get("messages", [])
     iteration = state.get("iteration", 0) or 0
 
@@ -5280,6 +5275,17 @@ def answer_agent(state: GenshinAdvisorState) -> Dict[str, Any]:
         clean = prepared_plan_state(state)
         return attach_result(_answer_agent_original(clean), clean)
 
+    from app.wiki_evidence.bridge import evidence_stop, prepare_evidence_state
+    if _fast_agent_cancel_result(state) is not None:
+        return evidence_stop(state, 'cancelled')
+    try:
+        prepared = prepare_evidence_state(state)
+        # The historical body captures original input emptiness before projection.
+        state = cast(GenshinAdvisorState, dict(prepared, messages=state.get('messages', [])))
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+        return evidence_stop(state, 'evidence_invalid', reason=type(error).__name__)
+    except Exception as error:
+        return evidence_stop(state, 'error', reason=type(error).__name__)
     pending_trace = []
 
     def progress(name, payload):

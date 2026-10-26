@@ -160,10 +160,6 @@ def prepared_plan_state(state):
     clean = [m for m in state.get('messages', []) if not is_source_message(m)]
     update = {'messages': clean, 'wiki_evidence': package, '_wiki_had_source': had_source,
               '_wiki_cleanup': True}
-    if enabled():
-        # route_after_tools must return to the same Planner/Answer path, even
-        # when the original assessment picked L1 before this opt-in adapter.
-        update['execution_mode'] = 'L2'
     return dict(state, **update)
 
 
@@ -178,35 +174,14 @@ def attach_result(result, state):
     elif state.get('_wiki_had_source'):
         messages.insert(0, RemoveMessage(id=MESSAGE_ID))
     update = {'messages': messages, 'wiki_evidence': package}
-    if enabled():
-        update['execution_mode'] = 'L2'
     return dict(result, **update)
 
 
 def context_for_plan(state, messages, base_prompt, *, pseudo_note='', recent_turns=3):
-    """Rebuild missing Planner context without splitting AI/tool result groups.
-
-    Legacy Planner normally returns only its newest AI message. On a later
-    tool iteration its initial prompt/history therefore need reconstruction.
-    Context is local to the call; only the source's stable ID is persisted.
-    """
+    """Inject evidence into complete caller-built context, preserving tool groups."""
     if not enabled():
         return messages
     clean = [m for m in messages if not is_source_message(m)]
-    has_prompt = any(isinstance(m, SystemMessage) and base_prompt in _message_text(m) for m in clean)
-    if not has_prompt:
-        prompt = base_prompt + (state.get('alias_notes') or '')
-        if pseudo_note:
-            prompt += '\n\n' + pseudo_note
-        if state.get('conversation_summary'):
-            prompt += '\n\n先前对话摘要（非事实来源）：' + state['conversation_summary']
-        prefix = [SystemMessage(content=[{'type': 'text', 'text': prompt,
-                                         'cache_control': {'type': 'ephemeral'}}])]
-        for turn in (state.get('conversation_history') or [])[-recent_turns:]:
-            prefix.extend([HumanMessage(content=turn['user']),
-                           AIMessage(content=turn['assistant'])])
-        prefix.append(HumanMessage(content=state.get('user_query', '')))
-        clean = prefix + clean
     if available(state.get('wiki_evidence')):
         first = clean[0]
         content = first.content
@@ -331,8 +306,76 @@ def _normalized(value):
     return re.sub(r'[\W_]+', '', value, flags=re.UNICODE)
 
 
-def _message_text(message):
-    if isinstance(message.content, str):
-        return message.content
-    return '\n'.join(block.get('text', '') if isinstance(block, dict) else str(block)
-                     for block in message.content)
+
+
+def prepare_evidence_state(state):
+    """Path-neutral load; query miss is legitimate only after verified load."""
+    if not enabled():
+        return prepared_plan_state(state)
+    prepared = prepared_plan_state(state)
+    package = prepared.get('wiki_evidence') or {}
+    if package.get('status') == 'unavailable':
+        raise ValueError('evidence_preparation_invalid:' + str(package.get('reason_code')))
+    return prepared
+
+
+def evidence_stop(state, kind, *, reason=None):
+    """Public terminal messages are fixed; exception text stays internal."""
+    presentations = {
+        'cancelled': '[回答已中断] 当前任务已被用户终止。',
+        'evidence_invalid': '[证据已变化] 本轮回答未展示，请重新查询。',
+        'error': '[回答生成失败] 本轮回答未展示，请重新查询。',
+        'empty_output': '[回答生成失败] 本轮未生成可核对的回答。',
+        'insufficient_evidence': '【未覆盖的部分】本轮未取得足够的本地证据；这不表示整个知识库未收录。',
+    }
+    return {'messages': [], 'final_response': presentations[kind],
+            'termination_kind': kind, 'route_reason': kind,
+            'fast_finalized': True, 'fast_terminal_nonce': state.get('request_nonce'),
+            'route_diagnostics': {'actual_route': state.get('execution_mode'),
+                                  'reason': reason or kind}}
+
+
+def context_for_fast(state, context):
+    """Only inject prefixes after complete fast context construction."""
+    from .canonical_bridge import ANSWER_INSTRUCTION, gather
+    package = state.get('wiki_evidence')
+    if available(package) and retrieve_for_state(state) != package:
+        raise ValueError('evidence_changed_before_fast')
+    info = gather(state)
+    if any(gap.get('code') == 'bundle_source_changed' for gap in info['gaps']):
+        raise ValueError('evidence_changed_before_fast')
+    catalog = SystemMessage(content=_load_prompt_file('fast_wiki_evidence.txt')
+                            + '\n' + ANSWER_INSTRUCTION + '\n'
+                            + json.dumps({'schema_version': 'fast-answer-citations-v1',
+                                          'coverage': info['status'],
+                                          'local_evidence': info['entries'],
+                                          'gaps': info['gaps']}, ensure_ascii=False))
+    # The whole history and current AI/Tool groups remain adjacent and ordered.
+    return context[:1] + [catalog] + context[1:]
+
+
+def finish_fast_result(state, result, *, cancelled=False):
+    """One terminal validation; pending tool calls are not final answers."""
+    if cancelled:
+        return evidence_stop(state, 'cancelled')
+    kind = result.get('fast_exit_kind')
+    if kind in {'cancelled', 'error', 'empty_output', 'insufficient_evidence'}:
+        return dict(result, **evidence_stop(state, kind, reason=result.get('route_reason')))
+    if retrieve_for_state(state) != state.get('wiki_evidence'):
+        return evidence_stop(state, 'evidence_invalid', reason='evidence_changed_after_fast')
+    if not result.get('final_response'):
+        pending = result.get('messages') or []
+        if pending and isinstance(pending[-1], AIMessage) and pending[-1].tool_calls:
+            return dict(result, fast_finalized=False, fast_terminal_nonce=None,
+                        termination_kind=None, final_response=None)
+        return evidence_stop(state, 'empty_output')
+    draft = result['final_response']
+    sources = list(state.get('messages', [])) + list(result.get('messages', []))
+    validation = validate_answer(draft, state, sources,
+                                 literal_tool_answer=result.get('_wiki_literal_tool_answer'))
+    verdict = validation['verdict']
+    return dict(result, final_response=validation['presentation'],
+                answer_validation=validation, fast_finalized=True,
+                fast_terminal_nonce=state.get('request_nonce'),
+                termination_kind='validated' if verdict == 'pass' else 'validation_rejected',
+                route_reason=verdict)

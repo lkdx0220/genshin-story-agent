@@ -458,6 +458,7 @@ alias_judge_llm = ChatOpenAI(
     temperature=0,
     max_tokens=100,
     request_timeout=10,
+    extra_body={"thinking": {"type": "disabled"}},
 )
 
 # ====== 查询分类器（L1/L2 判断，轻量模型）======

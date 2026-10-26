@@ -12,6 +12,8 @@ warnings.filterwarnings("ignore")
 
 from dotenv import load_dotenv
 
+from app.network import configure_direct_network
+
 # ====== .env 加载（兼容 PyInstaller 打包模式）======
 if getattr(sys, "frozen", False):
     # exe 模式：从 exe 同目录读取外部 .env，避免把密钥打进成品。
@@ -20,6 +22,8 @@ if getattr(sys, "frozen", False):
         load_dotenv(_ENV_PATH, override=True)
 else:
     load_dotenv(override=True)
+
+configure_direct_network()
 
 # ====== HuggingFace 镜像（避免 sentence-transformers 联网）======
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
