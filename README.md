@@ -1,12 +1,22 @@
 # 原神剧情助手
 
-基于 LangGraph 的原神游戏知识问答 Agent。零训练预算下，用通用大模型 + 36 个已注册工具（35 个常规初始暴露） + 混合检索实现游戏领域复杂推理问答。
+基于 LangGraph 的原神剧情知识问答实验项目，结合混合检索、意图路由与工具调用，辅助查询剧情、角色与游戏设定。
 
 > **⚠️ 注意：本项目不是开箱即用的客户端应用，具有一定技术门槛。**
 >
 > 使用本项目需要：熟悉命令行操作、具备 Python 环境配置能力、自行安装一系列依赖包，还需要自行申请阿里云百炼（千问）和 DeepSeek 的 API Key 并配置环境变量。
 >
 > 如果你只是想找一个能回答原神问题的工具，而不想折腾命令行和 API 配置，本项目不适合你。
+
+## 版本与验证范围
+
+| 对象 | 版本与用途 |
+|---|---|
+| `main` 源码 | 本次说明按 [2026-10-26 的 `e2b15c5`](https://github.com/lkdx0220/genshin-story-agent/commit/e2b15c516d809ebefa2628ba96c0b917a2c3a6ca) 核对，包含下文的 L1 路由、别名直出和确定性统计更新；使用当前源码请从 [main](https://github.com/lkdx0220/genshin-story-agent/tree/main) 开始。 |
+| `kb-2026.10.13` Release | 对应 `5e629fd` 的历史代码与知识库快照，不包含之后全部源码更新。旧核心 ZIP 不能覆盖到新源码上当作升级。 |
+| 隔离开发候选 | 离线 harness、Observer、SDK 导入资格等研究的局部结果，不自动代表已合入 `main`、完整 SDK/原图通过或生产可用。 |
+
+下表由脚本读取维护工作区数据生成；它与 Release 资产的统计口径不同。已有有限回归和冒烟结果见“最近更新”，不等同于完整模型质量、全量依赖兼容性或并发验收。
 
 <!-- GENERATED:STATUS 由 scripts/gen_readme_status.py 生成，请勿手改；运行时重跑即可刷新 -->
 | 项 | 当前值 |
@@ -26,7 +36,7 @@
 
 ## 预构建知识库 Release
 
-如果你不想自己逐条抓取 Wiki、重建向量库，可以直接使用已经打包好的知识库快照：
+如果你不想自己逐条抓取 Wiki、重建向量库，可以下载已打包的历史快照。**核心 ZIP 内的代码停留在该 tag，不是当前 `main`。** 如需后续源码功能，请按“从 main 源码开始”克隆仓库；知识库与切片资产的兼容性需按所用代码另行核对，不能直接把旧核心包覆盖到新源码上。
 
 - **Release 页面**：https://github.com/lkdx0220/genshin-story-agent/releases/tag/kb-2026.10.13
 - **tag**：`kb-2026.10.13`
@@ -81,7 +91,7 @@
 
 > 说明：
 > - 两个向量包不要解压到同一个目录；目录名分别是 `kb_vectors/` 和 `kb_vectors_m3/`。
-> - 两个向量库使用同一套 chunk ID 与切片，只是编码器不同，通常二选一即可。
+> - 该 Release 的两个向量库使用同一套 chunk ID 与切片，只是编码器不同，向量后端通常二选一。L3 所需的词条图与提及索引另见“模型清单”中的 `KB_GRAPH_DIR` 说明；只下载 M3 向量资产不保证具备这些文本索引。
 > - Release 不包含 `.env`、`content_data/wiki_raw/` 原始抓取缓存、备份文件和日志；真实密钥请自行配置，不要提交到仓库。
 
 ## 架构
@@ -95,7 +105,7 @@ L2: Plan Agent → 工具调用（36 tools，常规暴露 35）→ 熔断截断 
 ```
 
 - **意图路由**：三级决策分层（规则层 → 轻量LLM → 强模型），平衡准确率与成本
-- **混合检索**：关键词/BM25 文本匹配（字符串命中 + SimpleBM25 + rerank）+ 向量语义搜索，RRF 融合排序；向量库仅保留 `kb_quests_vec`、`kb_lore`、`kb_books`、`kb_characters`、`kb_regions`，`kb_quests_bm25` 已剔除
+- **混合检索**：关键词/BM25 文本匹配（字符串命中 + SimpleBM25 + rerank）+ 向量语义搜索，RRF 融合排序；向量集合为 `kb_quests_vec`、`kb_lore`、`kb_books`、`kb_characters`、`kb_npcs`、`kb_regions`，`kb_quests_bm25` 已剔除
 - **工具封装**：36 个已注册工具（35 个常规初始暴露）按功能域划分（查询/列表/搜索/内容加载）
 - **熔断机制**：工具返回超阈值时截断直接生成回答，防止无限循环
 - **别名消歧**：LLM 消歧 + 人工审核双通道，处理多义别名
@@ -110,7 +120,7 @@ L2: Plan Agent → 工具调用（36 tools，常规暴露 35）→ 熔断截断 
 
 ## 最近更新（2026-10-26）
 
-- **L1 路由适配**：`agent_evidence` 模式下，统计入口优先；通过本轮消歧并完成身份绑定的纯别名问题在 assess 前结束；可支持的本地证据问题走 L1，缺少可信证据时回退 L2。`off` / `finite` 保留既有路径。
+- **L1 路由适配**：`agent_evidence` 模式下，统计入口优先；通过本轮消歧并完成身份绑定的纯别名问题在 assess 前结束；可支持的本地证据问题走 L1；其他问题的回退或拒绝由具体证据状态与现行路由规则决定。`off` / `finite` 保留既有路径。
 - **别名直出边界**：零工具不等于零模型。自然问题如“外号大娘的角色是谁？”仍可能调用一次别名消歧；只有 accepted 且绑定有效才允许提前结束，拒绝、超时与复合问题回退。
 - **统计与安全读取**：特产计数/列举、剧情出场人数和成员集合使用确定性入口；安全读取兼容三种模式，每轮仍保留 SHA、来源清单、所属请求和独立副本检查。
 - **Planner 与网络**：补齐规划续轮消息封装及运行依赖；Agent 客户端直连国内模型接口，别名消歧关闭 DeepSeek thinking，避免小任务长思考耗尽 10 秒超时。
@@ -123,15 +133,15 @@ L2: Plan Agent → 工具调用（36 tools，常规暴露 35）→ 熔断截断 
 
 ## Wiki 本地证据通道（R08，默认关闭）
 
-2026-10 起，检索侧新增一条**独立的本地证据通道**，采用"绞杀者"接法：新实现单独成包，旧逻辑原样保留，靠环境变量决定走哪条。
+2026-10 起，检索侧接入一条**独立的本地证据通道**，由环境变量控制启用。确定性统计是另一个已接入的入口，不随该通道设为 `off` 而关闭。
 
 | 项 | 说明 |
 |---|---|
 | 代码位置 | `app/wiki_evidence/`（`store.py` 证据仓、`canonical_local.py` 本地取证、`bridge.py` 接线与校验、`canonical_bridge.py` 投影与信封校验）|
 | 开关 | `LLM_WIKI_MODE`，取值 `off`（默认）/ `finite` / `agent_evidence` |
-| **默认行为** | **不设该变量 = `off` = 完全走原有链路**，用户无感知 |
+| **默认行为** | **不设该变量 = `off`**，关闭 Wiki 本地证据新通道；确定性统计入口仍可生效，其余问题进入既有问答链路 |
 | 开启方式 | `LLM_WIKI_MODE=agent_evidence` 后重启服务 |
-| 回滚方式 | 删除该变量（或设为 `off`）后重启，立即回到原链路 |
+| 关闭新通道 | 删除该变量（或设为 `off`）后重启；这不回滚代码，也不关闭独立的确定性统计入口 |
 | 新通道做了什么 | 每段引用必须带来源身份、版本、片段定位与校验；校验不过的记录不进证据集合；只把校验过的证据投影给模型，原始消息保留作审计 |
 
 **统计能力与已知限制**
@@ -327,7 +337,9 @@ python scripts/build_entity_mention_index.py
 - 图 v3 只从“剧情模块”提取链接，避免首页推荐位/玩法模块混入；正文展示与提及扫描使用 `story_text`；
 - 全量重建时间较长，增量维护优先用 `scripts/update_wiki_graph.py`。
 
-## 最近知识库更新（2026-09-10）
+## 历史知识库快照记录（2026-09-10）
+
+以下为该日期的历史维护记录，不作为当前工作区或后续 Release 的实时统计。
 
 - 新增 `content_data/source_scope/`：BWiki 与米游社观测枢口径对齐结果（`official_catalog.json`、`classification.jsonl`、`bwiki_only.jsonl`、`review.jsonl`、`shared_for_replacement.jsonl`、`_summary.json`）。
 - 对齐统计：本地 15618 条 → `shared_exact 11007`、`bwiki_only 2158`、`shared_cross_module 135`、`shared_base 1500`、`review 818`。
@@ -376,11 +388,15 @@ python scripts/build_entity_mention_index.py
 >
 > 该变量同时决定构建落点：`python wiki_entry_graph.py --build` 与 `python scripts/build_entity_mention_index.py` 都写到 `KB_GRAPH_DIR`（不设置则仍写 `kb_vectors/`）。当前发布包把这两个 JSON 放在 `kb-vectors-text-embedding-v4` 资产内，只装 bge-m3 包会缺图。
 
-## 快速开始
+## 从 main 源码开始
 
-### 1. 安装依赖
+本节用于当前源码；上面的 Release 核心 ZIP 是独立的历史快照。知识库文件和向量/文本索引需自行准备，不能仅凭源码克隆获得。
+
+### 1. 克隆源码并安装依赖
 
 ```bash
+git clone https://github.com/lkdx0220/genshin-story-agent.git
+cd genshin-story-agent
 pip install -r requirements.txt
 ```
 
@@ -520,7 +536,9 @@ wiki_data_tools/        # Wiki 数据爬取与重建工具
 - Flask Web API
 - PyInstaller 打包为 exe
 
-## 数据规模（kb-2026.10.13）
+## 历史数据规模记录
+
+以下保留既有分项统计，其中词条图/提及索引包含后续更新记录，**不是 `kb-2026.10.13` 全部资产的统一清单，也不是本次重新统计结果**。当前维护工作区规模见顶部生成表；下载资产以对应 tag、文件及其校验清单为准。
 
 - NPC：`npcs_processed.json` 2657 条
 - 世界观/地图文本：`lore.json` 7382 条（其中地图文本 7149 条）
